@@ -53,6 +53,7 @@ public:
     String getActiveBeeperPath() const override;
     uint32_t getQuirks() const override { return _quirks; }
     bool isControlPending() const override { return _control_pending; }
+    bool isInterruptReport(uint8_t report_id) const override;
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) override;
     bool requestStringDescriptor(uint8_t string_index) override;
     uint16_t getVID() const override { return _vid; }
@@ -91,6 +92,8 @@ private:
     LogCallback _log_cb;
     
     std::map<uint16_t, CachedReport> _cached_reports;
+    // millis() of the last unsolicited interrupt report seen per report ID.
+    std::map<uint8_t, uint32_t> _interrupt_report_seen;
 
     uint32_t _quirks;
 };

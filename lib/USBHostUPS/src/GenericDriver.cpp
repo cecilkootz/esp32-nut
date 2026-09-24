@@ -84,7 +84,9 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                         for (uint16_t pair : rids) {
                             if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
                         }
-                        if (has_feature) {
+                        // Polling a report the interrupt endpoint is already
+                        // pushing only adds a chance to decode a bad response.
+                        if (has_feature || host->isInterruptReport(id)) {
                             it = rids.erase(it);
                             continue;
                         }

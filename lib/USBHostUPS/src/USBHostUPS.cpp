@@ -138,6 +138,7 @@ void USBHostUPS::handle_interface_event(hid_host_device_handle_t hid_device_hand
                 std::vector<uint8_t> payload(data, data + length);
                 uint16_t key = (1 << 8) | r_id; // type 1 = INPUT
                 _cached_reports[key] = {r_id, 1, payload};
+                _interrupt_report_seen[r_id] = millis();
             }
 
             _driver->decodeReport(this, r_id, 1, data, length, _ups_data);
@@ -239,6 +240,15 @@ void USBHostUPS::loop() {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
         _driver->loop(this, _ups_data, millis());
     }
+}
+
+bool USBHostUPS::isInterruptReport(uint8_t report_id) const {
+    // Long enough to ride out a gap in a slow device's reporting, short enough
+    // that polling resumes if the endpoint goes quiet for good.
+    static const uint32_t INTERRUPT_REPORT_TTL_MS = 30000;
+    auto it = _interrupt_report_seen.find(report_id);
+    if (it == _interrupt_report_seen.end()) return false;
+    return (millis() - it->second) < INTERRUPT_REPORT_TTL_MS;
 }
 
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
