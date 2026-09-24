@@ -130,9 +130,16 @@ void USBHostUPS::handle_interface_event(hid_host_device_handle_t hid_device_hand
         uint8_t data[256];
         if (hid_host_device_get_raw_input_report_data(hid_device_handle, data, sizeof(data), &length) == ESP_OK) {
             uint8_t r_id = (length > 0) ? data[0] : 0;
-            char dbg[128];
-            snprintf(dbg, sizeof(dbg), "INPUT_REPORT: id=%d, len=%d", r_id, length);
-            if (_log_cb) _log_cb("INFO", dbg);
+            // This fires on every interrupt report, roughly once a second, and the
+            // log is a 50-entry ring: logging each one buries everything else
+            // within a minute. Report the stream's shape only when it changes.
+            if (r_id != _last_logged_interrupt_id || length != _last_logged_interrupt_len) {
+                _last_logged_interrupt_id = r_id;
+                _last_logged_interrupt_len = length;
+                char dbg[128];
+                snprintf(dbg, sizeof(dbg), "INPUT_REPORT: id=%d, len=%d", r_id, length);
+                if (_log_cb) _log_cb("INFO", dbg);
+            }
 
             if (length > 0) {
                 std::vector<uint8_t> payload(data, data + length);
