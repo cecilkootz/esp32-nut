@@ -174,21 +174,30 @@ bool HIDParser::hasFeatureBeeperControl() const {
 }
 
 double HIDParser::extractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length) {
-    if (!def || !def->found || !data) return 0.0;
-    
+    double value = 0.0;
+    tryExtractUsage(def, report_id, data, length, value);
+    return value;
+}
+
+bool HIDParser::tryExtractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length, double& out) {
+    out = 0.0;
+    if (!def || !def->found || !data) return false;
+
     uint16_t bit_offset = def->bit_offset;
     if (def->report_id != 0) {
-        if (data[0] != def->report_id) return 0.0;
+        if (data[0] != def->report_id) return false;
         bit_offset += 8;
     }
-    
-    // Some UPS devices (e.g. APC) have buggy descriptors that declare a larger
-    // size (like 32 bits for input voltage) than the actual payload returned.
-    // We tolerate short reports by allowing the loop below to read up to 'length'.
-    
+
     uint16_t byte_idx = bit_offset / 8;
     uint8_t bit_shift = bit_offset % 8;
-    
+
+    // A field that starts past the end of the report was never transmitted, so
+    // there is nothing to read. Fields that merely run off the end are still
+    // decoded from what arrived: some UPS devices (e.g. APC) declare a larger
+    // size (like 32 bits for input voltage) than the payload they actually send.
+    if (byte_idx >= length) return false;
+
     uint64_t raw = 0;
     for (int i = 0; i < ((def->bit_size + bit_shift + 7) / 8) && (byte_idx + i) < length; i++) {
         raw |= ((uint64_t)data[byte_idx + i]) << (i * 8);
@@ -207,5 +216,6 @@ double HIDParser::extractUsage(const HIDUsageDef* def, uint8_t report_id, const 
             val *= pow(10.0, unit_expo);
         }
     }
-    return val;
+    out = val;
+    return true;
 }

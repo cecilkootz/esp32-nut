@@ -20,21 +20,22 @@ void GoldenMateDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
     for (const auto& usage : host->getUsages()) {
         if (usage.report_id != report_id || usage.report_type != report_type) continue;
         const char* path = usage.path;
+        double value;
         if (strcmp(path, "UPS.PowerSummary.PresentStatus.ACPresent") == 0) {
-            has_ac = true;
-            ac = HIDParser::extractUsage(&usage, report_id, data, length) != 0;
+            has_ac = HIDParser::tryExtractUsage(&usage, report_id, data, length, value);
+            ac = has_ac && value != 0;
         } else if (strcmp(path, "UPS.PowerSummary.PresentStatus.Discharging") == 0) {
-            has_discharging = true;
-            discharging = HIDParser::extractUsage(&usage, report_id, data, length) != 0;
+            has_discharging = HIDParser::tryExtractUsage(&usage, report_id, data, length, value);
+            discharging = has_discharging && value != 0;
         } else if (strcmp(path, "UPS.PowerSummary.PresentStatus.Charging") == 0) {
-            has_charging = true;
-            charging = HIDParser::extractUsage(&usage, report_id, data, length) != 0;
+            has_charging = HIDParser::tryExtractUsage(&usage, report_id, data, length, value);
+            charging = has_charging && value != 0;
         } else if (strcmp(path, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit") == 0) {
-            has_low = true;
-            low = HIDParser::extractUsage(&usage, report_id, data, length) != 0;
+            has_low = HIDParser::tryExtractUsage(&usage, report_id, data, length, value);
+            low = has_low && value != 0;
         } else if (strcmp(path, "UPS.PowerSummary.PresentStatus.BatteryPresent") == 0) {
-            has_battery = true;
-            battery = HIDParser::extractUsage(&usage, report_id, data, length) != 0;
+            has_battery = HIDParser::tryExtractUsage(&usage, report_id, data, length, value);
+            battery = has_battery && value != 0;
         }
     }
     if (has_ac && has_discharging && has_charging && has_battery) {
@@ -58,26 +59,23 @@ void GoldenMateDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
     for (const auto& usage : host->getUsages()) {
         if (usage.report_id != report_id || usage.report_type != report_type) continue;
         const char* path = usage.path;
+        double value;
+        if (!HIDParser::tryExtractUsage(&usage, report_id, data, length, value)) continue;
+
         if (strcmp(path, "UPS.PowerSummary.ConfigVoltage") == 0) {
             ups_data.remove("input.voltage.nominal");
-            double value = HIDParser::extractUsage(&usage, report_id, data, length);
             if (value > 0) ups_data.set("battery.voltage.nominal", String(value, 1));
         } else if (strcmp(path, "UPS.PowerSummary.DesignCapacity") == 0) {
-            double value = HIDParser::extractUsage(&usage, report_id, data, length);
             if (value > 0) ups_data.set("battery.capacity.design", String((int)value));
         } else if (strcmp(path, "UPS.PowerSummary.FullChargeCapacity") == 0) {
-            double value = HIDParser::extractUsage(&usage, report_id, data, length);
             if (value > 0) ups_data.set("battery.capacity.full", String((int)value));
         } else if (strcmp(path, "UPS.PowerSummary.WarningCapacityLimit") == 0) {
-            double value = HIDParser::extractUsage(&usage, report_id, data, length);
             if (value > 0) ups_data.set("battery.charge.low", String((int)value));
         } else if (strcmp(path, "UPS.PowerSummary.DelayBeforeStartup") == 0) {
-            double value = HIDParser::extractUsage(&usage, report_id, data, length);
             ups_data.set("ups.timer.start", String((int)value));
         } else if (strcmp(path, "UPS.PowerSummary.RunTimeToEmpty") == 0) {
             // GoldenMate firmware has been observed to return zero or about seven
             // days for a 296 Wh pack. Do not expose those as shutdown guidance.
-            double value = HIDParser::extractUsage(&usage, report_id, data, length);
             if (value <= 0 || value > 86400) ups_data.remove("battery.runtime");
         }
     }

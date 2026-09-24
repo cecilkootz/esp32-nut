@@ -279,8 +279,13 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         if (u.report_id != report_id || u.report_type != report_type) continue;
         for (const auto& m : mappings) {
             if (strcmp(u.path, m.path) == 0) {
-                double val = HIDParser::extractUsage(&u, report_id, data, length);
-                m.apply(this, ups_data, val, &u);
+                double val;
+                // A report that does not carry this field must leave the previous
+                // reading alone; writing the extractor's zero would publish a
+                // mismatched or truncated report as a real measurement.
+                if (HIDParser::tryExtractUsage(&u, report_id, data, length, val)) {
+                    m.apply(this, ups_data, val, &u);
+                }
                 break;
             }
         }

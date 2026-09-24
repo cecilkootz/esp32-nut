@@ -17,8 +17,12 @@ public:
     bool hasFeatureBeeperControl() const;
     uint16_t getExpectedLength(uint8_t report_id, uint8_t report_type) const;
     
+    // Returns false when the report carries no value for this usage: a report ID
+    // that does not match, or a field starting past the end of a short report.
+    // Callers must not treat that case as a reading of zero.
+    static bool tryExtractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length, double& out);
     static double extractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length);
-    
+
 private:
     std::vector<HIDUsageDef> _usages;
     std::map<uint8_t, uint16_t> _input_lengths;
