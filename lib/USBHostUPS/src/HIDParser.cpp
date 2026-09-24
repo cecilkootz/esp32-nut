@@ -156,6 +156,32 @@ uint16_t HIDParser::getExpectedLength(uint8_t report_id, uint8_t report_type) co
     return bytes;
 }
 
+uint16_t HIDParser::getMaxExpectedLength() const {
+    uint16_t max_bits = 0;
+    for (const auto* m : { &_input_lengths, &_output_lengths, &_feature_lengths }) {
+        for (const auto& kv : *m) {
+            if (kv.second > max_bits) max_bits = kv.second;
+        }
+    }
+    if (max_bits == 0) return 64;
+    return (max_bits + 7) / 8 + 1; // + Report ID prefix
+}
+
+bool HIDParser::resolveReportType(uint8_t report_id, uint8_t preferred_type, uint8_t& out_type) const {
+    const std::map<uint8_t, uint16_t>* maps[] = { nullptr, &_input_lengths, &_output_lengths, &_feature_lengths };
+    if (preferred_type >= 1 && preferred_type <= 3 && maps[preferred_type]->count(report_id)) {
+        out_type = preferred_type;
+        return true;
+    }
+    for (uint8_t t = 1; t <= 3; t++) {
+        if (maps[t]->count(report_id)) {
+            out_type = t;
+            return true;
+        }
+    }
+    return false;
+}
+
 const HIDUsageDef* HIDParser::getUsageDef(uint32_t usage) const {
     for (const auto& u : _usages) {
         if (u.usage == usage) return &u;

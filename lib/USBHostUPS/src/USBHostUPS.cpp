@@ -246,15 +246,39 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
     
     uint8_t data[256];
     size_t length = expected_length > 0 ? expected_length : 255;
-    
+
+    // Devices that answer with the wrong report also truncate it to whatever the
+    // requested report's length happens to be, so ask for the longest one.
+    bool shifted = (_quirks & QUIRK_SHIFTED_REPORTS) != 0;
+    if (shifted) {
+        uint16_t max_len = _hid_parser.getMaxExpectedLength();
+        if (max_len > length) length = max_len;
+        if (length > sizeof(data)) length = sizeof(data);
+    }
+
     esp_err_t err = hid_class_request_get_report(_hid_dev_handle, report_type, report_id, data, &length);
     if (err == ESP_OK && length > 0) {
+        uint8_t actual_id = report_id;
+        uint8_t actual_type = report_type;
+
+        // Trust the ID the response carries over the one we asked for; decoding it
+        // as the requested report would read every field from the wrong offsets.
+        if (shifted && report_id != 0 && data[0] != report_id) {
+            if (!_hid_parser.resolveReportType(data[0], report_type, actual_type)) {
+                char dbg[128];
+                snprintf(dbg, sizeof(dbg), "Discarding response: asked id=%d, got undeclared id=%d", report_id, data[0]);
+                if (_log_cb) _log_cb("DEBUG", dbg);
+                return false;
+            }
+            actual_id = data[0];
+        }
+
         std::vector<uint8_t> payload(data, data + length);
-        uint16_t key = (report_type << 8) | report_id;
-        _cached_reports[key] = {report_id, report_type, payload};
+        uint16_t key = (actual_type << 8) | actual_id;
+        _cached_reports[key] = {actual_id, actual_type, payload};
 
         if (_driver) {
-            _driver->decodeReport(this, report_id, report_type, data, length, _ups_data);
+            _driver->decodeReport(this, actual_id, actual_type, data, length, _ups_data);
         }
         return true;
     } else {

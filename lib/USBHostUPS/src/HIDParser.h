@@ -16,7 +16,13 @@ public:
     const std::vector<HIDUsageDef>& getUsages() const { return _usages; }
     bool hasFeatureBeeperControl() const;
     uint16_t getExpectedLength(uint8_t report_id, uint8_t report_type) const;
-    
+    // Longest report the descriptor declares, for devices whose responses cannot
+    // be trusted to match the request.
+    uint16_t getMaxExpectedLength() const;
+    // Resolves which report type a given report ID belongs to, preferring
+    // preferred_type when the ID is declared under more than one.
+    bool resolveReportType(uint8_t report_id, uint8_t preferred_type, uint8_t& out_type) const;
+
     // Returns false when the report carries no value for this usage: a report ID
     // that does not match, or a field starting past the end of a short report.
     // Callers must not treat that case as a reading of zero.
