@@ -20,6 +20,14 @@ void test_status_on_battery_discharging(void) {
     TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
 }
 
+void test_status_on_battery_without_discharging_flag(void) {
+    UPSData data;
+    data.set("ups.status.ac_present", "0");
+    data.set("ups.status.discharging", "0");
+
+    TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
+}
+
 void test_status_on_battery_low_battery(void) {
     UPSData data;
     data.set("ups.status.ac_present", "0");
@@ -70,6 +78,7 @@ int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_status_online_normal);
     RUN_TEST(test_status_on_battery_discharging);
+    RUN_TEST(test_status_on_battery_without_discharging_flag);
     RUN_TEST(test_status_on_battery_low_battery);
     RUN_TEST(test_status_online_charging);
     RUN_TEST(test_status_multiple_alarm_flags);
@@ -82,6 +91,7 @@ void setup() {
     UNITY_BEGIN();
     RUN_TEST(test_status_online_normal);
     RUN_TEST(test_status_on_battery_discharging);
+    RUN_TEST(test_status_on_battery_without_discharging_flag);
     RUN_TEST(test_status_on_battery_low_battery);
     RUN_TEST(test_status_online_charging);
     RUN_TEST(test_status_multiple_alarm_flags);
@@ -92,4 +102,3 @@ void setup() {
 void loop() {}
 #endif
 #endif
-

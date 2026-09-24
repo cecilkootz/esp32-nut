@@ -48,6 +48,10 @@ void test_replay_openups_wallecube_w150(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json");
 }
 
+void test_replay_goldenmate_1500va_1000w(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/goldenmate/goldenmate_1500va_1000w_vid075d_pid0300.json");
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -63,6 +67,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_openups_wallecube_w150);
+    RUN_TEST(test_replay_goldenmate_1500va_1000w);
     return UNITY_END();
 }
 #else
@@ -79,9 +84,9 @@ void setup() {
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_openups_wallecube_w150);
+    RUN_TEST(test_replay_goldenmate_1500va_1000w);
     UNITY_END();
 }
 void loop() {}
 #endif
 #endif
-

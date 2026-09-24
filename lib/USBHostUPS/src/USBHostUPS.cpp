@@ -6,6 +6,7 @@
 #include "EatonDriver.h"
 #include "CyberPowerDriver.h"
 #include "OpenUPSDriver.h"
+#include "GoldenMateDriver.h"
 #include <ArduinoJson.h>
 
 #ifndef FIRMWARE_VERSION
@@ -207,6 +208,7 @@ void USBHostUPS::loop() {
                 else if (_vid == 0x0463) { _driver = new EatonDriver(); }
                 else if (_vid == 0x0d9f) { _driver = new PowercomDriver(); }
                 else if (_vid == 0x04D8 && (_pid == 0xD004 || _pid == 0xD005)) { _driver = new OpenUPSDriver(); }
+                else if (_vid == 0x075D && _pid == 0x0300) { _driver = new GoldenMateDriver(); }
                 else { _driver = new GenericDriver(); }
 
                 _quirks = 0;
@@ -454,5 +456,4 @@ void USBHostUPS::populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_in
     wcstombs(buf, dev_info.iSerialNumber, sizeof(buf));
     if (String(buf).length() > 0 && String(buf) != "Blank") ups_data.set("ups.serial", String(buf));
 }
-
 

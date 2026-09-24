@@ -18,6 +18,7 @@
 #include "PowercomDriver.h"
 #include "GenericDriver.h"
 #include "OpenUPSDriver.h"
+#include "GoldenMateDriver.h"
 
 class ReplayMockHost : public IUSBHostUPS {
 public:
@@ -164,6 +165,10 @@ public:
                 break;
             case 0x04D8:
                 driver = new OpenUPSDriver();
+                break;
+            case 0x075D:
+                driver = (pid == 0x0300) ? static_cast<IUPSDriver*>(new GoldenMateDriver())
+                                         : static_cast<IUPSDriver*>(new GenericDriver());
                 break;
             default:
                 driver = new GenericDriver();
