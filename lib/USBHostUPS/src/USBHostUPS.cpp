@@ -270,16 +270,16 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
     if (err == ESP_OK && length > 0) {
         uint8_t actual_id = report_id;
         uint8_t actual_type = report_type;
+        _reports_received++;
 
         // Trust the ID the response carries over the one we asked for; decoding it
         // as the requested report would read every field from the wrong offsets.
         if (shifted && report_id != 0 && data[0] != report_id) {
             if (!_hid_parser.resolveReportType(data[0], report_type, actual_type)) {
-                char dbg[128];
-                snprintf(dbg, sizeof(dbg), "Discarding response: asked id=%d, got undeclared id=%d", report_id, data[0]);
-                if (_log_cb) _log_cb("DEBUG", dbg);
+                _reports_discarded++;
                 return false;
             }
+            _reports_rekeyed++;
             actual_id = data[0];
         }
 
@@ -424,6 +424,12 @@ String USBHostUPS::dumpUSBDiagnostics() {
         
         doc["quirks"] = _quirks;
         doc["driver"] = _driver ? _driver->getDriverName() : "None";
+
+        JsonObject counters = doc["report_counters"].to<JsonObject>();
+        counters["received"] = _reports_received;
+        counters["rekeyed"] = _reports_rekeyed;
+        counters["discarded"] = _reports_discarded;
+        counters["uptime_ms"] = millis();
 
         JsonArray scenarios = doc["scenarios"].to<JsonArray>();
         JsonObject scenario = scenarios.add<JsonObject>();
