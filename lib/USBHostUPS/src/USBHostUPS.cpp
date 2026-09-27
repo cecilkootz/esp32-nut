@@ -378,12 +378,14 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
         }
         return true;
     } else {
-        char dbg[128];
-        if (err == 0x10c) {
-            snprintf(dbg, sizeof(dbg), "requestReport FAILED: type=%d, id=%d, err=0x%x (STALL/NOT_FINISHED)", report_type, report_id, err);
-        } else {
-            snprintf(dbg, sizeof(dbg), "requestReport FAILED: type=%d, id=%d, err=0x%x", report_type, report_id, err);
+        const char* why = "";
+        switch (err) {
+            case ESP_ERR_TIMEOUT: why = " (timed out)"; break;
+            case ESP_ERR_NOT_FINISHED: why = " (earlier timed-out transfer still outstanding, not sent)"; break;
+            case ESP_ERR_INVALID_RESPONSE: why = " (STALL or failed transfer)"; break;
         }
+        char dbg[128];
+        snprintf(dbg, sizeof(dbg), "requestReport FAILED: type=%d, id=%d, err=0x%x%s", report_type, report_id, err, why);
         if (_log_cb) _log_cb("ERROR", dbg);
     }
     return false;
