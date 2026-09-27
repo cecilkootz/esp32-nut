@@ -83,6 +83,7 @@ typedef struct hid_host_device {
     SemaphoreHandle_t device_busy;              /**< HID device main mutex */
     SemaphoreHandle_t ctrl_xfer_done;           /**< Control transfer semaphore */
     usb_transfer_t *ctrl_xfer;                  /**< Pointer to control transfer buffer */
+    bool ctrl_xfer_inflight;                    /**< ctrl_xfer submitted and its completion not yet consumed */
     usb_device_handle_t dev_hdl;                /**< USB device handle */
     uint8_t dev_addr;                           /**< USB device address */
 #ifdef HID_HOST_REMOTE_WAKE_SUPPORTED
@@ -1001,6 +1002,26 @@ static void ctrl_xfer_done(usb_transfer_t *ctrl_xfer)
 }
 
 /**
+ * @brief Reclaim ctrl_xfer after a control transfer timed out
+ *
+ * A timed-out transfer is still owned by the USB Host Library until its callback runs, so until then
+ * ctrl_xfer must not be rewritten, resubmitted or freed. Its late semaphore give must be consumed here,
+ * otherwise the next transfer's wait would return on it and read this transfer's response.
+ */
+static esp_err_t hid_ctrl_xfer_reclaim(hid_device_t *hid_device)
+{
+    if (hid_device->ctrl_xfer_inflight) {
+        if (xSemaphoreTake(hid_device->ctrl_xfer_done, 0) != pdTRUE) {
+            return ESP_ERR_NOT_FINISHED;
+        }
+        hid_device->ctrl_xfer_inflight = false;
+        ESP_LOGD(TAG, "Discarded late completion of timed-out control transfer, status %d",
+                 hid_device->ctrl_xfer->status);
+    }
+    return ESP_OK;
+}
+
+/**
  * @brief HID control transfer synchronous.
  *
  * @param[in] hid_device  Pointer to HID device structure
@@ -1009,6 +1030,7 @@ static void ctrl_xfer_done(usb_transfer_t *ctrl_xfer)
  * @return
  *   - ESP_OK if the transfer was successful
  *   - ESP_ERR_TIMEOUT if the transfer was not completed within the specified timeout
+ *   - ESP_ERR_NOT_FINISHED if an earlier transfer that timed out is still in flight; nothing was submitted
  *   - ESP_ERR_INVALID_RESPONSE if the transfer completed with an error status or incorrect number of bytes transferred
  */
 static esp_err_t hid_control_transfer(hid_device_t *hid_device,
@@ -1017,6 +1039,12 @@ static esp_err_t hid_control_transfer(hid_device_t *hid_device,
 {
 
     usb_transfer_t *ctrl_xfer = hid_device->ctrl_xfer;
+    const usb_setup_packet_t *setup = (const usb_setup_packet_t *)ctrl_xfer->data_buffer;
+
+    esp_err_t ret = hid_ctrl_xfer_reclaim(hid_device);
+    if (ret != ESP_OK) {
+        return ret;
+    }
 
     ctrl_xfer->device_handle = hid_device->dev_hdl;
     ctrl_xfer->callback = ctrl_xfer_done;
@@ -1027,12 +1055,26 @@ static esp_err_t hid_control_transfer(hid_device_t *hid_device,
 
     HID_RETURN_ON_ERROR( usb_host_transfer_submit_control(s_hid_driver->client_handle, ctrl_xfer),
                          "Unable to submit control transfer");
+    hid_device->ctrl_xfer_inflight = true;
 
     BaseType_t received = xSemaphoreTake(hid_device->ctrl_xfer_done, pdMS_TO_TICKS(ctrl_xfer->timeout_ms));
 
-    // In case transfer was not finished, error in USB LIB. This is EP0, USBH will reset the endpoint.
-    HID_RETURN_ON_FALSE(received == pdTRUE, ESP_ERR_TIMEOUT, "Control transfer timeout");
+    if (received != pdTRUE) {
+        // The USB Host Library neither enforces timeout_ms nor lets a client halt/flush EP0, so the
+        // transfer stays in flight until the device answers or is removed
+        ESP_LOGW(TAG, "Control transfer timeout (bRequest 0x%02x, wValue 0x%04x); "
+                 "requests return ESP_ERR_NOT_FINISHED until the device answers",
+                 setup->bRequest, setup->wValue);
+        return ESP_ERR_TIMEOUT;
+    }
+    hid_device->ctrl_xfer_inflight = false;
+
     // Check transfer status
+    if (ctrl_xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
+        ESP_LOGW(TAG, "Control transfer failed, status %d (bRequest 0x%02x, wValue 0x%04x)",
+                 ctrl_xfer->status, setup->bRequest, setup->wValue);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
     // Device can return less data than requested, but it might return more data due to padding (e.g. APC UPS)
     if (ctrl_xfer->actual_num_bytes > ctrl_xfer->num_bytes) {
         ESP_LOGD(TAG, "Device returned more data than requested (%d > %d), truncating", ctrl_xfer->actual_num_bytes, ctrl_xfer->num_bytes);
@@ -1067,6 +1109,12 @@ static esp_err_t usb_class_request_get_descriptor(hid_device_t *hid_device, cons
 
     // Reallocate control transfer buffer if necessary
     if (ctrl_size < required_size) {
+        // usb_host_transfer_free() does not check whether the transfer is still in flight
+        ret = hid_ctrl_xfer_reclaim(hid_device);
+        if (ret != ESP_OK) {
+            hid_device_unlock(hid_device);
+            return ret;
+        }
         ESP_LOGD(TAG, "Change HID ctrl xfer size from %"PRIu32" to %"PRIu32"",
                  (uint32_t) ctrl_size,
                  (uint32_t) required_size);
@@ -1231,6 +1279,10 @@ static esp_err_t hid_class_request_get(hid_device_t *hid_device,
     ret = hid_control_transfer(hid_device,
                                USB_SETUP_PACKET_SIZE + setup->wLength,
                                DEFAULT_TIMEOUT_MS);
+
+    if (ESP_OK == ret && ctrl_xfer->actual_num_bytes < USB_SETUP_PACKET_SIZE) {
+        ret = ESP_ERR_INVALID_RESPONSE;
+    }
 
     if (ESP_OK == ret) {
         // We do not need the setup data, which is still in the transfer data buffer
