@@ -50,12 +50,37 @@ void test_load_missing_file(void) {
     TEST_ASSERT_FALSE(config_manager.isValid());
 }
 
+void test_nut_saved_before_wifi_stays_unconfigured(void) {
+    // The NUT form saved from the setup hotspot of a new board
+    ConfigManager setup_manager;
+    TEST_ASSERT_FALSE(setup_manager.begin());
+    setup_manager.setNutConfig({"nvs_user", "nvs_nut_pass", "nvs_ups"});
+    TEST_ASSERT_TRUE(setup_manager.save());
+
+    ConfigManager rebooted;
+    TEST_ASSERT_FALSE(rebooted.begin());
+    TEST_ASSERT_FALSE(rebooted.isValid());
+    TEST_ASSERT_EQUAL_STRING("nvs_ups", rebooted.getNutConfig().ups_name.c_str());
+
+    rebooted.setWifiConfig({"NVS_SSID", "NVS_PASS"});
+    TEST_ASSERT_TRUE(rebooted.save());
+
+    ConfigManager configured;
+    TEST_ASSERT_TRUE(configured.begin());
+    TEST_ASSERT_EQUAL_STRING("NVS_SSID", configured.getWifiConfig().ssid.c_str());
+    NutConfig nut = configured.getNutConfig();
+    TEST_ASSERT_EQUAL_STRING("nvs_user", nut.username.c_str());
+    TEST_ASSERT_EQUAL_STRING("nvs_nut_pass", nut.password.c_str());
+    TEST_ASSERT_EQUAL_STRING("nvs_ups", nut.ups_name.c_str());
+}
+
 void setup() {
     delay(2000); // Stabilizzazione porta seriale
 
     UNITY_BEGIN();
     RUN_TEST(test_save_and_load_config);
     RUN_TEST(test_load_missing_file);
+    RUN_TEST(test_nut_saved_before_wifi_stays_unconfigured);
     UNITY_END();
 }
 

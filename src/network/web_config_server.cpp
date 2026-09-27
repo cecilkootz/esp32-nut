@@ -132,8 +132,13 @@ void WebConfigServer::handleConnect() {
         return;
     }
 
-    String ssid = doc["ssid"].as<String>();
-    String pwd = doc["password"].as<String>();
+    // as<String>() turns a missing key into "null"
+    String ssid = doc["ssid"] | "";
+    String pwd = doc["password"] | "";
+    if (ssid.isEmpty()) {
+        server.send(400, "application/json", "{\"error\": \"SSID required\"}");
+        return;
+    }
 
     WifiConfig wc;
     wc.ssid = ssid;
@@ -184,8 +189,12 @@ void WebConfigServer::handleNutConfig() {
     if (config_mgr.save()) {
         server.send(200, "application/json", "{\"success\": true}");
         AppLogger::log("INFO", "[WEB] NUT configuration updated");
-        should_restart = true;
-        restart_request_time = millis();
+        // Unconfigured, the NUT server isn't running: a restart would only drop the setup
+        // hotspot. The Wi-Fi save applies these settings.
+        if (config_mgr.isValid()) {
+            should_restart = true;
+            restart_request_time = millis();
+        }
     } else {
         server.send(500, "application/json", "{\"error\": \"Failed to save config\"}");
     }
