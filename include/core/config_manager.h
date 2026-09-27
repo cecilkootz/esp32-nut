@@ -15,6 +15,13 @@ struct NutConfig {
     String ups_name;
 };
 
+struct MqttConfig {
+    String host; // empty: MQTT off
+    uint16_t port = 1883;
+    String username;
+    String password;
+};
+
 class ConfigManager {
 public:
     ConfigManager();
@@ -22,15 +29,18 @@ public:
     
     WifiConfig getWifiConfig() const;
     NutConfig getNutConfig() const;
+    MqttConfig getMqttConfig() const;
     bool isValid() const;
     
     void setWifiConfig(const WifiConfig& config);
     void setNutConfig(const NutConfig& config);
+    void setMqttConfig(const MqttConfig& config);
     bool save();
 
 private:
     WifiConfig wifi_config;
     NutConfig nut_config;
+    MqttConfig mqtt_config;
     bool is_valid;
     Preferences preferences;
 };

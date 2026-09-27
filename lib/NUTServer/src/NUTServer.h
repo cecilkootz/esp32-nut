@@ -49,6 +49,8 @@ public:
     uint16_t port() const { return _port; }
     int connectedClients() const;
     const Stats& stats() const { return _stats; }
+    // Set by a primary's FSD; like in upsd, only a reboot clears it
+    bool forcedShutdown() const { return _forcedShutdown; }
 
     // Metodi di utilità (esposti per facilitare il testing)
     static std::vector<String> splitTokens(const String& input);

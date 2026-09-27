@@ -1,19 +1,12 @@
 #include "WebApiJson.h"
-#include "NUTServer.h"
 #include "network/web_config_server.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "core/app_logger.h"
-#include "core/crash_diag.h"
-#include "core/device_id.h"
-#include "core/memory_stats.h"
-#include "network/network_manager.h"
+#include "core/system_status.h"
+#include "network/mqtt_bridge.h"
 #include "network/web_assets.h"
 #include <Update.h>
-
-#ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "dev"
-#endif
 
 WebConfigServer::WebConfigServer(ConfigManager& config_mgr) 
     : server(80), config_mgr(config_mgr), is_ap_mode(false) {}
@@ -49,6 +42,7 @@ void WebConfigServer::begin(bool isAPMode) {
     // REST endpoints
     server.on("/api/wifi/connect", HTTP_POST, [this]() { handleConnect(); });
     server.on("/api/nut/config", HTTP_POST, [this]() { handleNutConfig(); });
+    server.on("/api/mqtt/config", HTTP_POST, [this]() { handleMqttConfig(); });
     server.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
     server.on("/api/config", HTTP_GET, [this]() { handleGetConfig(); });
     server.on("/api/ups-vars", HTTP_GET, [this]() { handleUpsVars(); });
@@ -98,6 +92,9 @@ void WebConfigServer::loop() {
     server.handleClient();
 
     if (should_restart && (millis() - restart_request_time >= 1000)) {
+        if (mqtt_bridge) {
+            mqtt_bridge->end();
+        }
         if (usb_ups) {
             usb_ups->end();
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -116,6 +113,10 @@ void WebConfigServer::setNetwork(AppNetworkManager* network) {
 
 void WebConfigServer::setNUT(NUTServer* nut) {
     nut_server = nut;
+}
+
+void WebConfigServer::setMqtt(MqttBridge* mqtt) {
+    mqtt_bridge = mqtt;
 }
 
 void WebConfigServer::handleConnect() {
@@ -191,6 +192,61 @@ void WebConfigServer::handleNutConfig() {
     }
 }
 
+void WebConfigServer::handleMqttConfig() {
+    if (server.hasArg("plain") == false) {
+        server.send(400, "application/json", "{\"error\": \"Body not received\"}");
+        return;
+    }
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, server.arg("plain"));
+
+    if (error) {
+        server.send(400, "application/json", "{\"error\": \"Invalid JSON\"}");
+        return;
+    }
+
+    // Saving would also store the empty Wi-Fi settings of an unconfigured board
+    if (!config_mgr.isValid()) {
+        server.send(409, "application/json", "{\"error\": \"Configure Wi-Fi and NUT first\"}");
+        return;
+    }
+
+    MqttConfig mc = config_mgr.getMqttConfig();
+    if (doc["host"].is<String>()) {
+        mc.host = doc["host"].as<String>();
+        mc.host.trim();
+    }
+    if (doc["port"].is<int>()) {
+        int port = doc["port"].as<int>();
+        if (port < 1 || port > 65535) {
+            server.send(400, "application/json", "{\"error\": \"Invalid port\"}");
+            return;
+        }
+        mc.port = port;
+    }
+    if (doc["username"].is<String>()) {
+        mc.username = doc["username"].as<String>();
+    }
+    // Left out, the saved password stays: the web UI never shows it
+    if (doc["password"].is<String>()) {
+        mc.password = doc["password"].as<String>();
+    }
+
+    config_mgr.setMqttConfig(mc);
+    if (config_mgr.save()) {
+        server.send(200, "application/json", "{\"success\": true}");
+        AppLogger::log("INFO", "[WEB] MQTT configuration updated");
+        if (mc.host.length() == 0 && mqtt_bridge) {
+            mqtt_bridge->forget();
+        }
+        should_restart = true;
+        restart_request_time = millis();
+    } else {
+        server.send(500, "application/json", "{\"error\": \"Failed to save config\"}");
+    }
+}
+
 void WebConfigServer::handleGetConfig() {
     JsonDocument doc;
     
@@ -201,6 +257,13 @@ void WebConfigServer::handleGetConfig() {
     JsonObject nutObj = doc["nut"].to<JsonObject>();
     nutObj["username"] = config_mgr.getNutConfig().username;
     nutObj["ups_name"] = config_mgr.getNutConfig().ups_name;
+
+    MqttConfig mqtt = config_mgr.getMqttConfig();
+    JsonObject mqttObj = doc["mqtt"].to<JsonObject>();
+    mqttObj["host"] = mqtt.host;
+    mqttObj["port"] = mqtt.port;
+    mqttObj["username"] = mqtt.username;
+    mqttObj["password_set"] = mqtt.password.length() > 0;
     
     String response;
     serializeJson(doc, response);
@@ -217,82 +280,15 @@ void WebConfigServer::handleUpsVars() {
 }
 
 void WebConfigServer::handleSystemStatus() {
+    SystemStatusSources sources;
+    sources.ap_mode = is_ap_mode;
+    sources.network = network_mgr;
+    sources.ups = usb_ups;
+    sources.nut = nut_server;
+    sources.mqtt = mqtt_bridge;
+
     JsonDocument doc;
-    
-    doc["version"] = FIRMWARE_VERSION;
-    doc["device_id"] = getDeviceId();
-    
-    // Wi-Fi status
-    wl_status_t wifi_status = WiFi.status();
-    String wifi_status_str = "Disconnected";
-    if (is_ap_mode) {
-        wifi_status_str = "AP Mode Active";
-    } else if (wifi_status == WL_CONNECTED) {
-        wifi_status_str = WiFi.SSID();
-    } else {
-        wifi_status_str = "Connecting";
-    }
-    JsonObject wifi = doc["wifi"].to<JsonObject>();
-    wifi["status"] = wifi_status_str;
-    if (!is_ap_mode && wifi_status == WL_CONNECTED) {
-        wifi["rssi"] = WiFi.RSSI();
-        wifi["bssid"] = WiFi.BSSIDstr();
-        wifi["channel"] = WiFi.channel();
-    }
-    if (network_mgr && !is_ap_mode) {
-        uint32_t disconnects = network_mgr->disconnectCount();
-        wifi["disconnects"] = disconnects;
-        if (disconnects > 0) {
-            wifi["last_disconnect_reason"] = network_mgr->lastDisconnectReasonName();
-            wifi["last_disconnect_code"] = network_mgr->lastDisconnectReason();
-            wifi["last_disconnect_ms"] = network_mgr->lastDisconnectMillis();
-        }
-    }
-    
-    // UPS status
-    String ups_status_str = "Disconnected";
-    if (usb_ups && usb_ups->isConnected()) {
-        auto data = usb_ups->getUPSData();
-        String model = data->hasKey("ups.model") ? data->get("ups.model") : "Unknown Model";
-        ups_status_str = model;
-    } else {
-        ups_status_str = "Disconnected";
-    }
-    doc["ups"]["status"] = ups_status_str;
-    // A missing UPS is already "Disconnected": the stale banner is for an attached one
-    if (usb_ups && usb_ups->isConnected() && usb_ups->isDataStale()) {
-        doc["ups"]["stale"] = true;
-    }
-
-    CrashDiag::fillJson(doc["diagnostics"].to<JsonObject>());
-
-    if (nut_server) {
-        const NUTServer::Stats& stats = nut_server->stats();
-        JsonObject nut = doc["nut"].to<JsonObject>();
-        nut["port"] = nut_server->port();
-        nut["clients"] = nut_server->connectedClients();
-        nut["accepted"] = stats.accepted;
-        nut["rejected"] = stats.rejected;
-        nut["commands"] = stats.commands;
-        nut["auth_failures"] = stats.authFailures;
-        nut["idle_timeouts"] = stats.idleTimeouts;
-        nut["short_writes"] = stats.shortWrites;
-    }
-
-    MemoryStats mem = readMemoryStats();
-    JsonObject memory = doc["memory"].to<JsonObject>();
-    memory["free_heap"] = mem.free_heap;
-    memory["min_free_heap"] = mem.min_free_heap;
-    memory["largest_free_block"] = mem.largest_free_block;
-    memory["loop_stack_min_free"] = mem.loop_stack_min_free;
-    if (mem.poll_stack_min_free >= 0) {
-        memory["poll_stack_min_free"] = mem.poll_stack_min_free;
-    }
-    if (mem.hid_stack_min_free >= 0) {
-        memory["hid_stack_min_free"] = mem.hid_stack_min_free;
-    }
-    memory["uptime_ms"] = millis();
-
+    fillSystemStatus(doc, sources);
     String response;
     serializeJson(doc, response);
     server.send(200, "application/json", response);

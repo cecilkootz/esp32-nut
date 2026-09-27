@@ -44,6 +44,40 @@ void test_save_and_load_config(void) {
     TEST_ASSERT_EQUAL_STRING("nvs_ups", nut.ups_name.c_str());
 }
 
+void test_save_and_load_mqtt_config(void) {
+    config_manager.setWifiConfig({"NVS_SSID", "NVS_PASS"});
+    config_manager.setNutConfig({"nvs_user", "nvs_nut_pass", "nvs_ups"});
+    MqttConfig newMqtt;
+    newMqtt.host = "192.168.1.10";
+    newMqtt.port = 1884;
+    newMqtt.username = "mqtt_user";
+    newMqtt.password = "mqtt_pass";
+    config_manager.setMqttConfig(newMqtt);
+    TEST_ASSERT_TRUE(config_manager.save());
+
+    ConfigManager new_manager;
+    TEST_ASSERT_TRUE(new_manager.begin());
+    MqttConfig mqtt = new_manager.getMqttConfig();
+    TEST_ASSERT_EQUAL_STRING("192.168.1.10", mqtt.host.c_str());
+    TEST_ASSERT_EQUAL_UINT16(1884, mqtt.port);
+    TEST_ASSERT_EQUAL_STRING("mqtt_user", mqtt.username.c_str());
+    TEST_ASSERT_EQUAL_STRING("mqtt_pass", mqtt.password.c_str());
+}
+
+void test_config_without_mqtt_section_loads(void) {
+    // Saved by firmware from before MQTT support
+    test_preferences.begin("nutos", false);
+    test_preferences.putString("config_json",
+        "{\"wifi\":{\"ssid\":\"s\",\"password\":\"p\"},\"nut\":{\"username\":\"u\",\"password\":\"p\",\"ups_name\":\"ups\"}}");
+    test_preferences.end();
+
+    ConfigManager new_manager;
+    TEST_ASSERT_TRUE(new_manager.begin());
+    MqttConfig mqtt = new_manager.getMqttConfig();
+    TEST_ASSERT_TRUE(mqtt.host.isEmpty());
+    TEST_ASSERT_EQUAL_UINT16(1883, mqtt.port);
+}
+
 void test_load_missing_file(void) {
     // Inizializzazione ConfigManager con NVS vuota e file inesistente
     TEST_ASSERT_FALSE(config_manager.begin());
@@ -55,6 +89,8 @@ void setup() {
 
     UNITY_BEGIN();
     RUN_TEST(test_save_and_load_config);
+    RUN_TEST(test_save_and_load_mqtt_config);
+    RUN_TEST(test_config_without_mqtt_section_loads);
     RUN_TEST(test_load_missing_file);
     UNITY_END();
 }

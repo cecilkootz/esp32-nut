@@ -10,3 +10,12 @@ String getDeviceId() {
     snprintf(id, sizeof(id), "%s-%02X%02X%02X", ESP.getChipModel(), mac[3], mac[4], mac[5]);
     return String(id);
 }
+
+String getMacAddress() {
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char text[18];
+    snprintf(text, sizeof(text), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return String(text);
+}

@@ -41,6 +41,16 @@ bool ConfigManager::begin() {
         AppLogger::log("ERROR", "[CONFIG] ERROR: 'nut' section missing or invalid in JSON.");
         return false;
     }
+
+    // Optional: configurations saved before MQTT support have no such section
+    mqtt_config = MqttConfig();
+    if (doc["mqtt"].is<JsonObject>()) {
+        JsonObject mqtt = doc["mqtt"].as<JsonObject>();
+        mqtt_config.host = mqtt["host"] | "";
+        mqtt_config.port = mqtt["port"] | 1883;
+        mqtt_config.username = mqtt["username"] | "";
+        mqtt_config.password = mqtt["password"] | "";
+    }
     
     // Se siamo arrivati qui, la configurazione è valida
     is_valid = true;
@@ -58,6 +68,10 @@ NutConfig ConfigManager::getNutConfig() const {
     return nut_config;
 }
 
+MqttConfig ConfigManager::getMqttConfig() const {
+    return mqtt_config;
+}
+
 bool ConfigManager::isValid() const {
     return is_valid;
 }
@@ -68,6 +82,10 @@ void ConfigManager::setWifiConfig(const WifiConfig& config) {
 
 void ConfigManager::setNutConfig(const NutConfig& config) {
     nut_config = config;
+}
+
+void ConfigManager::setMqttConfig(const MqttConfig& config) {
+    mqtt_config = config;
 }
 
 bool ConfigManager::save() {
@@ -81,6 +99,12 @@ bool ConfigManager::save() {
     nut["username"] = nut_config.username;
     nut["password"] = nut_config.password;
     nut["ups_name"] = nut_config.ups_name;
+
+    JsonObject mqtt = doc["mqtt"].to<JsonObject>();
+    mqtt["host"] = mqtt_config.host;
+    mqtt["port"] = mqtt_config.port;
+    mqtt["username"] = mqtt_config.username;
+    mqtt["password"] = mqtt_config.password;
     
     String jsonString;
     if (serializeJson(doc, jsonString) == 0) {
