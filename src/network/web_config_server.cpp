@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "core/app_logger.h"
+#include "core/crash_diag.h"
 #include "core/device_id.h"
 #include "core/memory_stats.h"
 #include "network/network_manager.h"
@@ -258,6 +259,12 @@ void WebConfigServer::handleSystemStatus() {
         ups_status_str = "Disconnected";
     }
     doc["ups"]["status"] = ups_status_str;
+    // A missing UPS is already "Disconnected": the stale banner is for an attached one
+    if (usb_ups && usb_ups->isConnected() && usb_ups->isDataStale()) {
+        doc["ups"]["stale"] = true;
+    }
+
+    CrashDiag::fillJson(doc["diagnostics"].to<JsonObject>());
 
     if (nut_server) {
         const NUTServer::Stats& stats = nut_server->stats();
@@ -278,6 +285,9 @@ void WebConfigServer::handleSystemStatus() {
     memory["min_free_heap"] = mem.min_free_heap;
     memory["largest_free_block"] = mem.largest_free_block;
     memory["loop_stack_min_free"] = mem.loop_stack_min_free;
+    if (mem.poll_stack_min_free >= 0) {
+        memory["poll_stack_min_free"] = mem.poll_stack_min_free;
+    }
     if (mem.hid_stack_min_free >= 0) {
         memory["hid_stack_min_free"] = mem.hid_stack_min_free;
     }

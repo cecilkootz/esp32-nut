@@ -1,5 +1,6 @@
 #include <unity.h>
 #include "HIDParser.h"
+#include "NUTUsages.h"
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -34,7 +35,7 @@ void test_hid_parser_basic(void) {
 
 // Usage 0 used to match the table's NULL sentinel, yielding String(NULL); on ESP32 its
 // c_str() is NULL and strncat() into the path crashed the device.
-void test_collection_without_usage(void) {
+void test_logical_collection_without_usage(void) {
     const uint8_t desc[] = {
         0x05, 0x84, // Usage Page (UPS)
         0x09, 0x04, // Usage (UPS)
@@ -354,12 +355,179 @@ void test_cyberpower_br700elcd_beeper(void) {
     TEST_ASSERT_EQUAL_UINT16(2, expected_length);
 }
 
+// Review A4: declared INPUT lengths drive the reassembly of multi-packet reports
+void test_input_length_and_report_ids(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84,       // Usage Page (Power Device)
+        0x09, 0x04,       // Usage (UPS)
+        0xA1, 0x01,       // Collection (Application)
+        0x85, 0x21,       //   Report ID 0x21
+        0x09, 0x30,       //   Usage (Voltage)
+        0x75, 0x08,       //   Report Size 8
+        0x95, 0x14,       //   Report Count 20
+        0x81, 0x02,       //   Input
+        0xC0              // End Collection
+    };
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+    TEST_ASSERT_TRUE(parser.usesReportIds());
+    TEST_ASSERT_EQUAL_UINT16(21, parser.getInputLength(0x21)); // 20 bytes + report ID
+    TEST_ASSERT_EQUAL_UINT16(0, parser.getInputLength(0x22));  // unknown: no guess
+}
+
+void test_input_length_without_report_ids(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x09, 0x30, 0x75, 0x08, 0x95, 0x0A, 0x81, 0x02, // 10 bytes, no report ID
+        0xC0
+    };
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+    TEST_ASSERT_FALSE(parser.usesReportIds());
+    TEST_ASSERT_EQUAL_UINT16(10, parser.getInputLength(0));
+}
+
+// Review M1: Logical Minimum < 0 means a signed field (e.g. discharge current)
+void test_signed_field_sign_extended(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x85, 0x01,
+        0x09, 0x31,             // Usage (Current)
+        0x16, 0x00, 0x80,       // Logical Minimum (-32768)
+        0x26, 0xFF, 0x7F,       // Logical Maximum (32767)
+        0x75, 0x10, 0x95, 0x01, 0xB1, 0x02, // 16 bits, Feature
+        0x09, 0x30,             // Usage (Voltage)
+        0x15, 0x00,             // Logical Minimum (0)
+        0x26, 0xFF, 0x00,       // Logical Maximum (255)
+        0x75, 0x08, 0x95, 0x01, 0xB1, 0x02, // 8 bits, Feature
+        0xC0
+    };
+    HIDParser parser;
+    parser.parseReportDescriptor(desc, sizeof(desc));
+    const HIDUsageDef* current = parser.getUsageDef(0x00840031);
+    const HIDUsageDef* voltage = parser.getUsageDef(0x00840030);
+    TEST_ASSERT_NOT_NULL(current);
+    TEST_ASSERT_NOT_NULL(voltage);
+    TEST_ASSERT_EQUAL_INT32(-32768, current->logical_min);
+    TEST_ASSERT_EQUAL_INT32(32767, current->logical_max);
+
+    const uint8_t report[] = {0x01, 0xF6, 0xFF, 0xF0}; // current = -10, voltage = 240
+    TEST_ASSERT_EQUAL_FLOAT(-10.0, HIDParser::extractUsage(current, 1, report, sizeof(report)));
+    // Logical Minimum 0: the top bit is magnitude, not sign
+    TEST_ASSERT_EQUAL_FLOAT(240.0, HIDParser::extractUsage(voltage, 1, report, sizeof(report)));
+}
+
+void test_unsigned_logical_max_in_one_byte(void) {
+    // "Logical Maximum (255)" sent as 0x25 0xFF is -1 as a signed byte: read it as 255
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x09, 0x30, 0x15, 0x00, 0x25, 0xFF, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,
+        0xC0
+    };
+    HIDParser parser;
+    parser.parseReportDescriptor(desc, sizeof(desc));
+    const HIDUsageDef* voltage = parser.getUsageDef(0x00840030);
+    TEST_ASSERT_NOT_NULL(voltage);
+    TEST_ASSERT_EQUAL_INT32(0, voltage->logical_min);
+    TEST_ASSERT_EQUAL_INT32(255, voltage->logical_max);
+}
+
+void test_wide_field_clamped_to_32_bits(void) {
+    HIDUsageDef def;
+    def.found = true;
+    def.report_id = 0;
+    def.bit_offset = 0;
+    def.bit_size = 64; // shifting by 64 was undefined behaviour
+    const uint8_t report[] = {0x78, 0x56, 0x34, 0x12, 0xFF, 0xFF, 0xFF, 0xFF};
+    TEST_ASSERT_EQUAL_FLOAT((double)0x12345678, HIDParser::extractUsage(&def, 0, report, sizeof(report)));
+}
+
+void test_long_item_skipped(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0xFE, 0x03, 0x10, 0x81, 0x02, 0x09, // long item: 3 data bytes that look like items
+        0x09, 0x30, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,
+        0xC0
+    };
+    HIDParser parser;
+    parser.parseReportDescriptor(desc, sizeof(desc));
+    TEST_ASSERT_EQUAL(1, parser.getUsages().size());
+    TEST_ASSERT_NOT_NULL(parser.getUsageDef(0x00840030));
+}
+
+void test_usage_minimum_maximum_expanded(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x05, 0x85,             // Usage Page (Battery System)
+        0x19, 0xD0,             // Usage Minimum (ACPresent)
+        0x29, 0xD2,             // Usage Maximum (0xD2)
+        0x75, 0x01, 0x95, 0x03, 0x81, 0x02, // 3 bits, Input
+        0x75, 0x05, 0x95, 0x01, 0x81, 0x03, // padding
+        0xC0
+    };
+    HIDParser parser;
+    parser.parseReportDescriptor(desc, sizeof(desc));
+    TEST_ASSERT_EQUAL(3, parser.getUsages().size());
+    const HIDUsageDef* ac = parser.getUsageDef(0x008500D0);
+    const HIDUsageDef* third = parser.getUsageDef(0x008500D2);
+    TEST_ASSERT_NOT_NULL(ac);
+    TEST_ASSERT_NOT_NULL(third);
+    TEST_ASSERT_EQUAL_UINT16(0, ac->bit_offset);
+    TEST_ASSERT_EQUAL_UINT16(2, third->bit_offset);
+}
+
+void test_usage_lookup_stops_at_sentinel(void) {
+    // Issue #55: usage 0 matched the { NULL, 0 } sentinel and gave a NULL name
+    TEST_ASSERT_NULL(nut_usage_lookup(0));
+    TEST_ASSERT_EQUAL_STRING("0x00000000", get_nut_usage_name(0).c_str());
+    TEST_ASSERT_EQUAL_STRING("UPS", nut_usage_lookup(0x00840004));
+    TEST_ASSERT_EQUAL_STRING("APCBattReplaceDate", nut_usage_lookup(0xFF860016));
+}
+
+void test_collection_without_usage(void) {
+    // Tail of the APC Back-UPS BX1500G descriptor (issue #55): a Physical
+    // collection with no Usage around a vendor Feature
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,     // UPS application collection
+        0xA1, 0x00,                             // Collection (Physical), no Usage
+        0x06, 0x00, 0xFF, 0x85, 0x80, 0x09, 0x55,
+        0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x82,
+        0xC0,
+        0xC0
+    };
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+    const HIDUsageDef* vendor = parser.getUsageDef(0xFF000055);
+    TEST_ASSERT_NOT_NULL(vendor);
+    TEST_ASSERT_EQUAL_UINT8(0x80, vendor->report_id);
+    TEST_ASSERT_EQUAL_STRING("UPS.0x00000000.0xFF000055", vendor->path);
+}
+
+void test_path_truncated_to_buffer(void) {
+    // Nested collections longer than path[80]: truncated, still terminated
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x09, 0x24, 0xA1, 0x00, 0x09, 0x24, 0xA1, 0x00, 0x09, 0x24, 0xA1, 0x00,
+        0x09, 0x24, 0xA1, 0x00, 0x09, 0x24, 0xA1, 0x00, 0x09, 0x24, 0xA1, 0x00,
+        0x09, 0x24, 0xA1, 0x00, 0x09, 0x24, 0xA1, 0x00,
+        0x09, 0x30, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,
+        0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0,
+        0xC0
+    };
+    HIDParser parser;
+    parser.parseReportDescriptor(desc, sizeof(desc));
+    const HIDUsageDef* v = parser.getUsageDef(0x00840030);
+    TEST_ASSERT_NOT_NULL(v);
+    TEST_ASSERT_EQUAL(sizeof(v->path) - 1, strlen(v->path));
+    TEST_ASSERT_EQUAL_STRING_LEN("UPS.PowerSummary.PowerSummary.", v->path, 30);
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_hid_parser_basic);
-    RUN_TEST(test_collection_without_usage);
+    RUN_TEST(test_logical_collection_without_usage);
     RUN_TEST(test_extract_usage_aligned);
     RUN_TEST(test_extract_unaligned_bitfields);
     RUN_TEST(test_extract_exponent_and_unit_scaling);
@@ -369,13 +537,23 @@ int main(int argc, char **argv) {
     RUN_TEST(test_null_or_corrupted_buffer_tolerance);
     RUN_TEST(test_has_feature_beeper_control);
     RUN_TEST(test_cyberpower_br700elcd_beeper);
+    RUN_TEST(test_input_length_and_report_ids);
+    RUN_TEST(test_input_length_without_report_ids);
+    RUN_TEST(test_signed_field_sign_extended);
+    RUN_TEST(test_unsigned_logical_max_in_one_byte);
+    RUN_TEST(test_wide_field_clamped_to_32_bits);
+    RUN_TEST(test_long_item_skipped);
+    RUN_TEST(test_usage_minimum_maximum_expanded);
+    RUN_TEST(test_usage_lookup_stops_at_sentinel);
+    RUN_TEST(test_collection_without_usage);
+    RUN_TEST(test_path_truncated_to_buffer);
     return UNITY_END();
 }
 #else
 void setup() {
     UNITY_BEGIN();
     RUN_TEST(test_hid_parser_basic);
-    RUN_TEST(test_collection_without_usage);
+    RUN_TEST(test_logical_collection_without_usage);
     RUN_TEST(test_extract_usage_aligned);
     RUN_TEST(test_extract_unaligned_bitfields);
     RUN_TEST(test_extract_exponent_and_unit_scaling);
@@ -385,6 +563,16 @@ void setup() {
     RUN_TEST(test_null_or_corrupted_buffer_tolerance);
     RUN_TEST(test_has_feature_beeper_control);
     RUN_TEST(test_cyberpower_br700elcd_beeper);
+    RUN_TEST(test_input_length_and_report_ids);
+    RUN_TEST(test_input_length_without_report_ids);
+    RUN_TEST(test_signed_field_sign_extended);
+    RUN_TEST(test_unsigned_logical_max_in_one_byte);
+    RUN_TEST(test_wide_field_clamped_to_32_bits);
+    RUN_TEST(test_long_item_skipped);
+    RUN_TEST(test_usage_minimum_maximum_expanded);
+    RUN_TEST(test_usage_lookup_stops_at_sentinel);
+    RUN_TEST(test_collection_without_usage);
+    RUN_TEST(test_path_truncated_to_buffer);
     UNITY_END();
 }
 void loop() {}

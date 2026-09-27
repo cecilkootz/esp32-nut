@@ -62,12 +62,8 @@ public:
         return connected;
     }
 
-    bool fresh = true;
-    mutable uint32_t lastMaxAge = 0;
-    bool hasFreshData(uint32_t max_age_ms) const override {
-        lastMaxAge = max_age_ms;
-        return connected && fresh;
-    }
+    bool stale = false;
+    bool isDataStale() const override { return stale; }
 
     std::vector<HIDUsageDef> _mockUsages;
     HIDParser _hid_parser;
@@ -76,7 +72,7 @@ public:
     const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String getActiveBeeperPath() const override { return "UPS.PowerSummary.AudibleAlarmControl"; }
     uint32_t getQuirks() const override { return 0; }
-    bool isControlPending() const override { return false; }
+    bool isPollingPaused() const override { return false; }
     bool requestReport(uint8_t, uint8_t, uint16_t) override { return true; }
     bool requestStringDescriptor(uint8_t) override { return true; }
 };
@@ -122,8 +118,7 @@ void setUp(void) {
     mockHost.statusString = "OL";
     mockHost.beeperState = true;
     mockHost.connected = true;
-    mockHost.fresh = true;
-    mockHost.lastMaxAge = 0;
+    mockHost.stale = false;
     mockHost.lockDepth = 0;
 
     NUTServerConfig config;
@@ -270,6 +265,53 @@ void test_instcmd_beeper(void) {
     printer.clear();
     server.processCommand(printer, 0, "INSTCMD testups invalid.cmd");
     TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", printer.getOutput().c_str());
+}
+
+// Issue #47: frozen values must not be served as current (upsd behaviour)
+void test_data_stale(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("battery.charge", "95");
+
+    mockHost.stale = true;
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups battery.charge");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups ups.status");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    mockHost.stale = false;
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups battery.charge");
+    TEST_ASSERT_EQUAL_STRING("VAR testups battery.charge \"95\"\n", printer.getOutput().c_str());
+}
+
+// Review A1: with the UPS unplugged (or re-enumerating) the host reports stale data.
+// Clients must get ERR DATA-STALE, never an empty "Unknown" status, while the UPS
+// itself stays listed.
+void test_disconnected_is_stale(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data = UPSData();
+    mockHost.statusString = "UNKNOWN";
+    mockHost.connected = false;
+    mockHost.stale = true;
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups ups.status");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST UPS");
+    TEST_ASSERT_TRUE(printer.getOutput().find("UPS testups ") != std::string::npos);
 }
 
 #ifdef PIO_UNIT_TESTING
@@ -500,10 +542,13 @@ static void assertVarReadsRefusedWith(const char* expected) {
     }
 }
 
-void test_var_reads_refused_when_driver_not_connected(void) {
+// Also before the host calls a missing UPS stale (its boot grace): the firmware
+// is the driver, so nothing to read is stale data, as upsd reports until the
+// driver's first dump.
+void test_var_reads_refused_while_disconnected(void) {
     mockHost.data.set("battery.charge", "95");
     mockHost.connected = false;
-    assertVarReadsRefusedWith("ERR DRIVER-NOT-CONNECTED\n");
+    assertVarReadsRefusedWith("ERR DATA-STALE\n");
 
     // As in upsd, the UPS name is checked first.
     printer.clear();
@@ -516,13 +561,6 @@ void test_var_reads_refused_without_ups(void) {
     config.ups_name = "testups";
     server.begin(config, nullptr, 3493);
     assertVarReadsRefusedWith("ERR DRIVER-NOT-CONNECTED\n");
-}
-
-void test_var_reads_refused_when_data_stale(void) {
-    mockHost.data.set("battery.charge", "95");
-    mockHost.fresh = false;
-    assertVarReadsRefusedWith("ERR DATA-STALE\n");
-    TEST_ASSERT_EQUAL_UINT32(90000, mockHost.lastMaxAge);
 }
 
 static std::string reply(int slot, const char* command) {
@@ -708,13 +746,14 @@ int main(int argc, char **argv) {
     RUN_TEST(test_get_desc_and_type);
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
+    RUN_TEST(test_data_stale);
+    RUN_TEST(test_disconnected_is_stale);
     RUN_TEST(test_list_var_full_output);
     RUN_TEST(test_quoted_values_are_escaped);
     RUN_TEST(test_log_callback_receives_server_messages);
     RUN_TEST(test_stats_count_commands_and_auth_failures);
-    RUN_TEST(test_var_reads_refused_when_driver_not_connected);
+    RUN_TEST(test_var_reads_refused_while_disconnected);
     RUN_TEST(test_var_reads_refused_without_ups);
-    RUN_TEST(test_var_reads_refused_when_data_stale);
     RUN_TEST(test_protver_answers_as_netver);
     RUN_TEST(test_starttls_not_supported);
     RUN_TEST(test_numlogins_counts_logged_in_sessions);
@@ -741,13 +780,14 @@ void setup() {
     RUN_TEST(test_get_desc_and_type);
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
+    RUN_TEST(test_data_stale);
+    RUN_TEST(test_disconnected_is_stale);
     RUN_TEST(test_list_var_full_output);
     RUN_TEST(test_quoted_values_are_escaped);
     RUN_TEST(test_log_callback_receives_server_messages);
     RUN_TEST(test_stats_count_commands_and_auth_failures);
-    RUN_TEST(test_var_reads_refused_when_driver_not_connected);
+    RUN_TEST(test_var_reads_refused_while_disconnected);
     RUN_TEST(test_var_reads_refused_without_ups);
-    RUN_TEST(test_var_reads_refused_when_data_stale);
     RUN_TEST(test_protver_answers_as_netver);
     RUN_TEST(test_starttls_not_supported);
     RUN_TEST(test_numlogins_counts_logged_in_sessions);

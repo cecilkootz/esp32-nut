@@ -82,10 +82,17 @@ public:
         bool charging = d.getBool("ups.status.charging");
         float batteryCharge = d.getFloat("battery.charge", -1);
         
-        // usbhid-ups reports discharging as DISCHRG right after OB.
-        if (discharging) status += "OB DISCHRG ";
-        else if (d.hasKey("ups.status.ac_present") && !acPresent) status += "OB ";
-        else if ((d.hasKey("ups.status.ac_present") && acPresent) || (d.hasKey("ups.status.good") && good)) status += "OL ";
+        // OL comes from ACPresent (NUT online_info) and OB is "not online", as in usbhid-ups.
+        // PresentStatus.Good says the UPS works, not that it is on mains: Eaton keeps it at 1
+        // on battery (NUT mge-hid maps it to off_info), which gave "OL OB". It only stands in
+        // for ACPresent on devices without it, and never while discharging.
+        bool hasAc = d.hasKey("ups.status.ac_present");
+        bool onBattery = d.hasKey("ups.status.discharging") && discharging;
+        bool online = hasAc ? (acPresent && !onBattery)
+                            : (d.hasKey("ups.status.good") && good && !onBattery);
+        if (online) status += "OL ";
+        if (onBattery || (hasAc && !acPresent)) status += "OB ";
+        if (onBattery) status += "DISCHRG "; // from the Discharging usage, as usbhid-ups
         if (d.getBool("ups.status.battery_low")) status += "LB ";
         
         if (d.hasKey("ups.status.charging") && charging && !(batteryCharge == 100.0f && d.hasKey("ups.status.ac_present") && acPresent)) status += "CHRG ";

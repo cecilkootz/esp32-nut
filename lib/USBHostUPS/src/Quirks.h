@@ -9,8 +9,6 @@
 #define QUIRK_NO_STRING_DESCRIPTOR (1 << 2)
 #define QUIRK_NO_BEEPER_CONTROL    (1 << 3)
 #define QUIRK_NO_GET_REPORT        (1 << 4)
-// GET_REPORT answers with a report other than the one requested.
-#define QUIRK_SHIFTED_REPORTS      (1 << 5)
 
 struct QuirkDef {
     uint16_t vid;
@@ -30,9 +28,6 @@ static const QuirkDef UPS_QUIRKS[] = {
     { 0x051D, 0x0003, QUIRK_NO_GET_REPORT },
     // APC Smart-UPS 1000
     { 0x051D, 0x0004, QUIRK_NO_GET_REPORT },
-    // GoldenMate LiFePO4 BMS: every GET_REPORT returns the previously
-    // requested report, so responses must be identified by their own ID.
-    { 0x075D, 0x0300, QUIRK_SHIFTED_REPORTS },
     // Terminator
     { 0x0000, 0x0000, 0 }
 };

@@ -2,13 +2,25 @@
 #define GENERIC_DRIVER_H
 
 #include "IUPSDriver.h"
+#include "UsageMapIndex.h"
 #include <Arduino.h>
 #include <vector>
 
+/**
+ * @brief Base of every driver: standard HID PDC mappings and the poll state machine.
+ *
+ * Poll cycles (review S3, A6, like usbhid-ups and ADR 0006):
+ * - quick poll every quickPollMs(): only the reports that carry status usages
+ *   (PresentStatus, RemainingCapacity, RunTimeToEmpty, PercentLoad...);
+ * - full poll every fullPollMs(): the missing string descriptors, then every report.
+ * One control request per loop() call, STEP_SPACING_MS apart, and none while
+ * isPollingPaused(). Derived drivers only change the policy through the hooks below
+ * instead of copying the state machine.
+ */
 class GenericDriver : public IUPSDriver {
 public:
     const char* getDriverName() const override { return "GenericDriver"; }
-public:
+
     GenericDriver();
     virtual ~GenericDriver() = default;
 
@@ -17,31 +29,57 @@ public:
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
-    // driver.name and driver.version identify this firmware, as a NUT driver
-    // identifies itself; driver.version.data names the sub-driver. Every
-    // loop() override calls this.
+    // One control request of a poll cycle
+    struct PollItem {
+        uint8_t report_type; // 1 = INPUT, 3 = FEATURE, STRING_ITEM = string descriptor
+        uint8_t id;          // report ID, or string index
+        uint16_t length;     // expected length, 0 = from the report descriptor
+    };
+    static const uint8_t STRING_ITEM = 0;
+    static const uint32_t STEP_SPACING_MS = 50;
+
+    // True for the usages the quick poll keeps fresh
+    static bool isStatusUsage(const HIDUsageDef& u);
+
+    // ups.type is the UPS topology in NUT, so the firmware identifies itself
+    // the way NUT drivers do: driver.name and driver.version, with the
+    // sub-driver in driver.version.data. Called by every loop().
     void publishDriverInfo(UPSData& data) const;
 
 protected:
-    // Reports worth polling, as (type << 8) | id in descriptor order: those
-    // shouldPoll() accepts, less Output reports and Input reports that share
-    // an ID with a Feature report. The usage table is fixed per connection, so
-    // this is built on first use after setup(), which the host calls for every
-    // new descriptor.
-    const std::vector<uint16_t>& pollList(IUSBHostUPS* host);
-    virtual bool shouldPoll(uint8_t report_id, uint8_t report_type) const;
+    // --- Poll policy ---
+    virtual uint32_t quickPollMs() const { return 2000; } // 0 = no quick poll
+    virtual uint32_t fullPollMs() const { return 30000; }
+    // Reports a driver must never request (e.g. ones that freeze the firmware)
+    virtual bool acceptPollReport(uint8_t report_type, uint8_t report_id) const { return true; }
+    // INPUT reports without a FEATURE twin are requested with GET_REPORT too
+    virtual bool pollInputReports() const { return true; }
+    virtual void buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const;
+    // String descriptors fetched at the start of a full poll (only the missing ones)
+    virtual void collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const;
+    // Called by every loop() with the host lock held: values that need no request
+    virtual void onLoop(IUSBHostUPS* host, UPSData& data) {}
 
-    uint32_t _last_poll;
-    uint32_t _last_fast_poll;
-    uint32_t _last_step_time;
-    uint8_t _poll_step;
-    uint8_t _slow_poll_counter;
     String _active_beeper;
     uint8_t _batteryDateStringIndex;
 
 private:
-    std::vector<uint16_t> _poll_list;
-    bool _poll_list_ready = false;
+    void startCycle(IUSBHostUPS* host, const UPSData& data, bool full, uint32_t now);
+    void appendNewStrings(IUSBHostUPS* host, const UPSData& data);
+
+    UsageMapIndex<GenericDriver> _generic_map;
+    bool _lists_built;
+    std::vector<PollItem> _quick;
+    std::vector<PollItem> _full;
+    std::vector<PollItem> _queue;
+    size_t _queue_pos;
+    bool _step_now;
+    bool _cycle_full;
+    bool _strings_rechecked;              // second look at the strings done for this cycle
+    std::vector<uint8_t> _cycle_strings;  // string indices already requested in this cycle
+    uint32_t _last_quick;
+    uint32_t _last_full;
+    uint32_t _last_step;
 };
 
 #endif // GENERIC_DRIVER_H

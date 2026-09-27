@@ -15,6 +15,11 @@
 
 APCDriver::APCDriver() {}
 
+void APCDriver::setup() {
+    GenericDriver::setup();
+    _map.invalidate();
+}
+
 void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
@@ -22,11 +27,7 @@ void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t repor
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 
     // Apply APC specific mappings overrides
-    struct Mapping {
-        const char* path;
-        void (*apply)(APCDriver*, UPSData&, double, const HIDUsageDef*);
-    };
-
+    typedef UsageMapIndex<APCDriver>::Mapping Mapping;
     static const Mapping mappings[] = {
         { "UPS.PowerSummary.APCBattReplaceDate", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
             if (v <= 0) return;
@@ -57,7 +58,12 @@ void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t repor
         { "UPS.APCGeneralCollection.APCDelayBeforeReboot", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.timer.reboot", String((int)v)); } },
         { "UPS.APCEnvironment.APCProbe1.Temperature", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ambient.temperature", String((v > 200.0) ? (v - 273.15) : v, 1)); } },
         { "UPS.APCEnvironment.APCProbe1.Humidity", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ambient.humidity", String(v, 1)); } },
-        { "UPS.Input.APCSensitivity", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+        // apc-hid.c: Back-UPS CS espone il carico solo qui (issue 48, perso nella 1.5.0)
+        { "UPS.PowerConverter.PercentLoad", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            d.set("ups.load", String((int)v));
+            d.updateRealPower();
+        }},
+        { "UPS.Input.APCSensitivity",[](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { 
             int val = (int)v;
             if (val == 1) d.set("input.sensitivity", "low");
             else if (val == 2) d.set("input.sensitivity", "medium");
@@ -65,14 +71,5 @@ void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t repor
         }}
     };
 
-    for (const auto& u : host->getUsages()) {
-        if (u.report_id != report_id || u.report_type != report_type) continue;
-        for (const auto& m : mappings) {
-            if (strcmp(u.path, m.path) == 0) {
-                double val = HIDParser::extractUsage(&u, report_id, data, length);
-                m.apply(this, ups_data, val, &u);
-                break;
-            }
-        }
-    }
+    _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
 }

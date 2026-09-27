@@ -20,10 +20,6 @@ static const char* NUT_UPS_DESCRIPTION = "ESP32-S3 UPS Bridge";
 // Protocol level the implemented command subset targets, as upsd reports it.
 static const char* NUT_PROTOCOL_VERSION = "1.3";
 
-// Older readings are refused. CyberPower, the slowest driver, polls every
-// 30 s, so this rides out two missed polls.
-static const uint32_t NUT_DATA_MAX_AGE_MS = 90000;
-
 namespace {
 
 // Replies are assembled here and written once, after the USB data lock is
@@ -151,13 +147,14 @@ void NUTServer::logMessage(const char* level, const char* format, ...) const {
 }
 
 // Mirrors upsd's ups_available(): a read fails outright rather than serve
-// readings the UPS is no longer backing.
+// readings the UPS is no longer backing. The firmware is the driver, so it is
+// always running: a missing UPS is stale data, as when usbhid-ups loses its device.
 bool NUTServer::upsAvailable(Print& client) const {
-    if (!_usb_ups || !_usb_ups->isConnected()) {
+    if (!_usb_ups) {
         client.print("ERR DRIVER-NOT-CONNECTED\n");
         return false;
     }
-    if (!_usb_ups->hasFreshData(NUT_DATA_MAX_AGE_MS)) {
+    if (!_usb_ups->isConnected() || _usb_ups->isDataStale()) {
         client.print("ERR DATA-STALE\n");
         return false;
     }
@@ -599,7 +596,9 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             if (!_usb_ups || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
                 client.print("ERR CMD-NOT-SUPPORTED\n");
             } else {
-                _usb_ups->setBeeper(!_usb_ups->getUPSData()->getBool("ups.beeper.status"));
+                // Read first: the data lock must not be held across setBeeper() (USBHostUPS lock order)
+                bool enabled = _usb_ups->getUPSData()->getBool("ups.beeper.status");
+                _usb_ups->setBeeper(!enabled);
                 client.print("OK\n");
             }
             return;

@@ -302,6 +302,60 @@ esp_err_t hid_host_device_start(hid_host_device_handle_t hid_dev_handle);
 esp_err_t hid_host_device_stop(hid_host_device_handle_t hid_dev_handle);
 
 /**
+ * @brief [esp32-nut, review A3] Clear a halted interrupt IN endpoint on the device.
+ *
+ * Sends CLEAR_FEATURE(ENDPOINT_HALT) on EP0. hid_host_device_stop() only resets the
+ * host side of the pipe: an endpoint the device has put in STALL stays halted until
+ * this request (or a new enumeration). Blocks like the other class requests.
+ *
+ * @param[in] hid_dev_handle HID device handle.
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if hid_dev_handle is invalid
+ *      - ESP_ERR_INVALID_STATE if the control pipe is busy
+ *      - Other error codes of the control transfer
+ */
+esp_err_t hid_host_device_clear_ep_in_halt(hid_host_device_handle_t hid_dev_handle);
+
+/**
+ * @brief [esp32-nut, review A4] wMaxPacketSize of the interrupt IN endpoint.
+ *
+ * The IN transfer is one packet long: an INPUT report longer than this arrives in
+ * several INPUT_REPORT events, one per packet.
+ *
+ * @param[in] hid_dev_handle HID device handle.
+ *
+ * @return MPS in bytes, or 0 if hid_dev_handle is invalid
+ */
+uint16_t hid_host_device_get_ep_in_mps(hid_host_device_handle_t hid_dev_handle);
+
+/**
+ * @brief [esp32-nut, review M5] Read a string descriptor of the device (GET_DESCRIPTOR on EP0).
+ *
+ * @param[in] hid_dev_handle HID device handle.
+ * @param[in] index String index (0 returns the supported language IDs).
+ * @param[in] lang_id Language ID, e.g. 0x0409.
+ * @param[out] data Raw descriptor: bLength, bDescriptorType, UTF-16LE characters.
+ * @param[in] data_length_max Size of data (at most 255 bytes are requested).
+ * @param[out] data_length Bytes received.
+ *
+ * @return ESP_OK on success, or the error of the control transfer
+ */
+esp_err_t hid_host_device_get_string_descriptor(hid_host_device_handle_t hid_dev_handle,
+                                                uint8_t index, uint16_t lang_id,
+                                                uint8_t *data, size_t data_length_max,
+                                                size_t *data_length);
+
+/**
+ * @brief [esp32-nut, review M5] String indices of the device descriptor.
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t hid_host_device_get_string_indices(hid_host_device_handle_t hid_dev_handle,
+                                             uint8_t *manufacturer, uint8_t *product, uint8_t *serial);
+
+/**
  * @brief Get the HID report descriptor for an interface.
  *
  * The returned pointer is owned by the HID host driver and remains valid until

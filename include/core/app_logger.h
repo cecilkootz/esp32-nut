@@ -10,7 +10,7 @@ struct LogMessage {
     uint32_t id;
     unsigned long time;
     char level[8];
-    char msg[128];
+    char msg[256]; // log()'s format buffer: [DIAG] lines and backtraces need the room
 };
 
 class AppLogger {

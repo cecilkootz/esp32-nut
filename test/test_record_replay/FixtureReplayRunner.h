@@ -18,7 +18,7 @@
 #include "PowercomDriver.h"
 #include "GenericDriver.h"
 #include "OpenUPSDriver.h"
-#include "GoldenMateDriver.h"
+#include "DriverRegistry.h"
 
 class ReplayMockHost : public IUSBHostUPS {
 public:
@@ -49,7 +49,7 @@ public:
         return "";
     }
     uint32_t getQuirks() const override { return _quirks; }
-    bool isControlPending() const override { return false; }
+    bool isPollingPaused() const override { return false; }
     bool supportsBeeperToggle() const override {
         if (_quirks & QUIRK_NO_BEEPER_CONTROL) return false;
         return _parser.hasFeatureBeeperControl();
@@ -148,30 +148,7 @@ public:
         TEST_ASSERT_GREATER_THAN_MESSAGE(0, host._parser.getUsages().size(), "Parser found 0 usages from descriptor");
 
         // 3. Dispatch Driver
-        GenericDriver* driver = nullptr;
-        switch (vid) {
-            case 0x0463:
-                driver = new EatonDriver();
-                break;
-            case 0x051D:
-                driver = new APCDriver();
-                break;
-            case 0x0764:
-                driver = new CyberPowerDriver();
-                break;
-            case 0x0D9F:
-                driver = new PowercomDriver();
-                break;
-            case 0x04D8:
-                driver = new OpenUPSDriver();
-                break;
-            case 0x075D:
-                driver = (pid == 0x0300) ? new GoldenMateDriver() : new GenericDriver();
-                break;
-            default:
-                driver = new GenericDriver();
-                break;
-        }
+        IUPSDriver* driver = DriverRegistry::create(vid, pid);
 
         // Match quirks
         host._quirks = 0;
@@ -224,8 +201,9 @@ public:
                 }
             }
 
-            // loop() would set these, but the replay runner never calls it.
-            driver->publishDriverInfo(ups_data);
+            // loop() would set these, but the replay runner never calls it. Every
+            // registry driver derives from GenericDriver.
+            static_cast<GenericDriver*>(driver)->publishDriverInfo(ups_data);
 
             // Assert Expectations
             JsonObject exp = sc["expected_ups_data"].as<JsonObject>();

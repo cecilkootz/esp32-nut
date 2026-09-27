@@ -6,7 +6,7 @@ int AppLogger::head = 0;
 int AppLogger::count = 0;
 uint32_t AppLogger::nextId = 1;
 
-// The loop task and the USB HID host task both log. Created during static
+// The loop task and the ups_poll task both log. Created during static
 // initialisation, before any task can take it.
 static StaticSemaphore_t ringLockBuffer;
 static SemaphoreHandle_t ringLock = xSemaphoreCreateMutexStatic(&ringLockBuffer);

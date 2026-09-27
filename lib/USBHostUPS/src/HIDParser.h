@@ -16,20 +16,19 @@ public:
     const std::vector<HIDUsageDef>& getUsages() const { return _usages; }
     bool hasFeatureBeeperControl() const;
     uint16_t getExpectedLength(uint8_t report_id, uint8_t report_type) const;
-    // Longest report the descriptor declares, for devices whose responses cannot
-    // be trusted to match the request.
-    uint16_t getMaxExpectedLength() const;
-    // Resolves which report type a given report ID belongs to, preferring
-    // preferred_type when the ID is declared under more than one.
-    bool resolveReportType(uint8_t report_id, uint8_t preferred_type, uint8_t& out_type) const;
-
+    // Declared INPUT report length in bytes, report ID included; 0 if the ID is unknown
+    uint16_t getInputLength(uint8_t report_id) const;
+    // True when the descriptor declares report IDs (every report then starts with one)
+    bool usesReportIds() const;
+    
     // Returns false when the report carries no value for this usage: a report ID
     // that does not match, or a field starting past the end of a short report.
     // Callers must not treat that case as a reading of zero.
     static bool tryExtractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length, double& out);
     static double extractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length);
-
+    
 private:
+    static const uint32_t MAX_USAGE_RANGE = 256;
     std::vector<HIDUsageDef> _usages;
     std::map<uint8_t, uint16_t> _input_lengths;
     std::map<uint8_t, uint16_t> _output_lengths;
