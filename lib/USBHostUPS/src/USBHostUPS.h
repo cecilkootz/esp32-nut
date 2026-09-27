@@ -4,6 +4,8 @@
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
+#include <atomic>
 #include <mutex>
 #include "usb/usb_host.h"
 #include "usb/hid_host.h"
@@ -65,6 +67,10 @@ public:
     static void populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_info, UPSData& ups_data);
 private:
     mutable std::recursive_mutex _mutex;
+    // Held by the loop task across every call into the HID library that takes a
+    // device handle, and by the HID task while it closes a departed interface:
+    // the library frees that interface's device as soon as the callback returns.
+    std::recursive_mutex _io_mutex;
     static void hid_host_driver_event_cb(hid_host_device_handle_t hid_device_handle, const hid_host_driver_event_t event, void *arg);
     static void hid_host_interface_event_cb(hid_host_device_handle_t hid_device_handle, const hid_host_interface_event_t event, void *arg);
     static void control_transfer_cb(usb_transfer_t *transfer);
@@ -74,8 +80,31 @@ private:
     
     void handle_driver_event(hid_host_device_handle_t hid_device_handle, const hid_host_driver_event_t event);
     void handle_interface_event(hid_host_device_handle_t hid_device_handle, const hid_host_interface_event_t event);
-    
-    std::vector<hid_host_device_handle_t> _pending_interfaces;
+
+    // The HID task also completes the loop task's control transfers, so its
+    // callbacks only copy into these queues and loop() does the rest.
+    struct InputReport {
+        hid_host_device_handle_t handle;
+        uint8_t len;
+        uint8_t data[64]; // one full-speed interrupt packet, the most the library copies out
+    };
+    struct HidEvent {
+        enum Kind : uint8_t { CONNECTED, OPEN_FAILED, DISCONNECTED } kind;
+        hid_host_device_handle_t handle;
+    };
+    QueueHandle_t _report_queue = NULL;
+    QueueHandle_t _event_queue = NULL;
+    std::atomic<uint32_t> _interrupt_reports_dropped{0};
+    std::atomic<uint32_t> _events_dropped{0};
+    uint32_t _events_dropped_logged = 0;
+
+    void post_event(HidEvent::Kind kind, hid_host_device_handle_t handle);
+    void drain_reports();
+    void process_input_report(const InputReport& report);
+    void drain_events();
+    void claim_interface(hid_host_device_handle_t handle);
+    void reset_device_state();
+
     hid_host_device_handle_t _hid_dev_handle;
     usb_device_handle_t _dev_handle;
     
@@ -83,7 +112,8 @@ private:
     uint16_t _vid;
     uint16_t _pid;
     bool _initialized;
-    bool _is_ready_to_poll;
+    // Also cleared by the HID task when the active interface departs.
+    std::atomic<bool> _is_ready_to_poll;
     volatile bool _is_fetching;
     volatile bool _control_pending;
 
