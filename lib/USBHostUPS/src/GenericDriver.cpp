@@ -20,7 +20,8 @@ GenericDriver::GenericDriver() :
     _last_fast_poll(0),
     _last_step_time(0),
     _poll_step(0),
-    _slow_poll_counter(0) {
+    _slow_poll_counter(0),
+    _batteryDateStringIndex(0) {
 }
 
 void GenericDriver::setup() {
@@ -30,6 +31,7 @@ void GenericDriver::setup() {
     _last_step_time = 0;
     _slow_poll_counter = 14;
     _active_beeper = "";
+    _batteryDateStringIndex = 0;
     _poll_list.clear();
     _poll_list_ready = false;
 }
