@@ -7,6 +7,7 @@
 #include "USBHostUPS.h"
 
 class AppNetworkManager;
+class NUTServer;
 
 class WebConfigServer {
 public:
@@ -15,6 +16,7 @@ public:
     void loop();
     void setUPS(USBHostUPS* ups);
     void setNetwork(AppNetworkManager* network);
+    void setNUT(NUTServer* nut);
 
 private:
     WebServer server;
@@ -37,6 +39,7 @@ private:
     unsigned long restart_request_time = 0;
     USBHostUPS* usb_ups = nullptr;
     AppNetworkManager* network_mgr = nullptr;
+    NUTServer* nut_server = nullptr;
 };
 
 #endif // WEB_CONFIG_SERVER_H

@@ -101,8 +101,15 @@ private:
     }
 };
 
+static std::vector<std::pair<std::string, std::string>> logged;
+
+static void captureLog(const char* level, const char* msg) {
+    logged.push_back({level, msg});
+}
+
 void setUp(void) {
     printer.clear();
+    logged.clear();
     mockHost.data = UPSData();
     mockHost.statusString = "OL";
     mockHost.beeperState = true;
@@ -114,6 +121,8 @@ void setUp(void) {
     config.password = "secret";
     config.ups_name = "testups";
 
+    // Sessions, counters and the log callback must not leak between tests.
+    server = NUTServer();
     server.begin(config, &mockHost, 3493);
 }
 
@@ -418,6 +427,40 @@ void test_quoted_values_are_escaped(void) {
                              printer.getOutput().c_str());
 }
 
+void test_log_callback_receives_server_messages(void) {
+    server.setLogCallback(captureLog);
+    NUTServerConfig config;
+    config.ups_name = "testups";
+    server.begin(config, &mockHost, 3493);
+    server.processCommand(printer, 2, "LOGOUT");
+
+    TEST_ASSERT_EQUAL(2, (int)logged.size());
+    TEST_ASSERT_EQUAL_STRING("INFO", logged[0].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("[NUTServer] Server listening on port 3493", logged[0].second.c_str());
+    TEST_ASSERT_EQUAL_STRING("INFO", logged[1].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("[NUTServer] Session for slot 2 closed.", logged[1].second.c_str());
+}
+
+void test_stats_count_commands_and_auth_failures(void) {
+    server.processCommand(printer, 0, "VER");
+    server.processCommand(printer, 0, "   ");
+    server.processCommand(printer, 0, "USERNAME admin");
+    server.processCommand(printer, 0, "PASSWORD wrong");
+    server.processCommand(printer, 0, "PASSWORD secret");
+    server.processCommand(printer, 0, "BOGUS");
+
+    const NUTServer::Stats& stats = server.stats();
+    TEST_ASSERT_EQUAL_UINT32(5, stats.commands);
+    TEST_ASSERT_EQUAL_UINT32(1, stats.authFailures);
+    // Connection lifecycle counters move only in loop(), on the target.
+    TEST_ASSERT_EQUAL_UINT32(0, stats.accepted);
+    TEST_ASSERT_EQUAL_UINT32(0, stats.rejected);
+    TEST_ASSERT_EQUAL_UINT32(0, stats.idleTimeouts);
+    TEST_ASSERT_EQUAL_UINT32(0, stats.shortWrites);
+    TEST_ASSERT_EQUAL(0, server.connectedClients());
+    TEST_ASSERT_EQUAL(3493, server.port());
+}
+
 void test_replies_written_once_outside_usb_lock(void) {
     // Every write can block the loop for 10 s on a peer that stops reading, and
     // one made under the USB data lock stalls the USB task along with it.
@@ -458,6 +501,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_list_var_full_output);
     RUN_TEST(test_quoted_values_are_escaped);
+    RUN_TEST(test_log_callback_receives_server_messages);
+    RUN_TEST(test_stats_count_commands_and_auth_failures);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     return UNITY_END();
 }
@@ -477,6 +522,8 @@ void setup() {
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_list_var_full_output);
     RUN_TEST(test_quoted_values_are_escaped);
+    RUN_TEST(test_log_callback_receives_server_messages);
+    RUN_TEST(test_stats_count_commands_and_auth_failures);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     UNITY_END();
 }

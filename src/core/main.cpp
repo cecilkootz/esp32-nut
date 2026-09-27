@@ -103,10 +103,14 @@ void setup() {
     if (config_ok) {
         NutConfig nut_config = config_mgr.getNutConfig();
         NUTServerConfig nut_server_config = {nut_config.username, nut_config.password, nut_config.ups_name};
+        nut_server.setLogCallback([](const char* level, const char* msg) {
+            AppLogger::log(level, "%s", msg);
+        });
         if (!nut_server.begin(nut_server_config, &usb_ups)) {
             AppLogger::log("ERROR", "[MAIN] ERROR: NUTServer initialization failed!");
         } else {
             AppLogger::log("INFO", "[MAIN] NUTServer started correctly on port 3493.");
+            web_server.setNUT(&nut_server);
         }
     }
 
