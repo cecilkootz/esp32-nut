@@ -108,11 +108,7 @@ NUTServer::NUTServer() :
 #endif
 {
     for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
-        _clientActive[i] = false;
-        _clientAuthenticated[i] = false;
-        _clientLastActivity[i] = 0;
-        _clientBuffer[i] = "";
-        _clientUsername[i] = "";
+        resetSlot(i);
     }
 }
 
@@ -168,6 +164,25 @@ bool NUTServer::upsAvailable(Print& client) const {
     return true;
 }
 
+String NUTServer::statusString() const {
+    String status = _usb_ups->getUPSStatusString();
+    if (_forcedShutdown) {
+        String padded = " ";
+        padded += status;
+        padded += " ";
+        if (padded.indexOf(" FSD ") < 0) status += " FSD";
+    }
+    return status;
+}
+
+int NUTServer::loggedInClients() const {
+    int count = 0;
+    for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
+        if (_clientLoggedIn[i]) count++;
+    }
+    return count;
+}
+
 int NUTServer::connectedClients() const {
     int count = 0;
     for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
@@ -183,13 +198,19 @@ void NUTServer::closeSession(int slot) {
             _clients[slot].stop();
         }
 #endif
-        _clientActive[slot] = false;
-        _clientAuthenticated[slot] = false;
-        _clientLastActivity[slot] = 0;
-        _clientBuffer[slot] = "";
-        _clientUsername[slot] = "";
+        resetSlot(slot);
         logMessage("INFO", "[NUTServer] Session for slot %d closed.", slot);
     }
+}
+
+void NUTServer::resetSlot(int slot) {
+    _clientActive[slot] = false;
+    _clientAuthenticated[slot] = false;
+    _clientLoggedIn[slot] = false;
+    _clientPrimary[slot] = false;
+    _clientLastActivity[slot] = 0;
+    _clientBuffer[slot] = "";
+    _clientUsername[slot] = "";
 }
 
 std::vector<String> NUTServer::splitTokens(const String& input) {
@@ -242,12 +263,12 @@ void NUTServer::loop() {
                     logMessage("WARN", "[NUTServer] Keepalive setup failed for slot %d (errno %d).", slot, errno);
                 }
 
+                // A slot taken over from a peer that vanished still holds
+                // that session's login.
+                resetSlot(slot);
                 _clientActive[slot] = true;
-                _clientAuthenticated[slot] = false;
                 _clientLastActivity[slot] = millis();
-                _clientBuffer[slot] = "";
                 _clientBuffer[slot].reserve(256);
-                _clientUsername[slot] = "";
                 _stats.accepted++;
                 logMessage("INFO", "[NUTServer] Client connected to slot %d from %s:%d",
                            slot, newClient.remoteIP().toString().c_str(), newClient.remotePort());
@@ -328,8 +349,15 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
         return;
     }
 
-    if (cmd == "NETVER") {
+    // PROTVER is the current name; NETVER is kept for older clients.
+    if (cmd == "NETVER" || cmd == "PROTVER") {
         client.printf("%s\n", NUT_PROTOCOL_VERSION);
+        return;
+    }
+
+    // No TLS here; upsd built without SSL gives the same answer.
+    if (cmd == "STARTTLS") {
+        client.print("ERR FEATURE-NOT-SUPPORTED\n");
         return;
     }
 
@@ -380,6 +408,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         }
 
+        _clientLoggedIn[slot] = true;
         client.print("OK\n");
         return;
     }
@@ -387,6 +416,48 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
     if (cmd == "LOGOUT") {
         client.print("OK Goodbye\n");
         closeSession(slot);
+        return;
+    }
+
+    // upsmon asks for PRIMARY (MASTER before NUT 2.8) on connecting, and only
+    // a primary may later raise FSD.
+    if (cmd == "PRIMARY" || cmd == "MASTER") {
+        if (authRequired && !_clientAuthenticated[slot]) {
+            client.print("ERR ACCESS-DENIED\n");
+            return;
+        }
+        if (tokens.size() < 2) {
+            client.print("ERR INVALID-ARGUMENT\n");
+            return;
+        }
+        if (!isOurUps(tokens[1])) {
+            client.print("ERR UNKNOWN-UPS\n");
+            return;
+        }
+        _clientPrimary[slot] = true;
+        client.printf("OK %s-GRANTED\n", cmd.c_str());
+        return;
+    }
+
+    // A primary's upsmon raises FSD before shutting down; secondaries shut
+    // down when they see it in ups.status.
+    if (cmd == "FSD") {
+        if (!_clientPrimary[slot]) {
+            client.print("ERR ACCESS-DENIED\n");
+            return;
+        }
+        if (tokens.size() < 2) {
+            client.print("ERR INVALID-ARGUMENT\n");
+            return;
+        }
+        if (!isOurUps(tokens[1])) {
+            client.print("ERR UNKNOWN-UPS\n");
+            return;
+        }
+        _forcedShutdown = true;
+        logMessage("WARN", "[NUTServer] FSD set on %s by slot %d; ups.status reports FSD until reboot.",
+                   _config.ups_name.c_str(), slot);
+        client.print("OK FSD-SET\n");
         return;
     }
 
@@ -431,7 +502,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 auto data = _usb_ups->getUPSData();
                 // String grows only to fit each append, so size it for every line up front.
                 reply.text.reserve((data->getAll().size() + 3) * (upsName.length() + 48));
-                printVar(reply, upsName, "ups.status", _usb_ups->getUPSStatusString());
+                printVar(reply, upsName, "ups.status", statusString());
                 for (const auto& param : data->getAll()) {
                     if (param.key.startsWith("ups.status.") && param.key != "ups.status") continue;
                     printVar(reply, upsName, param.key.c_str(), param.value);
@@ -536,6 +607,31 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
         return;
     }
 
+    // Every variable is read-only (LIST RW is empty), so SET VAR can only
+    // explain why it failed.
+    if (cmd == "SET") {
+        if (authRequired && !_clientAuthenticated[slot]) {
+            client.print("ERR ACCESS-DENIED\n");
+            return;
+        }
+        if (tokens.size() < 5 || !tokens[1].equalsIgnoreCase("VAR")) {
+            client.print("ERR INVALID-ARGUMENT\n");
+            return;
+        }
+        if (!isOurUps(tokens[2])) {
+            client.print("ERR UNKNOWN-UPS\n");
+            return;
+        }
+        String varName = tokens[3];
+        varName.toLowerCase();
+        bool known = varName == "ups.status";
+        if (!known && _usb_ups) {
+            known = _usb_ups->getUPSData()->hasKey(varName);
+        }
+        client.print(known ? "ERR READONLY\n" : "ERR VAR-NOT-SUPPORTED\n");
+        return;
+    }
+
     if (cmd == "GET") {
         if (tokens.size() < 2) {
             client.print("ERR INVALID-ARGUMENT\n");
@@ -577,7 +673,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             {
                 auto data = _usb_ups->getUPSData();
                 if (varNameLower == "ups.status") {
-                    printVar(reply, upsName, "ups.status", _usb_ups->getUPSStatusString());
+                    printVar(reply, upsName, "ups.status", statusString());
                 } else if (data->hasKey(varNameLower)) {
                     printVar(reply, upsName, varNameLower.c_str(), data->get(varNameLower));
                 } else {
@@ -644,9 +740,9 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             if (subcmd == "UPSDESC") {
                 client.printf("UPSDESC %s \"%s\"\n", upsName.c_str(), NUT_UPS_DESCRIPTION);
             } else {
-                // This bridge exposes telemetry only; it tracks no upsmon LOGIN
-                // sessions, so the count of logged-in clients is always zero.
-                client.printf("NUMLOGINS %s 0\n", upsName.c_str());
+                // A primary's upsmon waits for this to fall to 1, itself,
+                // before shutting its own host down.
+                client.printf("NUMLOGINS %s %d\n", upsName.c_str(), loggedInClients());
             }
             return;
         }

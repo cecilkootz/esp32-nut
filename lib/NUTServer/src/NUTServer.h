@@ -61,7 +61,11 @@ public:
 private:
     void handleCommand(int slot, const String& cmdLine);
     void closeSession(int slot);
+    void resetSlot(int slot);
+    bool isOurUps(const String& name) const { return name.equalsIgnoreCase(_config.ups_name); }
     bool upsAvailable(Print& client) const;
+    String statusString() const;
+    int loggedInClients() const;
     void logMessage(const char* level, const char* format, ...) const __attribute__((format(printf, 3, 4)));
 
     NUTServerConfig _config;
@@ -77,9 +81,13 @@ private:
 #endif
     bool _clientActive[NUT_MAX_CLIENTS];
     bool _clientAuthenticated[NUT_MAX_CLIENTS];
+    bool _clientLoggedIn[NUT_MAX_CLIENTS];
+    bool _clientPrimary[NUT_MAX_CLIENTS];
     uint32_t _clientLastActivity[NUT_MAX_CLIENTS];
     String _clientBuffer[NUT_MAX_CLIENTS];
     String _clientUsername[NUT_MAX_CLIENTS];
+    // Set by a primary's FSD and, as in upsd, never cleared.
+    bool _forcedShutdown = false;
 };
 
 #endif // NUT_SERVER_H
