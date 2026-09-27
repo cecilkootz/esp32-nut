@@ -101,6 +101,7 @@ private:
     void post_event(HidEvent::Kind kind, hid_host_device_handle_t handle);
     void drain_reports();
     void process_input_report(const InputReport& report);
+    void cache_report(uint8_t report_id, uint8_t report_type, const uint8_t* data, size_t length);
     void drain_events();
     void claim_interface(hid_host_device_handle_t handle);
     void reset_device_state();
@@ -114,7 +115,6 @@ private:
     bool _initialized;
     // Also cleared by the HID task when the active interface departs.
     std::atomic<bool> _is_ready_to_poll;
-    volatile bool _is_fetching;
     volatile bool _control_pending;
 
     UPSData _ups_data;
