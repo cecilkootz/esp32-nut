@@ -3,6 +3,8 @@
 #include "HIDParser.h"
 #include "HIDUsages.h"
 #include "Quirks.h"
+#include <algorithm>
+#include <bitset>
 
 /**
  * @brief Generic HID UPS Driver Implementation
@@ -28,6 +30,30 @@ void GenericDriver::setup() {
     _last_step_time = 0;
     _slow_poll_counter = 14;
     _active_beeper = "";
+    _poll_list.clear();
+    _poll_list_ready = false;
+}
+
+bool GenericDriver::shouldPoll(uint8_t report_id, uint8_t) const {
+    return report_id != 0;
+}
+
+const std::vector<uint16_t>& GenericDriver::pollList(IUSBHostUPS* host) {
+    if (_poll_list_ready) return _poll_list;
+
+    std::bitset<256> feature_ids;
+    for (const auto& u : host->getUsages()) {
+        if (u.report_type == 2 || !shouldPoll(u.report_id, u.report_type)) continue;
+        uint16_t pair = (u.report_type << 8) | u.report_id;
+        if (std::find(_poll_list.begin(), _poll_list.end(), pair) != _poll_list.end()) continue;
+        _poll_list.push_back(pair);
+        if (u.report_type == 3) feature_ids.set(u.report_id);
+    }
+    _poll_list.erase(std::remove_if(_poll_list.begin(), _poll_list.end(), [&](uint16_t pair) {
+        return (pair >> 8) == 1 && feature_ids[pair & 0xFF];
+    }), _poll_list.end());
+    _poll_list_ready = true;
+    return _poll_list;
 }
 
 void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
@@ -65,40 +91,19 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
             } else if (_poll_step == 4) {
                 if (_slow_poll_counter == 0 && !data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) host->requestStringDescriptor(_batteryDateStringIndex);
             } else {
-                const auto& usages = host->getUsages();
-                std::vector<uint16_t> rids;
-                for (const auto& u : usages) {
-                    if (u.report_type == 2) continue; // Skip OUTPUT reports
-                    uint16_t pair = (u.report_type << 8) | u.report_id;
-                    bool found = false;
-                    for (uint16_t id : rids) {
-                        if (id == pair) { found = true; break; }
-                    }
-                    if (!found && u.report_id != 0) rids.push_back(pair);
-                }
-                
-                for (auto it = rids.begin(); it != rids.end(); ) {
-                    if ((*it >> 8) == 1) { // If Input report
-                        uint8_t id = *it & 0xFF;
-                        bool has_feature = false;
-                        for (uint16_t pair : rids) {
-                            if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
-                        }
-                        // Polling a report the interrupt endpoint is already
-                        // pushing only adds a chance to decode a bad response.
-                        if (has_feature || host->isInterruptReport(id)) {
-                            it = rids.erase(it);
-                            continue;
-                        }
-                    }
-                    ++it;
-                }
-                
+                // Polling a report the interrupt endpoint is already pushing only
+                // adds a chance to decode a bad response. That set changes over
+                // time, so this filter runs per step rather than in pollList().
                 int index = _poll_step - 5;
-                if (index >= 0 && index < rids.size()) {
-                    uint8_t r_type = rids[index] >> 8;
-                    uint8_t r_id = rids[index] & 0xFF;
-                    
+                const uint16_t* next = nullptr;
+                for (const uint16_t& pair : pollList(host)) {
+                    if ((pair >> 8) == 1 && host->isInterruptReport(pair & 0xFF)) continue;
+                    if (index-- == 0) { next = &pair; break; }
+                }
+                if (next) {
+                    uint8_t r_type = *next >> 8;
+                    uint8_t r_id = *next & 0xFF;
+
                     if (host->getQuirks() & QUIRK_NO_GET_REPORT) {
                         _poll_step = 0; // Skip polling entirely for devices without GET_REPORT support
                         return;

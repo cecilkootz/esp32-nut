@@ -22,6 +22,13 @@ void CyberPowerDriver::setup() {
     // Actually, let's just use GenericDriver::setup() exactly.
 }
 
+// IDs 4 and 6 and the vendor-defined range from 130 are useless or harmful to
+// poll, and Input reports are left to the interrupt endpoint.
+bool CyberPowerDriver::shouldPoll(uint8_t report_id, uint8_t report_type) const {
+    return GenericDriver::shouldPoll(report_id, report_type) &&
+           report_id < 130 && report_id != 4 && report_id != 6 && report_type != 1;
+}
+
 void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
@@ -55,43 +62,7 @@ void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
             } else if (_poll_step == 3) {
                 if (_slow_poll_counter == 0 && !data.hasKey("ups.serial")) if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
             } else {
-                const auto& usages = host->getUsages();
-                std::vector<uint16_t> rids;
-                for (const auto& u : usages) {
-                    if (u.report_type == 2) continue; // Skip OUTPUT reports
-                    uint16_t pair = (u.report_type << 8) | u.report_id;
-                    bool found = false;
-                    for (uint16_t id : rids) {
-                        if (id == pair) { found = true; break; }
-                    }
-                    if (!found && u.report_id != 0) rids.push_back(pair);
-                }
-                std::vector<uint8_t> input_ids;
-                for (uint16_t pair : rids) {
-                    if ((pair >> 8) == 1) input_ids.push_back(pair & 0xFF);
-                }
-
-                for (auto it = rids.begin(); it != rids.end(); ) {
-                    uint8_t r_type = (*it >> 8);
-                    uint8_t r_id = (*it & 0xFF);
-                    
-                    // 1. Escludere ID inutili o pericolosi (Killer IDs e Vendor Defined >= 130)
-                    if (r_id >= 130 || r_id == 4 || r_id == 6) {
-                        it = rids.erase(it);
-                        continue;
-                    }
-                    
-                    
-                    // 3. Non interrogare mai gli Input Report sul Control Endpoint
-                    // (Ci affidiamo esclusivamente all'Interrupt Endpoint per riceverli)
-                    if (r_type == 1) {
-                        it = rids.erase(it);
-                        continue;
-                    }
-                    
-                    ++it;
-                }
-                
+                const auto& rids = pollList(host);
                 int index = _poll_step - 4;
                 if (index >= 0 && index < rids.size()) {
                     uint8_t r_type = rids[index] >> 8;
