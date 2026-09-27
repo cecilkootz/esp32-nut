@@ -17,6 +17,11 @@ public:
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
+    // driver.name and driver.version identify this firmware, as a NUT driver
+    // identifies itself; driver.version.data names the sub-driver. Every
+    // loop() override calls this.
+    void publishDriverInfo(UPSData& data) const;
+
 protected:
     // Reports worth polling, as (type << 8) | id in descriptor order: those
     // shouldPoll() accepts, less Output reports and Input reports that share

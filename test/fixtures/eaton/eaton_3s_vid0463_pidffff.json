@@ -230,7 +230,9 @@
       "expected_ups_data": {
         "ups.mfr": "EATON",
         "ups.model": "Eaton 3S",
-        "ups.type": "EatonDriver",
+        "driver.name": "esp32-nut",
+        "driver.version": "dev",
+        "driver.version.data": "EatonDriver",
         "ups.beeper.status": "disabled",
         "ups.load": "5",
         "ups.power.nominal": "700",

@@ -323,7 +323,9 @@
       "expected_ups_data": {
         "ups.status": "OL",
         "battery.charge": "100",
-        "ups.type": "GoldenMateDriver"
+        "driver.name": "esp32-nut",
+        "driver.version": "dev",
+        "driver.version.data": "GoldenMateDriver"
       }
     },
     {
@@ -459,7 +461,7 @@
         }
       ],
       "expected_ups_data": {
-        "ups.status": "OB"
+        "ups.status": "OB DISCHRG"
       }
     },
     {

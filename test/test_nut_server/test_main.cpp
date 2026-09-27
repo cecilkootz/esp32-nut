@@ -1,6 +1,7 @@
 #include <unity.h>
 #include "NUTServer.h"
 #include "IUSBHostUPS.h"
+#include "CyberPowerDriver.h"
 #include <sstream>
 #include <algorithm>
 
@@ -652,6 +653,21 @@ void test_set_var_is_refused(void) {
     TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", reply(0, "SET TRACKING ON").c_str());
 }
 
+void test_driver_info_listed_like_other_variables(void) {
+    CyberPowerDriver driver;
+    driver.publishDriverInfo(mockHost.data);
+
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST VAR testups\n"
+                             "VAR testups ups.status \"OL\"\n"
+                             "VAR testups driver.name \"esp32-nut\"\n"
+                             "VAR testups driver.version \"dev\"\n"
+                             "VAR testups driver.version.data \"CyberPowerDriver\"\n"
+                             "END LIST VAR testups\n",
+                             reply(0, "LIST VAR testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("VAR testups driver.version.data \"CyberPowerDriver\"\n",
+                             reply(0, "GET VAR testups driver.version.data").c_str());
+}
+
 void test_replies_written_once_outside_usb_lock(void) {
     // Every write can block the loop for 10 s on a peer that stops reading, and
     // one made under the USB data lock stalls the USB task along with it.
@@ -707,6 +723,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_fsd_needs_primary);
     RUN_TEST(test_fsd_stays_in_ups_status);
     RUN_TEST(test_set_var_is_refused);
+    RUN_TEST(test_driver_info_listed_like_other_variables);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     return UNITY_END();
 }
@@ -739,6 +756,7 @@ void setup() {
     RUN_TEST(test_fsd_needs_primary);
     RUN_TEST(test_fsd_stays_in_ups_status);
     RUN_TEST(test_set_var_is_refused);
+    RUN_TEST(test_driver_info_listed_like_other_variables);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     UNITY_END();
 }

@@ -4,6 +4,7 @@
 #include "CyberPowerDriver.h"
 #include "EatonDriver.h"
 #include "GenericDriver.h"
+#include "PowercomDriver.h"
 #include "HIDParser.h"
 #include "IUSBHostUPS.h"
 
@@ -229,6 +230,31 @@ void test_setup_replans_for_a_new_descriptor(void) {
     TEST_ASSERT_EQUAL_STRING("3200 F1/2, 3250 I2/2", host._log.c_str());
 }
 
+static void assertLoopPublishesDriverInfo(GenericDriver& drv, const char* name) {
+    PollMockHost host;
+    host.load(DESC, sizeof(DESC));
+    drv.setup();
+    drv.loop(&host, host._data, 1000);
+
+    TEST_ASSERT_FALSE_MESSAGE(host._data.hasKey("ups.type"), name);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("esp32-nut", host._data.get("driver.name").c_str(), name);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("dev", host._data.get("driver.version").c_str(), name);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(name, host._data.get("driver.version.data").c_str(), name);
+}
+
+// Every loop() override names the firmware and sub-driver the way NUT drivers
+// do, rather than putting the class name in ups.type.
+void test_loops_publish_driver_info(void) {
+    GenericDriver generic;
+    EatonDriver eaton;
+    CyberPowerDriver cyberpower;
+    PowercomDriver powercom;
+    assertLoopPublishesDriverInfo(generic, "GenericDriver");
+    assertLoopPublishesDriverInfo(eaton, "EatonDriver");
+    assertLoopPublishesDriverInfo(cyberpower, "CyberPowerDriver");
+    assertLoopPublishesDriverInfo(powercom, "PowercomDriver");
+}
+
 void test_resolve_report_type_and_max_length(void) {
     HIDParser parser;
     parser.parseReportDescriptor(DESC, sizeof(DESC));
@@ -256,6 +282,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eaton_poll_sequence);
     RUN_TEST(test_cyberpower_poll_sequence);
     RUN_TEST(test_setup_replans_for_a_new_descriptor);
+    RUN_TEST(test_loops_publish_driver_info);
     RUN_TEST(test_resolve_report_type_and_max_length);
     return UNITY_END();
 }
@@ -269,6 +296,7 @@ void setup() {
     RUN_TEST(test_eaton_poll_sequence);
     RUN_TEST(test_cyberpower_poll_sequence);
     RUN_TEST(test_setup_replans_for_a_new_descriptor);
+    RUN_TEST(test_loops_publish_driver_info);
     RUN_TEST(test_resolve_report_type_and_max_length);
     UNITY_END();
 }

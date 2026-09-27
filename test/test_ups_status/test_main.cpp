@@ -17,7 +17,7 @@ void test_status_on_battery_discharging(void) {
     data.set("ups.status.ac_present", "0");
     data.set("ups.status.discharging", "1");
 
-    TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", UPSData::computeUPSStatusString(data).c_str());
 }
 
 void test_status_on_battery_without_discharging_flag(void) {
@@ -34,7 +34,8 @@ void test_status_on_battery_low_battery(void) {
     data.set("ups.status.discharging", "1");
     data.set("ups.status.battery_low", "1");
 
-    TEST_ASSERT_EQUAL_STRING("OB LB", UPSData::computeUPSStatusString(data).c_str());
+    // usbhid-ups order: DISCHRG before LB.
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG LB", UPSData::computeUPSStatusString(data).c_str());
 }
 
 void test_status_online_charging(void) {
