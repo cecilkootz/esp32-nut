@@ -3,7 +3,9 @@
 #include "network/web_config_server.h"
 #include "core/app_logger.h"
 #include "core/crash_diag.h"
+#include "core/device_id.h"
 #include "core/memory_stats.h"
+#include "network/hostname.h"
 #include <Preferences.h>
 #include "esp_task_wdt.h"
 #include "RestartPolicy.h"
@@ -110,8 +112,13 @@ void setup() {
         AppLogger::log("INFO", "[MAIN] Wi-Fi SSID: %s\n", wifi.ssid.c_str());
         AppLogger::log("INFO", "[MAIN] NUT UPS Name: %s\n", nut.ups_name.c_str());
         
-        // Inizializzazione di AppNetworkManager
-        network_mgr.begin(wifi.ssid, wifi.password);
+        // Named after the UPS so the board is recognisable in DHCP leases and DNS
+        String hostname = hostnameFromUpsName(nut.ups_name, getDeviceId());
+        if (hostname != nut.ups_name) {
+            AppLogger::log("INFO", "[MAIN] UPS name '%s' is not a valid hostname, using '%s'",
+                           nut.ups_name.c_str(), hostname.c_str());
+        }
+        network_mgr.begin(wifi.ssid, wifi.password, hostname);
         web_server.setUPS(&usb_ups);
         web_server.setNetwork(&network_mgr);
         web_server.begin(false);

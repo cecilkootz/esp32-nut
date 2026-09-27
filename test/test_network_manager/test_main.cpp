@@ -19,7 +19,7 @@ void test_initial_state(void) {
 
 void test_initialization_and_states(void) {
     // Avvia la connessione con credenziali fittizie
-    net_manager.begin("TEST_SSID", "TEST_PASS");
+    net_manager.begin("TEST_SSID", "TEST_PASS", "test-ups");
     // All'avvio immediato (essendo asincrono e non bloccante) isConnected() deve essere ancora false
     TEST_ASSERT_FALSE(net_manager.isConnected());
 }
