@@ -1,5 +1,28 @@
 #include "WebApiJson.h"
 
+namespace {
+
+// ArduinoJson's String writer frees the target's buffer first, discarding any reserve().
+class StringAppender {
+public:
+    explicit StringAppender(String& out) : out_(out) {}
+    size_t write(uint8_t c) { return write(&c, 1); }
+    size_t write(const uint8_t* s, size_t n) { return out_.concat(s, n) ? n : 0; }
+
+private:
+    String& out_;
+};
+
+String toJsonString(const JsonDocument& doc) {
+    String out;
+    out.reserve(measureJson(doc));
+    StringAppender appender(out);
+    serializeJson(doc, appender);
+    return out;
+}
+
+}  // namespace
+
 String WebApiJson::generateUpsVars(IUSBHostUPS* usb_ups) {
     if (!usb_ups) {
         return "{\"error\": \"UPS non inizializzato\"}";
@@ -10,9 +33,7 @@ String WebApiJson::generateUpsVars(IUSBHostUPS* usb_ups) {
     if (!usb_ups->isConnected()) {
         doc["_disconnected"] = true;
         doc["ups.status"] = "Disconnected";
-        std::string out_std;
-        serializeJson(doc, out_std);
-        return String(out_std.c_str());
+        return toJsonString(doc);
     }
     
     auto data = usb_ups->getUPSData();
@@ -50,7 +71,5 @@ String WebApiJson::generateUpsVars(IUSBHostUPS* usb_ups) {
     
     doc["ups.beeper.switchable"] = usb_ups->supportsBeeperToggle();
 
-    std::string out_std;
-    serializeJson(doc, out_std);
-    return String(out_std.c_str());
+    return toJsonString(doc);
 }
