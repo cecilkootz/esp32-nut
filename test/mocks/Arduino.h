@@ -33,6 +33,16 @@ public:
         *this = ss.str();
     }
 
+    bool concat(char c) {
+        push_back(c);
+        return true;
+    }
+
+    bool concat(const char* s, size_t n) {
+        append(s, n);
+        return true;
+    }
+
     int indexOf(char c) const {
         size_t pos = find(c);
         return pos == std::string::npos ? -1 : (int)pos;
@@ -108,16 +118,6 @@ public:
     char charAt(unsigned int index) const {
         if (index >= length()) return 0;
         return (*this)[index];
-    }
-
-    bool concat(char c) {
-        push_back(c);
-        return true;
-    }
-
-    bool concat(const char* s, size_t n) {
-        append(s, n);
-        return true;
     }
 };
 
