@@ -5,6 +5,7 @@
 .vscode/ipch
 .agents/mcp_config.json
 data/config.json.pwd
+/config.json
 docs/no-commit/
 docs/issues/
 firmware-to-test/
