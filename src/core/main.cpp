@@ -3,6 +3,7 @@
 #include "network/web_config_server.h"
 #include "core/app_logger.h"
 #include <Preferences.h>
+#include <esp_task_wdt.h>
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
@@ -103,6 +104,27 @@ void setup() {
             AppLogger::log("ERROR", "[MAIN] ERROR: NUTServer initialization failed!");
         } else {
             AppLogger::log("INFO", "[MAIN] NUTServer started correctly on port 3493.");
+        }
+    }
+
+    // Everything runs in loop(), so a stalled iteration leaves the device
+    // unreachable until it is power-cycled. 30 s clears the longest legitimate
+    // single iteration; the core feeds the watchdog before each one.
+    const esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = 30000,
+        .idle_core_mask = 1 << 0, // as in sdkconfig: only CPU0's idle task
+        .trigger_panic = true,
+    };
+    esp_err_t wdt_err = esp_task_wdt_reconfigure(&wdt_config);
+    if (wdt_err != ESP_OK) {
+        // The 5 s boot default would trip on legitimate waits, so stay unwatched.
+        AppLogger::log("ERROR", "[MAIN] Task watchdog reconfigure failed (%s), loop not watched", esp_err_to_name(wdt_err));
+    } else {
+        enableLoopWDT();
+        if (esp_task_wdt_status(NULL) == ESP_OK) {
+            AppLogger::log("INFO", "[MAIN] Loop watchdog enabled (30 s).");
+        } else {
+            AppLogger::log("ERROR", "[MAIN] Failed to subscribe the loop task to the task watchdog");
         }
     }
 }
