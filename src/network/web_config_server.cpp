@@ -296,6 +296,8 @@ void WebConfigServer::handleOTAUpload() {
             Update.printError(Serial);
         }
     } else if (upload.status == UPLOAD_FILE_WRITE) {
+        // The whole upload is parsed within a single loop() iteration.
+        feedLoopWDT();
         // Validazione magic byte E9 sul primo chunk
         if (upload.totalSize == 0 && upload.currentSize > 0) {
             if (upload.buf[0] != 0xE9) {
