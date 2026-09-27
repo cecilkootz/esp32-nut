@@ -12,6 +12,9 @@ void AppNetworkManager::beginAP(const String& ap_ssid, const String& ap_password
     m_isStarted = true;
     m_isApMode = true;
     AppLogger::log("INFO", "[NETWORK] Starting Access Point mode...");
+    // Only takes effect before the first WiFi.mode(). The AP settings are fixed
+    // in firmware, so there is nothing for the driver to keep in flash.
+    WiFi.persistent(false);
     WiFi.mode(WIFI_AP);
     WiFi.softAP(ap_ssid.c_str(), ap_password.c_str());
     AppLogger::log("INFO", "[NETWORK] AP Started. IP: %s\n", WiFi.softAPIP().toString().c_str());
@@ -25,6 +28,10 @@ void AppNetworkManager::begin(const String& ssid, const String& password) {
     m_lastStatus = WL_IDLE_STATUS;
     
     AppLogger::log("INFO", "[NETWORK] Initializing Wi-Fi...");
+    // Only takes effect before the first WiFi.mode(). The credentials already
+    // live in our own NVS namespace; left persistent, the driver would save its
+    // config to NVS again on every WiFi.begin() and reconnect.
+    WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
     // Modem sleep can leave the node unreachable on some access points; on
     // mains/UPS power the saving isn't worth that.
