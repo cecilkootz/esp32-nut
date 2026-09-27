@@ -11,7 +11,8 @@
 
 #define NUT_DEFAULT_PORT 3493
 #define NUT_MAX_CLIENTS 4
-#define NUT_TIMEOUT_MS 300000
+// upsd drops clients idle for 60 s; this leaves room for once-a-minute pollers.
+#define NUT_TIMEOUT_MS 120000
 
 struct NUTServerConfig {
     String username;
