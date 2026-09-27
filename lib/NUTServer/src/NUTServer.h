@@ -22,6 +22,18 @@ struct NUTServerConfig {
 
 class NUTServer {
 public:
+    typedef void (*LogCallback)(const char* level, const char* msg);
+
+    // Since boot, updated and read on the loop task only.
+    struct Stats {
+        uint32_t accepted = 0;
+        uint32_t rejected = 0;      // every slot taken
+        uint32_t commands = 0;
+        uint32_t authFailures = 0;  // PASSWORD refused
+        uint32_t idleTimeouts = 0;
+        uint32_t shortWrites = 0;   // sessions dropped after a reply fell short
+    };
+
     NUTServer();
     ~NUTServer();
 
@@ -30,6 +42,13 @@ public:
     
     // Esegue la gestione non bloccante delle connessioni e dei comandi
     void loop();
+
+    // Without one, messages go to Serial.
+    void setLogCallback(LogCallback cb) { _log_cb = cb; }
+
+    uint16_t port() const { return _port; }
+    int connectedClients() const;
+    const Stats& stats() const { return _stats; }
 
     // Metodi di utilità (esposti per facilitare il testing)
     static std::vector<String> splitTokens(const String& input);
@@ -42,11 +61,14 @@ public:
 private:
     void handleCommand(int slot, const String& cmdLine);
     void closeSession(int slot);
+    void logMessage(const char* level, const char* format, ...) const __attribute__((format(printf, 3, 4)));
 
     NUTServerConfig _config;
     IUSBHostUPS* _usb_ups;
     uint16_t _port;
     bool _initialized;
+    LogCallback _log_cb = nullptr;
+    Stats _stats;
 
 #ifndef PIO_UNIT_TESTING
     WiFiServer _server;

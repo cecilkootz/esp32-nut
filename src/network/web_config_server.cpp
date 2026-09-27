@@ -1,4 +1,5 @@
 #include "WebApiJson.h"
+#include "NUTServer.h"
 #include "network/web_config_server.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -110,6 +111,10 @@ void WebConfigServer::setUPS(USBHostUPS* ups) {
 
 void WebConfigServer::setNetwork(AppNetworkManager* network) {
     network_mgr = network;
+}
+
+void WebConfigServer::setNUT(NUTServer* nut) {
+    nut_server = nut;
 }
 
 void WebConfigServer::handleConnect() {
@@ -253,6 +258,19 @@ void WebConfigServer::handleSystemStatus() {
         ups_status_str = "Disconnected";
     }
     doc["ups"]["status"] = ups_status_str;
+
+    if (nut_server) {
+        const NUTServer::Stats& stats = nut_server->stats();
+        JsonObject nut = doc["nut"].to<JsonObject>();
+        nut["port"] = nut_server->port();
+        nut["clients"] = nut_server->connectedClients();
+        nut["accepted"] = stats.accepted;
+        nut["rejected"] = stats.rejected;
+        nut["commands"] = stats.commands;
+        nut["auth_failures"] = stats.authFailures;
+        nut["idle_timeouts"] = stats.idleTimeouts;
+        nut["short_writes"] = stats.shortWrites;
+    }
 
     MemoryStats mem = readMemoryStats();
     JsonObject memory = doc["memory"].to<JsonObject>();

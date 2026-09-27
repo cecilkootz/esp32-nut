@@ -1,4 +1,6 @@
 #include "NUTServer.h"
+#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #ifndef PIO_UNIT_TESTING
@@ -131,8 +133,29 @@ bool NUTServer::begin(const NUTServerConfig& config, IUSBHostUPS* usb_ups, uint1
 #endif
     
     _initialized = true;
-    Serial.printf("[NUTServer] Server listening on port %d\n", _port);
+    logMessage("INFO", "[NUTServer] Server listening on port %d", _port);
     return true;
+}
+
+void NUTServer::logMessage(const char* level, const char* format, ...) const {
+    char msg[160];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(msg, sizeof(msg), format, args);
+    va_end(args);
+    if (_log_cb) {
+        _log_cb(level, msg);
+    } else {
+        Serial.printf("%s\n", msg);
+    }
+}
+
+int NUTServer::connectedClients() const {
+    int count = 0;
+    for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
+        if (_clientActive[i]) count++;
+    }
+    return count;
 }
 
 void NUTServer::closeSession(int slot) {
@@ -147,7 +170,7 @@ void NUTServer::closeSession(int slot) {
         _clientLastActivity[slot] = 0;
         _clientBuffer[slot] = "";
         _clientUsername[slot] = "";
-        Serial.printf("[NUTServer] Session for slot %d closed.\n", slot);
+        logMessage("INFO", "[NUTServer] Session for slot %d closed.", slot);
     }
 }
 
@@ -198,7 +221,7 @@ void NUTServer::loop() {
                 }
                 _clients[slot] = newClient;
                 if (!enableKeepalive(_clients[slot])) {
-                    Serial.printf("[NUTServer] Keepalive setup failed for slot %d (errno %d).\n", slot, errno);
+                    logMessage("WARN", "[NUTServer] Keepalive setup failed for slot %d (errno %d).", slot, errno);
                 }
 
                 _clientActive[slot] = true;
@@ -207,10 +230,12 @@ void NUTServer::loop() {
                 _clientBuffer[slot] = "";
                 _clientBuffer[slot].reserve(256);
                 _clientUsername[slot] = "";
-                Serial.printf("[NUTServer] Client connected to slot %d from %s:%d\n", 
-                              slot, newClient.remoteIP().toString().c_str(), newClient.remotePort());
+                _stats.accepted++;
+                logMessage("INFO", "[NUTServer] Client connected to slot %d from %s:%d",
+                           slot, newClient.remoteIP().toString().c_str(), newClient.remotePort());
             } else {
-                Serial.println("[NUTServer] Connection rejected: max clients reached");
+                _stats.rejected++;
+                logMessage("WARN", "[NUTServer] Connection rejected: max clients reached");
                 newClient.print("ERR FAILED - Max clients reached\n");
                 newClient.stop();
             }
@@ -226,7 +251,8 @@ void NUTServer::loop() {
             }
 
             if (millis() - _clientLastActivity[i] > NUT_TIMEOUT_MS) {
-                Serial.printf("[NUTServer] Inactivity timeout for slot %d. Disconnecting.\n", i);
+                _stats.idleTimeouts++;
+                logMessage("INFO", "[NUTServer] Inactivity timeout for slot %d. Disconnecting.", i);
                 _clients[i].print("ERR ACCESS-DENIED\n");
                 closeSession(i);
                 continue;
@@ -260,7 +286,8 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
     // Close now: each command the peer queued before it stopped reading would
     // cost another 10 s. LOGOUT has already closed the session itself.
     if (client.shortWrite && _clientActive[slot]) {
-        Serial.printf("[NUTServer] Write to slot %d fell short. Disconnecting.\n", slot);
+        _stats.shortWrites++;
+        logMessage("WARN", "[NUTServer] Write to slot %d fell short. Disconnecting.", slot);
         closeSession(slot);
     }
 #endif
@@ -271,6 +298,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
     if (tokens.empty()) {
         return;
     }
+    _stats.commands++;
 
     String cmd = tokens[0];
     cmd.toUpperCase();
@@ -307,6 +335,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             _clientAuthenticated[slot] = true;
             client.print("OK\n");
         } else {
+            _stats.authFailures++;
             client.print("ERR ACCESS-DENIED\n");
         }
         return;
