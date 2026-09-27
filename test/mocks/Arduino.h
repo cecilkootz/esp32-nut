@@ -109,6 +109,16 @@ public:
         if (index >= length()) return 0;
         return (*this)[index];
     }
+
+    bool concat(char c) {
+        push_back(c);
+        return true;
+    }
+
+    bool concat(const char* s, size_t n) {
+        append(s, n);
+        return true;
+    }
 };
 
 class Print {

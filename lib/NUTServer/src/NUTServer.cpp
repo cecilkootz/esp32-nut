@@ -12,6 +12,26 @@ static const char* NUT_UPS_DESCRIPTION = "ESP32-S3 UPS Bridge";
 // Protocol level the implemented command subset targets, as upsd reports it.
 static const char* NUT_PROTOCOL_VERSION = "1.3";
 
+namespace {
+
+// Replies are assembled here and written once, after the USB data lock is
+// released: NetworkClient::write blocks for up to 10 s per call when the peer
+// stops reading, and the USB task waits on that same lock.
+class ReplyBuffer : public Print {
+public:
+    String text;
+
+    size_t write(uint8_t c) override {
+        return text.concat((char)c) ? 1 : 0;
+    }
+
+    size_t write(const uint8_t* buf, size_t size) override {
+        return text.concat((const char*)buf, size) ? size : 0;
+    }
+};
+
+}  // namespace
+
 NUTServer::NUTServer() : 
     _usb_ups(nullptr), 
     _port(NUT_DEFAULT_PORT), 
@@ -262,9 +282,11 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
         subcmd.toUpperCase();
 
         if (subcmd == "UPS") {
-            client.print("BEGIN LIST UPS\n");
-            client.printf("UPS %s \"%s\"\n", _config.ups_name.c_str(), NUT_UPS_DESCRIPTION);
-            client.print("END LIST UPS\n");
+            ReplyBuffer reply;
+            reply.print("BEGIN LIST UPS\n");
+            reply.printf("UPS %s \"%s\"\n", _config.ups_name.c_str(), NUT_UPS_DESCRIPTION);
+            reply.print("END LIST UPS\n");
+            client.print(reply.text);
             return;
         } 
         else if (subcmd == "VAR") {
@@ -283,16 +305,20 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 return;
             }
 
-            client.printf("BEGIN LIST VAR %s\n", upsName.c_str());
+            ReplyBuffer reply;
+            reply.printf("BEGIN LIST VAR %s\n", upsName.c_str());
             if (_usb_ups) {
                 auto data = _usb_ups->getUPSData();
-                client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
+                // String grows only to fit each append, so size it for every line up front.
+                reply.text.reserve((data->getAll().size() + 3) * (upsName.length() + 48));
+                reply.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
                 for (const auto& param : data->getAll()) {
                     if (param.key.startsWith("ups.status.") && param.key != "ups.status") continue;
-                    client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), param.key.c_str(), param.value.c_str());
+                    reply.printf("VAR %s %s \"%s\"\n", upsName.c_str(), param.key.c_str(), param.value.c_str());
                 }
             }
-            client.printf("END LIST VAR %s\n", upsName.c_str());
+            reply.printf("END LIST VAR %s\n", upsName.c_str());
+            client.print(reply.text);
             return;
         }
         else if (subcmd == "CMD" || subcmd == "RW" || subcmd == "CLIENT") {
@@ -302,15 +328,17 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             } else {
                 upsName = tokens[2];
             }
-            client.printf("BEGIN LIST %s %s\n", subcmd.c_str(), upsName.c_str());
+            ReplyBuffer reply;
+            reply.printf("BEGIN LIST %s %s\n", subcmd.c_str(), upsName.c_str());
             if (subcmd == "CMD" && _usb_ups) {
                 if (_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
-                    client.printf("CMD %s beeper.enable\n", upsName.c_str());
-                    client.printf("CMD %s beeper.disable\n", upsName.c_str());
-                    client.printf("CMD %s beeper.toggle\n", upsName.c_str());
+                    reply.printf("CMD %s beeper.enable\n", upsName.c_str());
+                    reply.printf("CMD %s beeper.disable\n", upsName.c_str());
+                    reply.printf("CMD %s beeper.toggle\n", upsName.c_str());
                 }
             }
-            client.printf("END LIST %s %s\n", subcmd.c_str(), upsName.c_str());
+            reply.printf("END LIST %s %s\n", subcmd.c_str(), upsName.c_str());
+            client.print(reply.text);
             return;
         }
         else if (subcmd == "ENUM" || subcmd == "RANGE") {
@@ -326,8 +354,10 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 upsName = tokens[2];
                 varName = tokens[3];
             }
-            client.printf("BEGIN LIST %s %s %s\n", subcmd.c_str(), upsName.c_str(), varName.c_str());
-            client.printf("END LIST %s %s %s\n", subcmd.c_str(), upsName.c_str(), varName.c_str());
+            ReplyBuffer reply;
+            reply.printf("BEGIN LIST %s %s %s\n", subcmd.c_str(), upsName.c_str(), varName.c_str());
+            reply.printf("END LIST %s %s %s\n", subcmd.c_str(), upsName.c_str(), varName.c_str());
+            client.print(reply.text);
             return;
         }
         else {
@@ -422,17 +452,21 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 return;
             }
 
-            auto data = _usb_ups->getUPSData();
             String varNameLower = varName;
             varNameLower.toLowerCase();
 
-            if (varNameLower == "ups.status") {
-                client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
-            } else if (data->hasKey(varNameLower)) {
-                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), data->get(varNameLower).c_str());
-            } else {
-                client.print("ERR VAR-NOT-SUPPORTED\n");
+            ReplyBuffer reply;
+            {
+                auto data = _usb_ups->getUPSData();
+                if (varNameLower == "ups.status") {
+                    reply.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
+                } else if (data->hasKey(varNameLower)) {
+                    reply.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), data->get(varNameLower).c_str());
+                } else {
+                    reply.print("ERR VAR-NOT-SUPPORTED\n");
+                }
             }
+            client.print(reply.text);
             return;
         }
         else if (subcmd == "DESC" || subcmd == "CMDDESC" || subcmd == "TYPE") {

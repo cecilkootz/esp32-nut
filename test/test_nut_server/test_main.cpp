@@ -40,8 +40,9 @@ public:
 
     void end() override {}
 
-    void lock() const override {}
-    void unlock() const override {}
+    mutable int lockDepth = 0;
+    void lock() const override { lockDepth++; }
+    void unlock() const override { lockDepth--; }
     UPSDataLock getUPSData() const override {
         return UPSDataLock(data, this);
     }
@@ -76,12 +77,37 @@ static NUTServer server;
 static MockUSBHost mockHost;
 static MemoryPrinter printer;
 
+// Each write() stands for one NetworkClient::write, which blocks for up to 10 s
+// once the peer stops reading.
+class SocketPrinter : public MemoryPrinter {
+public:
+    int writes = 0;
+    int writesUnderLock = 0;
+
+    size_t write(uint8_t c) override {
+        record();
+        return MemoryPrinter::write(c);
+    }
+
+    size_t write(const uint8_t *b, size_t size) override {
+        record();
+        return MemoryPrinter::write(b, size);
+    }
+
+private:
+    void record() {
+        writes++;
+        if (mockHost.lockDepth > 0) writesUnderLock++;
+    }
+};
+
 void setUp(void) {
     printer.clear();
     mockHost.data = UPSData();
     mockHost.statusString = "OL";
     mockHost.beeperState = true;
     mockHost.connected = true;
+    mockHost.lockDepth = 0;
 
     NUTServerConfig config;
     config.username = "admin";
@@ -352,6 +378,52 @@ void test_gonut_newups_sequence(void) {
     }
 }
 
+void test_list_var_full_output(void) {
+    // The computed status leads, the ups.status.* flags it is derived from stay
+    // internal, and every other variable follows in insertion order.
+    mockHost.statusString = "OL CHRG";
+    mockHost.data.set("ups.mfr", "CPS");
+    mockHost.data.set("ups.status.ac_present", "1");
+    mockHost.data.set("ups.model", "Back-UPS RS 900MI");
+    mockHost.data.set("ups.status.charging", "1");
+    mockHost.data.set("battery.charge", "95");
+    mockHost.data.set("ups.serial", "");
+
+    server.processCommand(printer, 0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST VAR testups\n"
+                             "VAR testups ups.status \"OL CHRG\"\n"
+                             "VAR testups ups.mfr \"CPS\"\n"
+                             "VAR testups ups.model \"Back-UPS RS 900MI\"\n"
+                             "VAR testups battery.charge \"95\"\n"
+                             "VAR testups ups.serial \"\"\n"
+                             "END LIST VAR testups\n",
+                             printer.getOutput().c_str());
+}
+
+void test_replies_written_once_outside_usb_lock(void) {
+    // Every write can block the loop for 10 s on a peer that stops reading, and
+    // one made under the USB data lock stalls the USB task along with it.
+    mockHost.data.set("ups.beeper.status", "enabled");
+    mockHost.data.set("battery.charge", "95");
+
+    const char* commands[] = {
+        "LIST UPS",
+        "LIST VAR testups",
+        "LIST CMD testups",
+        "LIST ENUM testups battery.charge",
+        "GET VAR testups battery.charge",
+        "GET VAR testups ups.status",
+        "GET VAR testups input.voltage",
+    };
+
+    for (const char* command : commands) {
+        SocketPrinter socket;
+        server.processCommand(socket, 0, command);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(1, socket.writes, command);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, socket.writesUnderLock, command);
+    }
+}
+
 #ifndef ARDUINO
 int main(int argc, char **argv) {
     UNITY_BEGIN();
@@ -366,6 +438,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_get_desc_and_type);
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
+    RUN_TEST(test_list_var_full_output);
+    RUN_TEST(test_replies_written_once_outside_usb_lock);
     return UNITY_END();
 }
 #else
@@ -382,6 +456,8 @@ void setup() {
     RUN_TEST(test_get_desc_and_type);
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
+    RUN_TEST(test_list_var_full_output);
+    RUN_TEST(test_replies_written_once_outside_usb_lock);
     UNITY_END();
 }
 void loop() {}
