@@ -1,5 +1,6 @@
 #include "network/network_manager.h"
 #include "core/app_logger.h"
+#include "core/device_id.h"
 
 AppNetworkManager::AppNetworkManager() 
     : m_lastStatus(WL_IDLE_STATUS), 
@@ -27,7 +28,10 @@ void AppNetworkManager::begin(const String& ssid, const String& password) {
     m_isApMode = false;
     m_lastStatus = WL_IDLE_STATUS;
     
-    AppLogger::log("INFO", "[NETWORK] Initializing Wi-Fi...");
+    String hostname = getDeviceId();
+    AppLogger::log("INFO", "[NETWORK] Initializing Wi-Fi as %s...", hostname.c_str());
+    // Only stored here; WiFi.mode() applies it when it brings up the station interface.
+    WiFi.setHostname(hostname.c_str());
     // Only takes effect before the first WiFi.mode(). The credentials already
     // live in our own NVS namespace; left persistent, the driver would save its
     // config to NVS again on every WiFi.begin() and reconnect.

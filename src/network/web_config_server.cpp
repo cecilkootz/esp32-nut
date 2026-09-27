@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "core/app_logger.h"
+#include "core/device_id.h"
 #include "core/memory_stats.h"
 #include "network/web_assets.h"
 #include <Update.h>
@@ -208,13 +209,7 @@ void WebConfigServer::handleSystemStatus() {
     JsonDocument doc;
     
     doc["version"] = FIRMWARE_VERSION;
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
-    char dev_id[32];
-    // Lo standard convenzionale per i dispositivi ESP è usare la seconda metà del MAC (gli ultimi 3 byte)
-    // poiché i primi 3 byte rappresentano l'OUI di Espressif.
-    snprintf(dev_id, sizeof(dev_id), "%s-%02X%02X%02X", ESP.getChipModel(), mac[3], mac[4], mac[5]);
-    doc["device_id"] = String(dev_id);
+    doc["device_id"] = getDeviceId();
     
     // Wi-Fi status
     wl_status_t wifi_status = WiFi.status();
