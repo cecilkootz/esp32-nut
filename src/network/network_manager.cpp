@@ -26,6 +26,9 @@ void AppNetworkManager::begin(const String& ssid, const String& password) {
     
     AppLogger::log("INFO", "[NETWORK] Initializing Wi-Fi...");
     WiFi.mode(WIFI_STA);
+    // Modem sleep can leave the node unreachable on some access points; on
+    // mains/UPS power the saving isn't worth that.
+    WiFi.setSleep(false);
     WiFi.setAutoReconnect(true); // Consente all'ESP32 di gestire le riconnessioni a basso livello
     
     AppLogger::log("INFO", "[NETWORK] Connecting to SSID: %s...\n", m_ssid.c_str());
