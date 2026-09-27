@@ -1,6 +1,11 @@
 #include "NUTServer.h"
 #include <string.h>
 
+#ifndef PIO_UNIT_TESTING
+#include <errno.h>
+#include <lwip/sockets.h>
+#endif
+
 // Shared by LIST UPS and GET UPSDESC so the two cannot drift.
 static const char* NUT_UPS_DESCRIPTION = "ESP32-S3 UPS Bridge";
 
@@ -72,6 +77,18 @@ public:
 private:
     Print& _client;
 };
+
+// The core enables SO_KEEPALIVE on accepted sockets, but LwIP's defaults send
+// the first probe after two hours. With these, LwIP aborts the connection once
+// the peer has been unreachable for a minute, and connected() then reports it.
+bool enableKeepalive(WiFiClient& client) {
+    const int idle_s = 30;
+    const int interval_s = 10;
+    const int probes = 3;
+    return client.setSocketOption(IPPROTO_TCP, TCP_KEEPIDLE, &idle_s, sizeof(idle_s)) == 0 &&
+           client.setSocketOption(IPPROTO_TCP, TCP_KEEPINTVL, &interval_s, sizeof(interval_s)) == 0 &&
+           client.setSocketOption(IPPROTO_TCP, TCP_KEEPCNT, &probes, sizeof(probes)) == 0;
+}
 #endif
 
 }  // namespace
@@ -180,7 +197,10 @@ void NUTServer::loop() {
                     _clients[slot].stop();
                 }
                 _clients[slot] = newClient;
-                
+                if (!enableKeepalive(_clients[slot])) {
+                    Serial.printf("[NUTServer] Keepalive setup failed for slot %d (errno %d).\n", slot, errno);
+                }
+
                 _clientActive[slot] = true;
                 _clientAuthenticated[slot] = false;
                 _clientLastActivity[slot] = millis();
@@ -205,7 +225,6 @@ void NUTServer::loop() {
                 continue;
             }
 
-            // Verifica timeout di inattività (60 secondi)
             if (millis() - _clientLastActivity[i] > NUT_TIMEOUT_MS) {
                 Serial.printf("[NUTServer] Inactivity timeout for slot %d. Disconnecting.\n", i);
                 _clients[i].print("ERR ACCESS-DENIED\n");
