@@ -1,16 +1,17 @@
 import os
+import sys
 import glob
 import gzip
 import subprocess
 
-def run_inline_script():
+def run_inline_script(root):
     # Run inline scripts first
-    subprocess.run(["python", "scripts/inline_web.py"], check=True)
-    subprocess.run(["python", "scripts/inline_update.py"], check=True)
+    subprocess.run([sys.executable, "scripts/inline_web.py"], cwd=root, check=True)
+    subprocess.run([sys.executable, "scripts/inline_update.py"], cwd=root, check=True)
 
-def embed_files():
-    data_dir = "data/www"
-    out_file = "include/network/web_assets.h"
+def embed_files(root):
+    data_dir = os.path.join(root, "data/www")
+    out_file = os.path.join(root, "include/network/web_assets.h")
     
     if not os.path.exists(data_dir):
         print(f"Directory {data_dir} not found. Skipping web embed.")
@@ -38,7 +39,7 @@ def embed_files():
             hasher.update(content)
             
     current_hash = hasher.hexdigest()
-    hash_file = "include/network/.web_assets.hash"
+    hash_file = os.path.join(root, "include/network/.web_assets.hash")
     
     if os.path.exists(hash_file) and os.path.exists(out_file):
         with open(hash_file, "r") as hf:
@@ -46,6 +47,7 @@ def embed_files():
                 print("Web assets unchanged. Skipping generation.")
                 return
 
+    print("Web assets changed. Regenerating web_assets.h.")
     with open(out_file, "w") as f:
         f.write("#ifndef WEB_ASSETS_H\n")
         f.write("#define WEB_ASSETS_H\n\n")
@@ -76,5 +78,11 @@ def embed_files():
         hf.write(current_hash)
 
 if __name__ == "__main__":
-    run_inline_script()
-    embed_files()
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+else:
+    # PlatformIO runs extra_scripts through SCons: __name__ is "SCons.Script" and __file__ is unset.
+    Import("env")
+    root = env.subst("$PROJECT_DIR")
+
+run_inline_script(root)
+embed_files(root)
