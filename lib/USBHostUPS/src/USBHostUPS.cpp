@@ -13,6 +13,12 @@
 #define FIRMWARE_VERSION "dev"
 #endif
 
+// Several seconds of a once-a-second interrupt stream, in case the loop task is
+// held up by a slow control transfer.
+static const UBaseType_t REPORT_QUEUE_DEPTH = 8;
+// Connects and disconnects share one queue so loop() sees them in order.
+static const UBaseType_t EVENT_QUEUE_DEPTH = 8;
+
 USBHostUPS::USBHostUPS() :
     _hid_dev_handle(NULL), _dev_handle(NULL),
     _vid(0), _pid(0),
@@ -24,10 +30,19 @@ USBHostUPS::USBHostUPS() :
 
 USBHostUPS::~USBHostUPS() {
     end();
+    if (_report_queue) vQueueDelete(_report_queue);
+    if (_event_queue) vQueueDelete(_event_queue);
 }
 
 bool USBHostUPS::begin() {
     if (_initialized) return true;
+
+    if (!_report_queue) _report_queue = xQueueCreate(REPORT_QUEUE_DEPTH, sizeof(InputReport));
+    if (!_event_queue) _event_queue = xQueueCreate(EVENT_QUEUE_DEPTH, sizeof(HidEvent));
+    if (!_report_queue || !_event_queue) {
+        if (_log_cb) _log_cb("ERROR", "USB event queue allocation failed");
+        return false;
+    }
 
     usb_host_config_t host_config = {
         .skip_phy_setup = false,
@@ -74,9 +89,13 @@ bool USBHostUPS::begin() {
 void USBHostUPS::end() {
     if (!_initialized) return;
 
-    if (_hid_dev_handle) {
-        hid_host_device_close(_hid_dev_handle);
-        _hid_dev_handle = NULL;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        std::lock_guard<std::recursive_mutex> io(_io_mutex);
+        if (_hid_dev_handle) {
+            hid_host_device_close(_hid_dev_handle);
+            reset_device_state();
+        }
     }
 
     hid_host_uninstall();
@@ -98,21 +117,15 @@ void USBHostUPS::hid_host_driver_event_cb(hid_host_device_handle_t hid_device_ha
 
 void USBHostUPS::handle_driver_event(hid_host_device_handle_t hid_device_handle, const hid_host_driver_event_t event) {
     if (event == HID_HOST_DRIVER_EVENT_CONNECTED) {
-        if (_log_cb) _log_cb("INFO", "HID Device Connected event");
-
         const hid_host_device_config_t dev_config = {
             .callback = USBHostUPS::hid_host_interface_event_cb,
             .callback_arg = this
         };
 
+        // Opening takes only the library's own lock. Claiming needs control
+        // transfers, which complete on this task, so loop() does that.
         esp_err_t err = hid_host_device_open(hid_device_handle, &dev_config);
-        if (err != ESP_OK) {
-            if (_log_cb) _log_cb("ERROR", "hid_host_device_open failed");
-            return;
-        }
-
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        _pending_interfaces.push_back(hid_device_handle);
+        post_event(err == ESP_OK ? HidEvent::CONNECTED : HidEvent::OPEN_FAILED, hid_device_handle);
     }
 }
 
@@ -121,132 +134,195 @@ void USBHostUPS::hid_host_interface_event_cb(hid_host_device_handle_t hid_device
     ups->handle_interface_event(hid_device_handle, event);
 }
 
+// Runs on the HID task, or on the loop task when the app closes an interface
+// itself. Never takes _mutex: loop() holds it across control transfers, and
+// this task is the one that completes them.
 void USBHostUPS::handle_interface_event(hid_host_device_handle_t hid_device_handle, const hid_host_interface_event_t event) {
     if (event == HID_HOST_INTERFACE_EVENT_INPUT_REPORT) {
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        if (!_driver) return;
-        
+        InputReport report;
         size_t length = 0;
-        uint8_t data[256];
-        if (hid_host_device_get_raw_input_report_data(hid_device_handle, data, sizeof(data), &length) == ESP_OK) {
-            uint8_t r_id = (length > 0) ? data[0] : 0;
-            // This fires on every interrupt report, roughly once a second, and the
-            // log is a 50-entry ring: logging each one buries everything else
-            // within a minute. Report the stream's shape only when it changes.
-            if (r_id != _last_logged_interrupt_id || length != _last_logged_interrupt_len) {
-                _last_logged_interrupt_id = r_id;
-                _last_logged_interrupt_len = length;
-                char dbg[128];
-                snprintf(dbg, sizeof(dbg), "INPUT_REPORT: id=%d, len=%d", r_id, length);
-                if (_log_cb) _log_cb("INFO", dbg);
-            }
-
-            if (length > 0) {
-                std::vector<uint8_t> payload(data, data + length);
-                uint16_t key = (1 << 8) | r_id; // type 1 = INPUT
-                _cached_reports[key] = {r_id, 1, payload};
-                _interrupt_report_seen[r_id] = millis();
-            }
-
-            _driver->decodeReport(this, r_id, 1, data, length, _ups_data);
+        if (hid_host_device_get_raw_input_report_data(hid_device_handle, report.data, sizeof(report.data), &length) != ESP_OK) return;
+        report.handle = hid_device_handle;
+        report.len = (uint8_t)length;
+        if (xQueueSend(_report_queue, &report, 0) != pdTRUE) {
+            // Drop the oldest instead: the newest report carries the current state.
+            InputReport oldest;
+            xQueueReceive(_report_queue, &oldest, 0);
+            xQueueSend(_report_queue, &report, 0);
+            _interrupt_reports_dropped++;
         }
     } else if (event == HID_HOST_INTERFACE_EVENT_DISCONNECTED) {
-        if (_log_cb) _log_cb("INFO", "HID Device Disconnected");
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        hid_host_device_close(hid_device_handle);
-        if (_hid_dev_handle == hid_device_handle) {
-            _hid_dev_handle = NULL;
-            _is_ready_to_poll = false;
-            _ups_data = UPSData();
-            if (_driver) { delete _driver; _driver = nullptr; }
-            _hid_parser = HIDParser();
+        {
+            // The library frees this interface, then its device, once we return,
+            // so let a loop-task call still inside them finish. IDF delivers the
+            // departed device's pending control transfer before reporting it
+            // gone, so what is left of that call does not need this task.
+            std::lock_guard<std::recursive_mutex> io(_io_mutex);
+            if (hid_device_handle == _hid_dev_handle) _is_ready_to_poll = false;
+            hid_host_device_close(hid_device_handle);
         }
+        post_event(HidEvent::DISCONNECTED, hid_device_handle);
     }
 }
 
 void USBHostUPS::loop() {
-    if (!_pending_interfaces.empty()) {
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        if (_pending_interfaces.empty()) return;
-        
-        hid_host_device_handle_t handle = _pending_interfaces.front();
-        _pending_interfaces.erase(_pending_interfaces.begin());
+    if (!_initialized) return;
 
-        size_t desc_len = 0;
-        uint8_t *desc = hid_host_get_report_descriptor(handle, &desc_len);
-        
-        bool is_ups = false;
-        HIDParser temp_parser;
-        if (desc) {
-            temp_parser.parseReportDescriptor(desc, desc_len);
-            for (const auto& u : temp_parser.getUsages()) {
-                if ((u.usage & 0xFFFF0000) == HID_PAGE_UPS || (u.usage & 0xFFFF0000) == HID_PAGE_BATTERY) {
-                    is_ups = true;
-                    break;
-                }
-            }
-        }
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    drain_reports();
+    drain_events();
 
-        if (is_ups) {
-            if (_hid_dev_handle != NULL) {
-                // If we already have a bound UPS interface, keep it or replace it?
-                // For now, close the new one if we already have one, OR replace?
-                // Let's replace just in case.
-                hid_host_device_close(_hid_dev_handle);
-            }
-            
-            _hid_dev_handle = handle;
-            _hid_parser = temp_parser;
-            
-            _cached_report_descriptor_hex = "";
-            for (size_t i = 0; i < desc_len; i++) {
-                char hex[4];
-                snprintf(hex, sizeof(hex), "%02X", desc[i]);
-                _cached_report_descriptor_hex += hex;
-            }
-
-            hid_host_dev_info_t dev_info;
-            if (hid_host_get_device_info(handle, &dev_info) == ESP_OK) {
-                _vid = dev_info.VID;
-                _pid = dev_info.PID;
-
-                if (_driver) { delete _driver; _driver = nullptr; }
-                if (_vid == 0x051D) { _driver = new APCDriver(); }
-                else if (_vid == 0x0764) { _driver = new CyberPowerDriver(); }
-                else if (_vid == 0x0463) { _driver = new EatonDriver(); }
-                else if (_vid == 0x0d9f) { _driver = new PowercomDriver(); }
-                else if (_vid == 0x04D8 && (_pid == 0xD004 || _pid == 0xD005)) { _driver = new OpenUPSDriver(); }
-                else if (_vid == 0x075D && _pid == 0x0300) { _driver = new GoldenMateDriver(); }
-                else { _driver = new GenericDriver(); }
-
-                _quirks = 0;
-                for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
-                    if (UPS_QUIRKS[q].vid == _vid && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == _pid)) {
-                        _quirks |= UPS_QUIRKS[q].flags;
-                    }
-                }
-                _driver->setup();
-                populateStringsFromDeviceInfo(dev_info, _ups_data);
-            }
-            
-            hid_host_device_start(_hid_dev_handle);
-            _is_ready_to_poll = true;
-            
-            if (_log_cb) _log_cb("INFO", "UPS interface claimed and ready.");
-        } else {
-            // Not a UPS! Close it!
-            if (_log_cb) _log_cb("INFO", "Ignoring non-UPS interface.");
-            hid_host_device_close(handle);
-        }
-        return;
-    }
-
-    if (!_is_ready_to_poll) return;
-
-    if (_driver) {
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
+    if (_is_ready_to_poll && _driver) {
         _driver->loop(this, _ups_data, millis());
     }
+}
+
+void USBHostUPS::post_event(HidEvent::Kind kind, hid_host_device_handle_t handle) {
+    const HidEvent event = { kind, handle };
+    if (xQueueSend(_event_queue, &event, 0) != pdTRUE) _events_dropped++;
+}
+
+void USBHostUPS::drain_reports() {
+    InputReport report;
+    while (xQueueReceive(_report_queue, &report, 0) == pdTRUE) {
+        if (report.handle == _hid_dev_handle && _driver) process_input_report(report);
+    }
+}
+
+void USBHostUPS::process_input_report(const InputReport& report) {
+    const uint8_t* data = report.data;
+    size_t length = report.len;
+    uint8_t r_id = (length > 0) ? data[0] : 0;
+    // This fires on every interrupt report, roughly once a second, and the
+    // log is a 50-entry ring: logging each one buries everything else
+    // within a minute. Report the stream's shape only when it changes.
+    if (r_id != _last_logged_interrupt_id || length != _last_logged_interrupt_len) {
+        _last_logged_interrupt_id = r_id;
+        _last_logged_interrupt_len = length;
+        char dbg[128];
+        snprintf(dbg, sizeof(dbg), "INPUT_REPORT: id=%d, len=%d", r_id, length);
+        if (_log_cb) _log_cb("INFO", dbg);
+    }
+
+    if (length > 0) {
+        std::vector<uint8_t> payload(data, data + length);
+        uint16_t key = (1 << 8) | r_id; // type 1 = INPUT
+        _cached_reports[key] = {r_id, 1, payload};
+        _interrupt_report_seen[r_id] = millis();
+    }
+
+    _driver->decodeReport(this, r_id, 1, data, length, _ups_data);
+}
+
+void USBHostUPS::drain_events() {
+    HidEvent event;
+    while (xQueueReceive(_event_queue, &event, 0) == pdTRUE) {
+        if (event.kind == HidEvent::DISCONNECTED) {
+            if (_log_cb) _log_cb("INFO", "HID Device Disconnected");
+            // A replace in claim_interface() has already reset the old device,
+            // and by now _hid_dev_handle is the new one.
+            if (event.handle == _hid_dev_handle) reset_device_state();
+            continue;
+        }
+
+        if (_log_cb) _log_cb("INFO", "HID Device Connected event");
+        if (event.kind == HidEvent::OPEN_FAILED) {
+            if (_log_cb) _log_cb("ERROR", "hid_host_device_open failed");
+            continue;
+        }
+        claim_interface(event.handle);
+    }
+
+    uint32_t dropped = _events_dropped;
+    if (dropped != _events_dropped_logged) {
+        _events_dropped_logged = dropped;
+        if (_log_cb) _log_cb("ERROR", "HID event queue overflow: connect/disconnect events lost");
+    }
+}
+
+void USBHostUPS::claim_interface(hid_host_device_handle_t handle) {
+    // Held throughout: desc is library memory that a disconnect frees.
+    std::lock_guard<std::recursive_mutex> io(_io_mutex);
+
+    size_t desc_len = 0;
+    uint8_t *desc = hid_host_get_report_descriptor(handle, &desc_len);
+
+    bool is_ups = false;
+    HIDParser temp_parser;
+    if (desc) {
+        temp_parser.parseReportDescriptor(desc, desc_len);
+        for (const auto& u : temp_parser.getUsages()) {
+            if ((u.usage & 0xFFFF0000) == HID_PAGE_UPS || (u.usage & 0xFFFF0000) == HID_PAGE_BATTERY) {
+                is_ups = true;
+                break;
+            }
+        }
+    }
+
+    if (is_ups) {
+        if (_hid_dev_handle != NULL) {
+            // Its DISCONNECTED callback runs synchronously in here but only
+            // queues an event, so reset the old device's state ourselves.
+            hid_host_device_close(_hid_dev_handle);
+            reset_device_state();
+        }
+
+        _hid_dev_handle = handle;
+        _hid_parser = temp_parser;
+
+        _cached_report_descriptor_hex = "";
+        for (size_t i = 0; i < desc_len; i++) {
+            char hex[4];
+            snprintf(hex, sizeof(hex), "%02X", desc[i]);
+            _cached_report_descriptor_hex += hex;
+        }
+
+        hid_host_dev_info_t dev_info;
+        if (hid_host_get_device_info(handle, &dev_info) == ESP_OK) {
+            _vid = dev_info.VID;
+            _pid = dev_info.PID;
+
+            if (_driver) { delete _driver; _driver = nullptr; }
+            if (_vid == 0x051D) { _driver = new APCDriver(); }
+            else if (_vid == 0x0764) { _driver = new CyberPowerDriver(); }
+            else if (_vid == 0x0463) { _driver = new EatonDriver(); }
+            else if (_vid == 0x0d9f) { _driver = new PowercomDriver(); }
+            else if (_vid == 0x04D8 && (_pid == 0xD004 || _pid == 0xD005)) { _driver = new OpenUPSDriver(); }
+            else if (_vid == 0x075D && _pid == 0x0300) { _driver = new GoldenMateDriver(); }
+            else { _driver = new GenericDriver(); }
+
+            _quirks = 0;
+            for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
+                if (UPS_QUIRKS[q].vid == _vid && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == _pid)) {
+                    _quirks |= UPS_QUIRKS[q].flags;
+                }
+            }
+            _driver->setup();
+            populateStringsFromDeviceInfo(dev_info, _ups_data);
+        }
+
+        hid_host_device_start(_hid_dev_handle);
+        _is_ready_to_poll = true;
+
+        if (_log_cb) _log_cb("INFO", "UPS interface claimed and ready.");
+    } else {
+        // Not a UPS! Close it!
+        if (_log_cb) _log_cb("INFO", "Ignoring non-UPS interface.");
+        hid_host_device_close(handle);
+    }
+}
+
+// Loop task only, under _mutex.
+void USBHostUPS::reset_device_state() {
+    std::lock_guard<std::recursive_mutex> io(_io_mutex);
+    _hid_dev_handle = NULL;
+    _is_ready_to_poll = false;
+    // A new interface can reuse the old one's address, so the handle check in
+    // drain_reports() cannot tell their reports apart.
+    xQueueReset(_report_queue);
+    _ups_data = UPSData();
+    if (_driver) { delete _driver; _driver = nullptr; }
+    _hid_parser = HIDParser();
 }
 
 bool USBHostUPS::isInterruptReport(uint8_t report_id) const {
@@ -259,8 +335,6 @@ bool USBHostUPS::isInterruptReport(uint8_t report_id) const {
 }
 
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
-    if (!_is_ready_to_poll || !_hid_dev_handle) return false;
-    
     uint8_t data[256];
     size_t length = expected_length > 0 ? expected_length : 255;
 
@@ -273,7 +347,12 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
         if (length > sizeof(data)) length = sizeof(data);
     }
 
-    esp_err_t err = hid_class_request_get_report(_hid_dev_handle, report_type, report_id, data, &length);
+    esp_err_t err;
+    {
+        std::lock_guard<std::recursive_mutex> io(_io_mutex);
+        if (!_is_ready_to_poll || !_hid_dev_handle) return false;
+        err = hid_class_request_get_report(_hid_dev_handle, report_type, report_id, data, &length);
+    }
     if (err == ESP_OK && length > 0) {
         uint8_t actual_id = report_id;
         uint8_t actual_type = report_type;
@@ -299,12 +378,14 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
         }
         return true;
     } else {
-        char dbg[128];
-        if (err == 0x10c) {
-            snprintf(dbg, sizeof(dbg), "requestReport FAILED: type=%d, id=%d, err=0x%x (STALL/NOT_FINISHED)", report_type, report_id, err);
-        } else {
-            snprintf(dbg, sizeof(dbg), "requestReport FAILED: type=%d, id=%d, err=0x%x", report_type, report_id, err);
+        const char* why = "";
+        switch (err) {
+            case ESP_ERR_TIMEOUT: why = " (timed out)"; break;
+            case ESP_ERR_NOT_FINISHED: why = " (earlier timed-out transfer still outstanding, not sent)"; break;
+            case ESP_ERR_INVALID_RESPONSE: why = " (STALL or failed transfer)"; break;
         }
+        char dbg[128];
+        snprintf(dbg, sizeof(dbg), "requestReport FAILED: type=%d, id=%d, err=0x%x%s", report_type, report_id, err, why);
         if (_log_cb) _log_cb("ERROR", dbg);
     }
     return false;
@@ -332,9 +413,10 @@ void USBHostUPS::setLogCallback(LogCallback cb) {
 }
 
 bool USBHostUPS::setBeeper(bool enable) {
-    if (!_is_ready_to_poll) return false;
-    
     std::lock_guard<std::recursive_mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> io(_io_mutex);
+    if (!_is_ready_to_poll) return false;
+
     String active_path = getActiveBeeperPath();
     if (active_path == "") return false;
     
@@ -436,6 +518,7 @@ String USBHostUPS::dumpUSBDiagnostics() {
         counters["received"] = _reports_received;
         counters["rekeyed"] = _reports_rekeyed;
         counters["discarded"] = _reports_discarded;
+        counters["interrupt_dropped"] = _interrupt_reports_dropped.load();
         counters["uptime_ms"] = millis();
 
         JsonArray scenarios = doc["scenarios"].to<JsonArray>();
