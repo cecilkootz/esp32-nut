@@ -420,9 +420,10 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
     }
 
     // upsmon asks for PRIMARY (MASTER before NUT 2.8) on connecting, and only
-    // a primary may later raise FSD.
+    // a primary may later raise FSD, which shuts down every secondary. So a
+    // device without credentials grants it to no one, as upsd without users.
     if (cmd == "PRIMARY" || cmd == "MASTER") {
-        if (authRequired && !_clientAuthenticated[slot]) {
+        if (!authRequired || !_clientAuthenticated[slot]) {
             client.print("ERR ACCESS-DENIED\n");
             return;
         }

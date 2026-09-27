@@ -574,13 +574,23 @@ void test_primary_and_master_need_authentication(void) {
     TEST_ASSERT_EQUAL_STRING("OK MASTER-GRANTED\n", reply(0, "master TESTUPS").c_str());
 }
 
-void test_primary_without_credentials_configured(void) {
+void test_primary_refused_without_credentials_configured(void) {
+    // Anyone who reached the port could otherwise raise FSD and shut down
+    // every secondary.
     NUTServerConfig open;
     open.ups_name = "testups";
     server.begin(open, &mockHost, 3493);
 
-    TEST_ASSERT_EQUAL_STRING("OK PRIMARY-GRANTED\n", reply(0, "PRIMARY testups").c_str());
-    TEST_ASSERT_EQUAL_STRING("OK FSD-SET\n", reply(0, "FSD testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "PRIMARY testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "FSD testups").c_str());
+
+    // Still refused should a session on an open device ever count as
+    // authenticated.
+    server.setAuthenticated(0, true);
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "MASTER testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "FSD testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.status \"OL\"\n",
+                             reply(1, "GET VAR testups ups.status").c_str());
 }
 
 void test_fsd_needs_primary(void) {
@@ -693,7 +703,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_starttls_not_supported);
     RUN_TEST(test_numlogins_counts_logged_in_sessions);
     RUN_TEST(test_primary_and_master_need_authentication);
-    RUN_TEST(test_primary_without_credentials_configured);
+    RUN_TEST(test_primary_refused_without_credentials_configured);
     RUN_TEST(test_fsd_needs_primary);
     RUN_TEST(test_fsd_stays_in_ups_status);
     RUN_TEST(test_set_var_is_refused);
@@ -725,7 +735,7 @@ void setup() {
     RUN_TEST(test_starttls_not_supported);
     RUN_TEST(test_numlogins_counts_logged_in_sessions);
     RUN_TEST(test_primary_and_master_need_authentication);
-    RUN_TEST(test_primary_without_credentials_configured);
+    RUN_TEST(test_primary_refused_without_credentials_configured);
     RUN_TEST(test_fsd_needs_primary);
     RUN_TEST(test_fsd_stays_in_ups_status);
     RUN_TEST(test_set_var_is_refused);
