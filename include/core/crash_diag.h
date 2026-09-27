@@ -22,6 +22,9 @@ namespace CrashDiag {
     // Stores the reason of a controlled restart in RTC memory and counts it as one more
     // consecutive restart; the caller then restarts
     void recordControlledRestart(const char* reason);
+    // Stores the reason of a restart someone asked for. Not counted: the count is for
+    // the recovery restarts that RestartPolicy backs off from
+    void recordRequestedRestart(const char* reason);
     // Controlled restarts in a row since the data was last healthy (review A7)
     uint8_t consecutiveRestarts();
     void clearConsecutiveRestarts();

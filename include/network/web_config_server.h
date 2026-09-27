@@ -8,6 +8,7 @@
 
 class AppNetworkManager;
 class NUTServer;
+class MqttBridge;
 
 class WebConfigServer {
 public:
@@ -17,6 +18,7 @@ public:
     void setUPS(USBHostUPS* ups);
     void setNetwork(AppNetworkManager* network);
     void setNUT(NUTServer* nut);
+    void setMqtt(MqttBridge* mqtt);
 
 private:
     WebServer server;
@@ -27,6 +29,7 @@ private:
     void handleConnect();
     void handleLogs();
     void handleNutConfig();
+    void handleMqttConfig();
     void handleGetConfig();
     void handleUpsVars();
     void handleSystemStatus();
@@ -40,6 +43,7 @@ private:
     USBHostUPS* usb_ups = nullptr;
     AppNetworkManager* network_mgr = nullptr;
     NUTServer* nut_server = nullptr;
+    MqttBridge* mqtt_bridge = nullptr;
 };
 
 #endif // WEB_CONFIG_SERVER_H

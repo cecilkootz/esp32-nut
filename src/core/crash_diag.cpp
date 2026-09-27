@@ -107,9 +107,11 @@ void begin() {
 
 void logBootInfo() {
     AppLogger::log("INFO", "[DIAG] Reset reason: %s", resetReasonName(s_reset_reason));
-    if (s_last_restart_cause.length() > 0) {
+    if (s_last_restart_cause.length() > 0 && s_restart_count > 0) {
         AppLogger::log("WARN", "[DIAG] Last controlled restart: %s (%u in a row)",
                        s_last_restart_cause.c_str(), (unsigned)s_restart_count);
+    } else if (s_last_restart_cause.length() > 0) {
+        AppLogger::log("INFO", "[DIAG] Last restart: %s", s_last_restart_cause.c_str());
     }
     if (s_has_crash) {
         AppLogger::log("ERROR", "[DIAG] Last crash: task '%s', PC 0x%08lx", s_crash_task.c_str(), (unsigned long)s_crash_pc);
@@ -121,10 +123,14 @@ void logBootInfo() {
     }
 }
 
-void recordControlledRestart(const char* reason) {
+void recordRequestedRestart(const char* reason) {
     strncpy(s_restart_reason, reason ? reason : "", sizeof(s_restart_reason) - 1);
     s_restart_reason[sizeof(s_restart_reason) - 1] = '\0';
     s_restart_magic = RESTART_MAGIC;
+}
+
+void recordControlledRestart(const char* reason) {
+    recordRequestedRestart(reason);
     if (s_restart_count < 255) s_restart_count++;
 }
 
@@ -155,9 +161,7 @@ void fillJson(JsonObject obj) {
     obj["heap_free"] = (uint32_t)esp_get_free_heap_size();
     obj["heap_min_free"] = (uint32_t)esp_get_minimum_free_heap_size();
     obj["heap_largest_block"] = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    if (s_degraded) {
-        obj["degraded"] = true;
-    }
+    obj["degraded"] = s_degraded;
     if (s_has_crash) {
         JsonObject crash = obj["last_crash"].to<JsonObject>();
         crash["task"] = s_crash_task;

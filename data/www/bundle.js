@@ -357,6 +357,57 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // MQTT form functionality
+    const mqttHostInput = document.getElementById('mqtt-host');
+    const mqttPortInput = document.getElementById('mqtt-port');
+    const mqttUsernameInput = document.getElementById('mqtt-username');
+    const mqttPwdInput = document.getElementById('mqtt-password');
+    const btnSaveMqtt = document.getElementById('btn-save-mqtt');
+
+    if (document.getElementById('mqtt-form')) {
+        document.getElementById('mqtt-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            btnSaveMqtt.innerHTML = `<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...`;
+            btnSaveMqtt.disabled = true;
+
+            const body = {
+                host: mqttHostInput.value.trim(),
+                port: parseInt(mqttPortInput.value, 10) || 1883,
+                username: mqttUsernameInput.value
+            };
+            // The saved password is never sent to the browser: an empty field keeps it
+            if (mqttPwdInput.value) {
+                body.password = mqttPwdInput.value;
+            }
+
+            try {
+                const response = await fetch('/api/mqtt/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                if (!response.ok) throw new Error('Save failed');
+
+                btnSaveMqtt.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved!`;
+                btnSaveMqtt.style.background = 'var(--success)';
+                btnSaveMqtt.style.borderColor = 'var(--success)';
+                btnSaveMqtt.style.color = '#000';
+                btnSaveMqtt.style.boxShadow = '0 0 20px rgba(0, 255, 157, 0.4)';
+
+                setTimeout(() => {
+                    btnSaveMqtt.innerHTML = `<span class="glow"></span> Save MQTT`;
+                    btnSaveMqtt.style = '';
+                    btnSaveMqtt.disabled = false;
+                }, 2000);
+            } catch (error) {
+                btnSaveMqtt.innerHTML = `<span>Error</span>`;
+                btnSaveMqtt.disabled = false;
+                alert('Failed to save MQTT configuration.');
+            }
+        });
+    }
+
     // Logs functionality
     const terminalOutput = document.getElementById('terminal-output');
     const btnClearLogs = document.getElementById('btn-clear-logs');
@@ -512,6 +563,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.nut.ups_name && nutUpsNameInput && !nutUpsNameInput.value) {
                     nutUpsNameInput.value = data.nut.ups_name;
                 }
+            }
+            if (data.mqtt && mqttHostInput) {
+                if (!mqttHostInput.value) mqttHostInput.value = data.mqtt.host || '';
+                if (data.mqtt.port) mqttPortInput.value = data.mqtt.port;
+                if (!mqttUsernameInput.value) mqttUsernameInput.value = data.mqtt.username || '';
+                mqttPwdInput.placeholder = data.mqtt.password_set ? 'Keep saved password' : '';
             }
         })
         .catch(err => console.error('Failed to fetch config:', err));
@@ -763,6 +820,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             
+            const indMqtt = document.getElementById('ind-mqtt');
+            const lblMqtt = document.getElementById('lbl-mqtt');
+            if (lblMqtt && data.mqtt) {
+                if (!data.mqtt.enabled) {
+                    lblMqtt.textContent = 'Off';
+                    indMqtt.className = 'status-indicator off';
+                } else if (data.mqtt.connected) {
+                    lblMqtt.textContent = 'Connected';
+                    indMqtt.className = 'status-indicator success';
+                } else {
+                    lblMqtt.textContent = 'Connecting';
+                    indMqtt.className = 'status-indicator warning';
+                }
+            }
+
             if (data.version) {
                 const fwVersion = document.getElementById('fw-version');
                 if (fwVersion) fwVersion.textContent = data.version;

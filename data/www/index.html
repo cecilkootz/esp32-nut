@@ -147,6 +147,40 @@
                         </div>
                     </form>
                 </div>
+
+                <div class="panel config-panel">
+                    <div class="panel-header">
+                        <h2>Home Assistant (MQTT)</h2>
+                        <div class="status-item">
+                            <div class="status-indicator off" id="ind-mqtt"></div>
+                            <span id="lbl-mqtt">Off</span>
+                        </div>
+                    </div>
+                    <form id="mqtt-form" class="form-container">
+                        <div class="form-group">
+                            <label for="mqtt-host">Broker Host</label>
+                            <input type="text" id="mqtt-host" placeholder="Empty turns MQTT off" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="mqtt-port">Port</label>
+                            <input type="number" id="mqtt-port" min="1" max="65535" value="1883" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="mqtt-username">Username</label>
+                            <input type="text" id="mqtt-username" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="mqtt-password">Password</label>
+                            <input type="password" id="mqtt-password" autocomplete="new-password">
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary" id="btn-save-mqtt">
+                                <span class="glow"></span>
+                                Save MQTT
+                            </button>
+                        </div>
+                    </form>
+                </div>
             </div>
 
             <div class="tab-content active" id="content-ups">

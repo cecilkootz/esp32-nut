@@ -5,7 +5,10 @@
 #include "core/crash_diag.h"
 #include "core/device_id.h"
 #include "core/memory_stats.h"
+#include "core/restart_guard.h"
+#include "core/system_status.h"
 #include "network/hostname.h"
+#include "network/mqtt_bridge.h"
 #include <Preferences.h>
 #include "esp_task_wdt.h"
 #include "RestartPolicy.h"
@@ -16,6 +19,8 @@ AppNetworkManager network_mgr;
 NUTServer nut_server;
 DiagnosticLED diagnostic_led;
 WebConfigServer web_server(config_mgr);
+MqttBridge mqtt_bridge;
+SystemStatusSources status_sources;
 
 Preferences boot_prefs;
 bool is_ap_mode = false;
@@ -46,6 +51,30 @@ static void setupLoopWatchdog() {
     if (err != ESP_OK) {
         AppLogger::log("ERROR", "[MAIN] Task watchdog setup failed: %s", esp_err_to_name(err));
     }
+}
+
+static String buildStatusJson() {
+    JsonDocument doc;
+    fillSystemStatus(doc, status_sources);
+    String json;
+    serializeJson(doc, json);
+    return json;
+}
+
+static void restartOnRequest(const char* cause) {
+    bool data_fresh = usb_ups.isConnected() && !usb_ups.isDataStale();
+    const char* blocker = restartBlocker(usb_ups.getUPSStatusString(), data_fresh, nut_server.forcedShutdown());
+    if (blocker) {
+        AppLogger::log("WARN", "[MAIN] %s refused while the UPS reports %s: upsmon would shut its host down "
+                               "if the bridge went away now", cause, blocker);
+        return;
+    }
+    AppLogger::log("WARN", "[MAIN] %s", cause);
+    CrashDiag::recordRequestedRestart(cause);
+    mqtt_bridge.end();
+    usb_ups.end();
+    vTaskDelay(pdMS_TO_TICKS(100));
+    ESP.restart();
 }
 
 // Calcola lo stato diagnostico del sistema a partire dallo stato Wi-Fi e UPS
@@ -154,7 +183,23 @@ void setup() {
         } else {
             AppLogger::log("INFO", "[MAIN] NUTServer started correctly on port 3493.");
             web_server.setNUT(&nut_server);
+            status_sources.nut = &nut_server;
         }
+    }
+
+    status_sources.ap_mode = is_ap_mode;
+    status_sources.network = &network_mgr;
+    status_sources.ups = &usb_ups;
+    web_server.setMqtt(&mqtt_bridge);
+    status_sources.mqtt = &mqtt_bridge;
+    if (config_ok && !is_ap_mode) {
+        // Not just the UPS name: HA's NUT integration already has a device called that
+        String bridge_name = getDeviceId();
+        String ups_name = config_mgr.getNutConfig().ups_name;
+        if (ups_name.length() > 0) {
+            bridge_name = ups_name + " bridge";
+        }
+        mqtt_bridge.begin(config_mgr.getMqttConfig(), getDeviceId(), bridge_name);
     }
 }
 
@@ -201,6 +246,7 @@ void loop() {
     if (decision == RestartPolicy::Decision::RESTART) {
         AppLogger::log("ERROR", "[MAIN] Controlled restart: %s", usb_ups.getRestartReason());
         CrashDiag::recordControlledRestart(usb_ups.getRestartReason());
+        mqtt_bridge.end();
         delay(200); // lascia uscire il log sulla seriale
         esp_restart();
     }
@@ -220,6 +266,11 @@ void loop() {
     }
 
     nut_server.loop();
+
+    mqtt_bridge.loop(now, ups_healthy, buildStatusJson);
+    if (mqtt_bridge.takeRestartRequest()) {
+        restartOnRequest("Restart requested from Home Assistant");
+    }
 
     static uint32_t last_print = 0;
     if (now - last_print >= 5000) {

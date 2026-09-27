@@ -7,4 +7,7 @@
 // Also a valid hostname.
 String getDeviceId();
 
+// Station MAC as "aa:bb:cc:dd:ee:ff". Like the ID, readable before Wi-Fi starts.
+String getMacAddress();
+
 #endif // DEVICE_ID_H

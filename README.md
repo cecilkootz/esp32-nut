@@ -24,6 +24,7 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 - **Web UI & Captive Portal**: Easy configuration of Wi-Fi and NUT credentials via a modern, responsive web interface.
 - **Over-The-Air (OTA) Updates**: Flash new firmware versions directly from the web browser without touching the board.
 - **Diagnostic LED**: Visual feedback for Wi-Fi and UPS connection status.
+- **Home Assistant over MQTT (optional)**: The bridge shows up as its own device with Wi-Fi, memory and crash diagnostics and a Restart button, next to the UPS that the NUT integration provides.
 
 ## 🔌 Supported UPS Devices
 
@@ -136,6 +137,7 @@ You can install the firmware directly from your browser without downloading any 
 - Once connected to your home Wi-Fi, the ESP32 will grab an IP address from your DHCP server.
 - **Web Dashboard**: Navigate to the ESP32's IP address in your browser to see real-time UPS stats (Battery level, Voltage, Load, etc.).
 - **NUT Client**: Configure your Home Assistant or NAS to connect to the ESP32's IP on port `3493` using the credentials you defined.
+- **Home Assistant (MQTT)**: In the NUT Server tab, enter your MQTT broker (for example the Mosquitto add-on) and a login for it. The bridge appears in Home Assistant through MQTT discovery. Restart requests are refused while the UPS is on battery, because upsmon clients treat a UPS they lose contact with during an outage as critical.
 
 ## 🛠 Support the Project
 

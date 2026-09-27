@@ -24,6 +24,7 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 - **Interfaccia Web & Captive Portal**: Configurazione facile del Wi-Fi e delle credenziali NUT tramite una dashboard web moderna e responsiva.
 - **Aggiornamenti Over-The-Air (OTA)**: Carica nuove versioni del firmware direttamente dal browser web senza collegare fisicamente la scheda al PC.
 - **LED Diagnostico**: Feedback visivo immediato per lo stato della connessione Wi-Fi e del collegamento con l'UPS.
+- **Home Assistant via MQTT (facoltativo)**: Il bridge compare come dispositivo a sé, con diagnostica di Wi-Fi, memoria e crash e un pulsante di riavvio, accanto all'UPS fornito dall'integrazione NUT.
 
 ## 🔌 UPS Supportati
 
@@ -136,6 +137,7 @@ Puoi installare il firmware direttamente dal tuo browser senza scaricare alcun p
 - Una volta connesso al Wi-Fi di casa, l'ESP32 otterrà un indirizzo IP dal tuo router.
 - **Dashboard Web**: Naviga verso l'indirizzo IP dell'ESP32 nel tuo browser per vedere in tempo reale le statistiche dell'UPS (Batteria, Tensione, Carico, ecc.).
 - **Client NUT**: Configura Home Assistant o il tuo NAS per connettersi all'IP dell'ESP32 sulla porta `3493` utilizzando le credenziali definite in precedenza.
+- **Home Assistant (MQTT)**: Nella scheda NUT Server inserisci il broker MQTT (ad esempio l'add-on Mosquitto) e le relative credenziali. Il bridge compare in Home Assistant tramite MQTT discovery. Le richieste di riavvio vengono rifiutate mentre l'UPS è a batteria, perché i client upsmon considerano critico un UPS con cui perdono il contatto durante un blackout.
 
 ## 🛠 Supporta il Progetto
 
