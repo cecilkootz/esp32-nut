@@ -1,4 +1,5 @@
 #include "NUTServer.h"
+#include <string.h>
 
 // Shared by LIST UPS and GET UPSDESC so the two cannot drift.
 static const char* NUT_UPS_DESCRIPTION = "ESP32-S3 UPS Bridge";
@@ -29,6 +30,24 @@ public:
         return text.concat((const char*)buf, size) ? size : 0;
     }
 };
+
+// Escapes quotes and backslashes in the value as upsd does. Left bare, a quote
+// ends the value early and a trailing backslash swallows the closing quote.
+void printVar(Print& out, const String& ups, const char* name, const String& value) {
+    out.printf("VAR %s %s \"", ups.c_str(), name);
+    const char* run = value.c_str();
+    if (!run) run = "";
+    while (*run) {
+        size_t plain = strcspn(run, "\"\\");
+        if (plain) out.write((const uint8_t*)run, plain);
+        run += plain;
+        if (*run) {
+            const uint8_t escaped[2] = {'\\', (uint8_t)*run++};
+            out.write(escaped, sizeof(escaped));
+        }
+    }
+    out.print("\"\n");
+}
 
 #ifndef PIO_UNIT_TESTING
 // Stops forwarding after a short write, which NetworkClient returns after 10 s
@@ -343,10 +362,10 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 auto data = _usb_ups->getUPSData();
                 // String grows only to fit each append, so size it for every line up front.
                 reply.text.reserve((data->getAll().size() + 3) * (upsName.length() + 48));
-                reply.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
+                printVar(reply, upsName, "ups.status", _usb_ups->getUPSStatusString());
                 for (const auto& param : data->getAll()) {
                     if (param.key.startsWith("ups.status.") && param.key != "ups.status") continue;
-                    reply.printf("VAR %s %s \"%s\"\n", upsName.c_str(), param.key.c_str(), param.value.c_str());
+                    printVar(reply, upsName, param.key.c_str(), param.value);
                 }
             }
             reply.printf("END LIST VAR %s\n", upsName.c_str());
@@ -491,9 +510,9 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             {
                 auto data = _usb_ups->getUPSData();
                 if (varNameLower == "ups.status") {
-                    reply.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
+                    printVar(reply, upsName, "ups.status", _usb_ups->getUPSStatusString());
                 } else if (data->hasKey(varNameLower)) {
-                    reply.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), data->get(varNameLower).c_str());
+                    printVar(reply, upsName, varNameLower.c_str(), data->get(varNameLower));
                 } else {
                     reply.print("ERR VAR-NOT-SUPPORTED\n");
                 }

@@ -400,6 +400,24 @@ void test_list_var_full_output(void) {
                              printer.getOutput().c_str());
 }
 
+void test_quoted_values_are_escaped(void) {
+    // Left bare, the quotes end the value early and the trailing backslash
+    // swallows the closing quote.
+    mockHost.data.set("ups.model", "Back-UPS \"XS\" 700\\");
+
+    server.processCommand(printer, 0, "GET VAR testups ups.model");
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.model \"Back-UPS \\\"XS\\\" 700\\\\\"\n",
+                             printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST VAR testups\n"
+                             "VAR testups ups.status \"OL\"\n"
+                             "VAR testups ups.model \"Back-UPS \\\"XS\\\" 700\\\\\"\n"
+                             "END LIST VAR testups\n",
+                             printer.getOutput().c_str());
+}
+
 void test_replies_written_once_outside_usb_lock(void) {
     // Every write can block the loop for 10 s on a peer that stops reading, and
     // one made under the USB data lock stalls the USB task along with it.
@@ -439,6 +457,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_list_var_full_output);
+    RUN_TEST(test_quoted_values_are_escaped);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     return UNITY_END();
 }
@@ -457,6 +476,7 @@ void setup() {
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_list_var_full_output);
+    RUN_TEST(test_quoted_values_are_escaped);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     UNITY_END();
 }
