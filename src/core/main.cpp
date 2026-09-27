@@ -166,8 +166,13 @@ void loop() {
     if (now - last_print >= 5000) {
         last_print = now;
         MemoryStats mem = readMemoryStats();
+        char wifi_diag[24] = "rssi=n/a";
+        if (network_mgr.isConnected()) {
+            snprintf(wifi_diag, sizeof(wifi_diag), "rssi=%d ch=%d", WiFi.RSSI(), (int)WiFi.channel());
+        }
         AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | Voltage = %.1f V"
-                               " | Heap free=%lu min=%lu largest=%lu | Stack min free loop=%lu hid=%ld",
+                               " | Heap free=%lu min=%lu largest=%lu | Stack min free loop=%lu hid=%ld"
+                               " | WiFi %s",
                       (int)usb_ups.getUPSData()->getFloat("battery.charge"),
                       usb_ups.getUPSStatusString().c_str(),
                       usb_ups.getUPSData()->getFloat("output.voltage"),
@@ -175,7 +180,8 @@ void loop() {
                       (unsigned long)mem.min_free_heap,
                       (unsigned long)mem.largest_free_block,
                       (unsigned long)mem.loop_stack_min_free,
-                      (long)mem.hid_stack_min_free);
+                      (long)mem.hid_stack_min_free,
+                      wifi_diag);
     }
 
     // Aggiornamento stato LED diagnostico

@@ -228,6 +228,11 @@ void WebConfigServer::handleSystemStatus() {
     }
     JsonObject wifi = doc["wifi"].to<JsonObject>();
     wifi["status"] = wifi_status_str;
+    if (!is_ap_mode && wifi_status == WL_CONNECTED) {
+        wifi["rssi"] = WiFi.RSSI();
+        wifi["bssid"] = WiFi.BSSIDstr();
+        wifi["channel"] = WiFi.channel();
+    }
     if (network_mgr && !is_ap_mode) {
         uint32_t disconnects = network_mgr->disconnectCount();
         wifi["disconnects"] = disconnects;
