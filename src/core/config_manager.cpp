@@ -42,6 +42,13 @@ bool ConfigManager::begin() {
         return false;
     }
     
+    // Saving the NUT form before Wi-Fi stores an empty SSID, which station mode can't use.
+    // The board stays in setup mode, and the NUT settings stay loaded so the Wi-Fi save keeps them.
+    if (wifi_config.ssid.isEmpty()) {
+        AppLogger::log("WARN", "[CONFIG] No Wi-Fi SSID saved: configuration incomplete.");
+        return false;
+    }
+
     // Se siamo arrivati qui, la configurazione è valida
     is_valid = true;
     
