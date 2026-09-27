@@ -1,0 +1,41 @@
+name: Auto-merge
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  enable:
+    name: Enable auto-merge
+    # PRs by the repo owner, which includes those Claude opens for them
+    if: github.event.pull_request.user.login == github.repository_owner && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      # A merge that GITHUB_TOKEN enabled triggers no workflows, so CI would skip main
+      GH_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN || secrets.GITHUB_TOKEN }}
+      HAS_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN != '' }}
+      PR: ${{ github.event.pull_request.html_url }}
+      BASE: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - run: |
+          if [ -n "$(gh pr view "$PR" --json autoMergeRequest --jq '.autoMergeRequest // empty')" ]; then
+            echo "Auto-merge is already on"
+            exit 0
+          fi
+          # gh pr merge --auto merges at once unless a required check is pending
+          if ! gh api "repos/$GITHUB_REPOSITORY/rules/branches/$BASE" \
+              --jq '.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context' \
+              | grep -qx 'CI result'; then
+            echo "::error::$BASE does not require the CI result check, so auto-merge would not wait for CI"
+            exit 1
+          fi
+          gh pr merge --auto --merge "$PR"
+          if [ "$HAS_TOKEN" != true ]; then
+            echo "::warning::Enabled with GITHUB_TOKEN, so the merge won't run CI on main. Add an AUTO_MERGE_TOKEN secret to fix that."
+          fi
