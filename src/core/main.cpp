@@ -2,6 +2,7 @@
 #include "USBHostUPS.h"
 #include "network/web_config_server.h"
 #include "core/app_logger.h"
+#include "core/memory_stats.h"
 #include <Preferences.h>
 
 USBHostUPS usb_ups;
@@ -140,10 +141,17 @@ void loop() {
     static uint32_t last_print = 0;
     if (now - last_print >= 5000) {
         last_print = now;
-        AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | Voltage = %.1f V",
+        MemoryStats mem = readMemoryStats();
+        AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | Voltage = %.1f V"
+                               " | Heap free=%lu min=%lu largest=%lu | Stack min free loop=%lu hid=%ld",
                       (int)usb_ups.getUPSData()->getFloat("battery.charge"),
                       usb_ups.getUPSStatusString().c_str(),
-                      usb_ups.getUPSData()->getFloat("output.voltage"));
+                      usb_ups.getUPSData()->getFloat("output.voltage"),
+                      (unsigned long)mem.free_heap,
+                      (unsigned long)mem.min_free_heap,
+                      (unsigned long)mem.largest_free_block,
+                      (unsigned long)mem.loop_stack_min_free,
+                      (long)mem.hid_stack_min_free);
     }
 
     // Aggiornamento stato LED diagnostico

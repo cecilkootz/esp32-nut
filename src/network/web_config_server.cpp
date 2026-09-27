@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "core/app_logger.h"
+#include "core/memory_stats.h"
 #include "network/web_assets.h"
 #include <Update.h>
 
@@ -237,6 +238,17 @@ void WebConfigServer::handleSystemStatus() {
         ups_status_str = "Disconnected";
     }
     doc["ups"]["status"] = ups_status_str;
+
+    MemoryStats mem = readMemoryStats();
+    JsonObject memory = doc["memory"].to<JsonObject>();
+    memory["free_heap"] = mem.free_heap;
+    memory["min_free_heap"] = mem.min_free_heap;
+    memory["largest_free_block"] = mem.largest_free_block;
+    memory["loop_stack_min_free"] = mem.loop_stack_min_free;
+    if (mem.hid_stack_min_free >= 0) {
+        memory["hid_stack_min_free"] = mem.hid_stack_min_free;
+    }
+    memory["uptime_ms"] = millis();
 
     String response;
     serializeJson(doc, response);
