@@ -6,6 +6,10 @@
 #include <algorithm>
 #include <bitset>
 
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "dev"
+#endif
+
 /**
  * @brief Generic HID UPS Driver Implementation
  * 
@@ -58,12 +62,17 @@ const std::vector<uint16_t>& GenericDriver::pollList(IUSBHostUPS* host) {
     return _poll_list;
 }
 
+void GenericDriver::publishDriverInfo(UPSData& data) const {
+    if (data.get("driver.version.data") == getDriverName()) return;
+    data.set("driver.name", "esp32-nut");
+    data.set("driver.version", FIRMWARE_VERSION);
+    data.set("driver.version.data", getDriverName());
+}
+
 void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
-    if (data.get("ups.type") != getDriverName()) {
-        data.set("ups.type", getDriverName());
-    }
+    publishDriverInfo(data);
 
     if (_poll_step == 0) {
         if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {

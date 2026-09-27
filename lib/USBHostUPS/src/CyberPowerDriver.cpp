@@ -32,9 +32,7 @@ bool CyberPowerDriver::shouldPoll(uint8_t report_id, uint8_t report_type) const 
 void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
-    if (data.get("ups.type") != getDriverName()) {
-        data.set("ups.type", getDriverName());
-    }
+    publishDriverInfo(data);
 
     if (_poll_step == 0) {
         if (now - _last_fast_poll >= 30000 || _last_fast_poll == 0) { // 30 seconds polling for CyberPower!

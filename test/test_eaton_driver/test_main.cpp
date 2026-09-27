@@ -131,6 +131,31 @@ void test_eaton_string_descriptors(void) {
     TEST_ASSERT_EQUAL_STRING("3S 700", ups_data.get("ups.model").c_str());
 }
 
+void test_eaton_topology_sets_ups_type(void) {
+    // The driver name no longer occupies ups.type, which now carries only the
+    // topology the UPS reports.
+    HIDUsageDef u_type;
+    u_type.report_id = 0x02;
+    u_type.report_type = 3;
+    u_type.bit_offset = 0;
+    u_type.bit_size = 8;
+    strcpy(u_type.path, "UPS.PowerConverter.ConverterType");
+    u_type.found = true;
+    mockHost._usages.push_back(u_type);
+
+    driver.loop(&mockHost, ups_data, 1000);
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.type"));
+    TEST_ASSERT_EQUAL_STRING("EatonDriver", ups_data.get("driver.version.data").c_str());
+
+    uint8_t r2[] = { 0x02, 0x02 };
+    driver.decodeReport(&mockHost, 0x02, 3, r2, sizeof(r2), ups_data);
+    TEST_ASSERT_EQUAL_STRING("online", ups_data.get("ups.type").c_str());
+
+    driver.loop(&mockHost, ups_data, 1100);
+    TEST_ASSERT_EQUAL_STRING("online", ups_data.get("ups.type").c_str());
+    TEST_ASSERT_EQUAL_STRING("EatonDriver", ups_data.get("driver.version.data").c_str());
+}
+
 void test_eaton_loop_polling_and_string_requests(void) {
     mockHost._iManufacturer = 1;
     mockHost._iProduct = 2;
@@ -195,6 +220,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eaton_ac_present_and_discharging);
     RUN_TEST(test_eaton_voltage_and_battery);
     RUN_TEST(test_eaton_string_descriptors);
+    RUN_TEST(test_eaton_topology_sets_ups_type);
     RUN_TEST(test_eaton_loop_polling_and_string_requests);
     RUN_TEST(test_eaton_realpower_recalculated_when_config_arrives_after_load);
     return UNITY_END();
@@ -205,6 +231,7 @@ void setup() {
     RUN_TEST(test_eaton_ac_present_and_discharging);
     RUN_TEST(test_eaton_voltage_and_battery);
     RUN_TEST(test_eaton_string_descriptors);
+    RUN_TEST(test_eaton_topology_sets_ups_type);
     RUN_TEST(test_eaton_loop_polling_and_string_requests);
     RUN_TEST(test_eaton_realpower_recalculated_when_config_arrives_after_load);
     UNITY_END();

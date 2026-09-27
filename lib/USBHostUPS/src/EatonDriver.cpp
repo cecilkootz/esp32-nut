@@ -28,9 +28,7 @@ bool EatonDriver::shouldPoll(uint8_t report_id, uint8_t) const {
 void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
-    if (data.get("ups.type") != getDriverName()) {
-        data.set("ups.type", getDriverName());
-    }
+    publishDriverInfo(data);
 
     if (_poll_step == 0) {
         if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {

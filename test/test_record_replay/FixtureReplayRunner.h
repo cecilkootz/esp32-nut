@@ -148,7 +148,7 @@ public:
         TEST_ASSERT_GREATER_THAN_MESSAGE(0, host._parser.getUsages().size(), "Parser found 0 usages from descriptor");
 
         // 3. Dispatch Driver
-        IUPSDriver* driver = nullptr;
+        GenericDriver* driver = nullptr;
         switch (vid) {
             case 0x0463:
                 driver = new EatonDriver();
@@ -166,8 +166,7 @@ public:
                 driver = new OpenUPSDriver();
                 break;
             case 0x075D:
-                driver = (pid == 0x0300) ? static_cast<IUPSDriver*>(new GoldenMateDriver())
-                                         : static_cast<IUPSDriver*>(new GenericDriver());
+                driver = (pid == 0x0300) ? new GoldenMateDriver() : new GenericDriver();
                 break;
             default:
                 driver = new GenericDriver();
@@ -225,8 +224,8 @@ public:
                 }
             }
 
-            // Set ups.type directly since loop() isn't called in the replay runner
-            ups_data.set("ups.type", driver->getDriverName());
+            // loop() would set these, but the replay runner never calls it.
+            driver->publishDriverInfo(ups_data);
 
             // Assert Expectations
             JsonObject exp = sc["expected_ups_data"].as<JsonObject>();

@@ -40,9 +40,7 @@ void PowercomDriver::setup() {
 void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
-    if (data.get("ups.type") != "Powercom") {
-        data.set("ups.type", "Powercom");
-    }
+    publishDriverInfo(data);
     if (!data.hasKey("ups.mfr")) {
         data.set("ups.mfr", "Powercom");
     }
