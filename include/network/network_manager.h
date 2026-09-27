@@ -10,7 +10,7 @@ public:
     AppNetworkManager();
     
     // Avvia la connessione Wi-Fi
-    void begin(const String& ssid, const String& password);
+    void begin(const String& ssid, const String& password, const String& hostname);
     void beginAP(const String& ap_ssid, const String& ap_password);
     
     // Gestisce il monitoraggio e la riconnessione

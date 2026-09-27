@@ -1,6 +1,5 @@
 #include "network/network_manager.h"
 #include "core/app_logger.h"
-#include "core/device_id.h"
 
 static const uint32_t RECONNECT_NUDGE_MS = 60000;
 
@@ -47,14 +46,13 @@ void AppNetworkManager::beginAP(const String& ap_ssid, const String& ap_password
     AppLogger::log("INFO", "[NETWORK] AP Started. IP: %s\n", WiFi.softAPIP().toString().c_str());
 }
 
-void AppNetworkManager::begin(const String& ssid, const String& password) {
+void AppNetworkManager::begin(const String& ssid, const String& password, const String& hostname) {
     m_ssid = ssid;
     m_password = password;
     m_isStarted = true;
     m_isApMode = false;
     m_lastStatus = WL_IDLE_STATUS;
-    
-    String hostname = getDeviceId();
+
     AppLogger::log("INFO", "[NETWORK] Initializing Wi-Fi as %s...", hostname.c_str());
     // Only stored here; WiFi.mode() applies it when it brings up the station interface.
     WiFi.setHostname(hostname.c_str());
