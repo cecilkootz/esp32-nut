@@ -16,11 +16,11 @@
 #undef COLOR_OFF
 
 // Colori attesi (devono combaciare con DiagnosticLED.cpp)
-#define TEST_COLOR_CONNECTING Adafruit_NeoPixel::Color(255, 255, 0)
-#define TEST_COLOR_OPERATIONAL Adafruit_NeoPixel::Color(0, 255, 0)
-#define TEST_COLOR_ERROR Adafruit_NeoPixel::Color(255, 0, 0)
-#define TEST_COLOR_AP_MODE_BLUE Adafruit_NeoPixel::Color(0, 0, 255)
-#define TEST_COLOR_AP_MODE_RED Adafruit_NeoPixel::Color(255, 0, 0)
+#define TEST_COLOR_CONNECTING ledColor(255, 255, 0)
+#define TEST_COLOR_OPERATIONAL ledColor(0, 255, 0)
+#define TEST_COLOR_ERROR ledColor(255, 0, 0)
+#define TEST_COLOR_AP_MODE_BLUE ledColor(0, 0, 255)
+#define TEST_COLOR_AP_MODE_RED ledColor(255, 0, 0)
 #define TEST_COLOR_OFF 0
 
 // Istanza globale del LED diagnostico usata in tutti i test

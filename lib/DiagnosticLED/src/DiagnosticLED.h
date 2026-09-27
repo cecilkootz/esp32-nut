@@ -2,7 +2,6 @@
 #define DIAGNOSTIC_LED_H
 
 #include <Arduino.h>
-#include <Adafruit_NeoPixel.h>
 
 // Pin predefinito per il LED integrato della ESP32-S3-DevKitC-1
 #define LED_BUILTIN_PIN 48
@@ -12,11 +11,15 @@
 static const unsigned long LED_BLINK_SLOW_MS = 1000;  // Lampeggio lento (CONNECTING)
 static const unsigned long LED_BLINK_FAST_MS = 125;   // Lampeggio veloce (ERROR)
 
-#define COLOR_CONNECTING Adafruit_NeoPixel::Color(255, 255, 0)
-#define COLOR_OPERATIONAL Adafruit_NeoPixel::Color(0, 255, 0)
-#define COLOR_ERROR Adafruit_NeoPixel::Color(255, 0, 0)
-#define COLOR_AP_MODE_BLUE Adafruit_NeoPixel::Color(0, 0, 255)
-#define COLOR_AP_MODE_RED Adafruit_NeoPixel::Color(255, 0, 0)
+constexpr uint32_t ledColor(uint8_t r, uint8_t g, uint8_t b) {
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+}
+
+#define COLOR_CONNECTING ledColor(255, 255, 0)
+#define COLOR_OPERATIONAL ledColor(0, 255, 0)
+#define COLOR_ERROR ledColor(255, 0, 0)
+#define COLOR_AP_MODE_BLUE ledColor(0, 0, 255)
+#define COLOR_AP_MODE_RED ledColor(255, 0, 0)
 #define COLOR_OFF 0
 
 // Stati diagnostici del LED
@@ -47,14 +50,19 @@ public:
     uint32_t getCurrentColor() const;
 
 private:
+    static constexpr size_t FRAME_SYMBOLS = 25;  // 24 GRB bits + latch
+
     uint8_t _pin;
     LedState _state;
     bool _ledOn;
+    bool _rmtReady;
     unsigned long _previousMillis;
     uint32_t _currentColor;
-    Adafruit_NeoPixel _pixels;
+    // Not a local: rmtWrite() can time out before the driver has finished reading it.
+    rmt_data_t _frame[FRAME_SYMBOLS];
 
     void setPixelColorAndShow(uint32_t color);
+    void writeFrame(uint32_t color);
 };
 
 #endif // DIAGNOSTIC_LED_H
