@@ -20,6 +20,10 @@ static const char* NUT_UPS_DESCRIPTION = "ESP32-S3 UPS Bridge";
 // Protocol level the implemented command subset targets, as upsd reports it.
 static const char* NUT_PROTOCOL_VERSION = "1.3";
 
+// Older readings are refused. CyberPower, the slowest driver, polls every
+// 30 s, so this rides out two missed polls.
+static const uint32_t NUT_DATA_MAX_AGE_MS = 90000;
+
 namespace {
 
 // Replies are assembled here and written once, after the USB data lock is
@@ -148,6 +152,20 @@ void NUTServer::logMessage(const char* level, const char* format, ...) const {
     } else {
         Serial.printf("%s\n", msg);
     }
+}
+
+// Mirrors upsd's ups_available(): a read fails outright rather than serve
+// readings the UPS is no longer backing.
+bool NUTServer::upsAvailable(Print& client) const {
+    if (!_usb_ups || !_usb_ups->isConnected()) {
+        client.print("ERR DRIVER-NOT-CONNECTED\n");
+        return false;
+    }
+    if (!_usb_ups->hasFreshData(NUT_DATA_MAX_AGE_MS)) {
+        client.print("ERR DATA-STALE\n");
+        return false;
+    }
+    return true;
 }
 
 int NUTServer::connectedClients() const {
@@ -403,10 +421,13 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 client.print("ERR UNKNOWN-UPS\n");
                 return;
             }
+            if (!upsAvailable(client)) {
+                return;
+            }
 
             ReplyBuffer reply;
             reply.printf("BEGIN LIST VAR %s\n", upsName.c_str());
-            if (_usb_ups) {
+            {
                 auto data = _usb_ups->getUPSData();
                 // String grows only to fit each append, so size it for every line up front.
                 reply.text.reserve((data->getAll().size() + 3) * (upsName.length() + 48));
@@ -545,9 +566,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 client.print("ERR UNKNOWN-UPS\n");
                 return;
             }
-
-            if (!_usb_ups) {
-                client.print("ERR VAR-NOT-SUPPORTED\n");
+            if (!upsAvailable(client)) {
                 return;
             }
 

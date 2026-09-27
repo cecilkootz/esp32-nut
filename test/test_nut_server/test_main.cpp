@@ -61,6 +61,13 @@ public:
         return connected;
     }
 
+    bool fresh = true;
+    mutable uint32_t lastMaxAge = 0;
+    bool hasFreshData(uint32_t max_age_ms) const override {
+        lastMaxAge = max_age_ms;
+        return connected && fresh;
+    }
+
     std::vector<HIDUsageDef> _mockUsages;
     HIDParser _hid_parser;
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
@@ -114,6 +121,8 @@ void setUp(void) {
     mockHost.statusString = "OL";
     mockHost.beeperState = true;
     mockHost.connected = true;
+    mockHost.fresh = true;
+    mockHost.lastMaxAge = 0;
     mockHost.lockDepth = 0;
 
     NUTServerConfig config;
@@ -461,6 +470,60 @@ void test_stats_count_commands_and_auth_failures(void) {
     TEST_ASSERT_EQUAL(3493, server.port());
 }
 
+// These describe the UPS rather than its readings, so they keep answering;
+// go.nut's NewUPS() needs them before it lists variables.
+static const char* const handshakeCommands[] = {
+    "LIST UPS",
+    "LIST CMD testups",
+    "GET UPSDESC testups",
+    "GET NUMLOGINS testups",
+};
+
+static void assertVarReadsRefusedWith(const char* expected) {
+    const char* reads[] = {
+        "LIST VAR testups",
+        "GET VAR testups battery.charge",
+        "GET VAR testups ups.status",
+    };
+    for (const char* command : reads) {
+        printer.clear();
+        server.processCommand(printer, 0, command);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(expected, printer.getOutput().c_str(), command);
+    }
+    for (const char* command : handshakeCommands) {
+        printer.clear();
+        server.processCommand(printer, 0, command);
+        std::string out = printer.getOutput();
+        TEST_ASSERT_TRUE_MESSAGE(out.size() > 0, command);
+        TEST_ASSERT_TRUE_MESSAGE(out.find("ERR ") == std::string::npos, command);
+    }
+}
+
+void test_var_reads_refused_when_driver_not_connected(void) {
+    mockHost.data.set("battery.charge", "95");
+    mockHost.connected = false;
+    assertVarReadsRefusedWith("ERR DRIVER-NOT-CONNECTED\n");
+
+    // As in upsd, the UPS name is checked first.
+    printer.clear();
+    server.processCommand(printer, 0, "LIST VAR wrongups");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
+}
+
+void test_var_reads_refused_without_ups(void) {
+    NUTServerConfig config;
+    config.ups_name = "testups";
+    server.begin(config, nullptr, 3493);
+    assertVarReadsRefusedWith("ERR DRIVER-NOT-CONNECTED\n");
+}
+
+void test_var_reads_refused_when_data_stale(void) {
+    mockHost.data.set("battery.charge", "95");
+    mockHost.fresh = false;
+    assertVarReadsRefusedWith("ERR DATA-STALE\n");
+    TEST_ASSERT_EQUAL_UINT32(90000, mockHost.lastMaxAge);
+}
+
 void test_replies_written_once_outside_usb_lock(void) {
     // Every write can block the loop for 10 s on a peer that stops reading, and
     // one made under the USB data lock stalls the USB task along with it.
@@ -503,6 +566,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_quoted_values_are_escaped);
     RUN_TEST(test_log_callback_receives_server_messages);
     RUN_TEST(test_stats_count_commands_and_auth_failures);
+    RUN_TEST(test_var_reads_refused_when_driver_not_connected);
+    RUN_TEST(test_var_reads_refused_without_ups);
+    RUN_TEST(test_var_reads_refused_when_data_stale);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     return UNITY_END();
 }
@@ -524,6 +590,9 @@ void setup() {
     RUN_TEST(test_quoted_values_are_escaped);
     RUN_TEST(test_log_callback_receives_server_messages);
     RUN_TEST(test_stats_count_commands_and_auth_failures);
+    RUN_TEST(test_var_reads_refused_when_driver_not_connected);
+    RUN_TEST(test_var_reads_refused_without_ups);
+    RUN_TEST(test_var_reads_refused_when_data_stale);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     UNITY_END();
 }

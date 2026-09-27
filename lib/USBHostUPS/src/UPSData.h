@@ -91,7 +91,6 @@ public:
         if (d.getBool("ups.status.replace_battery")) status += "RB ";
         if (d.getBool("ups.status.overload")) status += "OVER ";
         if (d.getBool("ups.status.shutdown_imminent")) status += "FSD ";
-        if (d.getBool("ups.status.comm_lost")) status += "COMM_LOST ";
         
         if (status.length() == 0) status = "Unknown";
         status.trim();

@@ -61,6 +61,7 @@ public:
 private:
     void handleCommand(int slot, const String& cmdLine);
     void closeSession(int slot);
+    bool upsAvailable(Print& client) const;
     void logMessage(const char* level, const char* format, ...) const __attribute__((format(printf, 3, 4)));
 
     NUTServerConfig _config;

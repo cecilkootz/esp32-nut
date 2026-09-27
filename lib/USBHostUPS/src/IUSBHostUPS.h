@@ -38,6 +38,8 @@ public:
     virtual String getUPSStatusString() const = 0;
     virtual bool setBeeper(bool enable) = 0;
     virtual bool isConnected() const = 0;
+    // Connected, and a report was decoded within max_age_ms.
+    virtual bool hasFreshData(uint32_t max_age_ms) const { return isConnected(); }
     virtual bool supportsBeeperToggle() const { return true; }
 
     virtual const std::vector<HIDUsageDef>& getUsages() const = 0;
