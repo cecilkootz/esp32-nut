@@ -32,6 +32,30 @@ void test_hid_parser_basic(void) {
     TEST_ASSERT_EQUAL_UINT16(1, usage->bit_size);
 }
 
+// Usage 0 used to match the table's NULL sentinel, yielding String(NULL); on ESP32 its
+// c_str() is NULL and strncat() into the path crashed the device.
+void test_collection_without_usage(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, // Usage Page (UPS)
+        0x09, 0x04, // Usage (UPS)
+        0xA1, 0x01, // Collection (Application)
+        0xA1, 0x02, //   Collection (Logical), no Usage
+        0x09, 0x35, //     Usage (Percent Load)
+        0x75, 0x08, //     Report Size (8)
+        0x95, 0x01, //     Report Count (1)
+        0x81, 0x02, //     Input (Data,Var,Abs)
+        0xC0,       //   End Collection
+        0xC0        // End Collection
+    };
+
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+
+    const HIDUsageDef* usage = parser.getUsageDef(0x00840035);
+    TEST_ASSERT_NOT_NULL(usage);
+    TEST_ASSERT_EQUAL_STRING("UPS.0x00000000.PercentLoad", usage->path);
+}
+
 void test_extract_usage_aligned(void) {
     HIDUsageDef def;
     def.usage = HID_USAGE_UPS_ACPRAESENT;
@@ -302,6 +326,7 @@ void test_cyberpower_br700elcd_beeper(void) {
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_hid_parser_basic);
+    RUN_TEST(test_collection_without_usage);
     RUN_TEST(test_extract_usage_aligned);
     RUN_TEST(test_extract_unaligned_bitfields);
     RUN_TEST(test_extract_exponent_and_unit_scaling);
@@ -316,6 +341,7 @@ int main(int argc, char **argv) {
 void setup() {
     UNITY_BEGIN();
     RUN_TEST(test_hid_parser_basic);
+    RUN_TEST(test_collection_without_usage);
     RUN_TEST(test_extract_usage_aligned);
     RUN_TEST(test_extract_unaligned_bitfields);
     RUN_TEST(test_extract_exponent_and_unit_scaling);

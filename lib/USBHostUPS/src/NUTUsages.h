@@ -185,7 +185,7 @@ static const NUTUsageDef nut_usages[] = {
 };
 
 static String get_nut_usage_name(uint32_t code) {
-    for (size_t i = 0; i < sizeof(nut_usages) / sizeof(nut_usages[0]); i++) {
+    for (size_t i = 0; nut_usages[i].name; i++) {
         if (nut_usages[i].code == code) return String(nut_usages[i].name);
     }
     char buf[16];
