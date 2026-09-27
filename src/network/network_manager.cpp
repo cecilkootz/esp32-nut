@@ -2,9 +2,26 @@
 #include "core/app_logger.h"
 #include "core/device_id.h"
 
+static const uint32_t RECONNECT_NUDGE_MS = 60000;
+
 static const char* reasonName(uint8_t reason) {
     const char* name = WiFi.disconnectReasonName((wifi_err_reason_t)reason);
     return *name ? name : "UNKNOWN";
+}
+
+static const char* statusName(wl_status_t status) {
+    switch (status) {
+        case WL_IDLE_STATUS:     return "WL_IDLE_STATUS";
+        case WL_NO_SSID_AVAIL:   return "WL_NO_SSID_AVAIL";
+        case WL_SCAN_COMPLETED:  return "WL_SCAN_COMPLETED";
+        case WL_CONNECTED:       return "WL_CONNECTED";
+        case WL_CONNECT_FAILED:  return "WL_CONNECT_FAILED";
+        case WL_CONNECTION_LOST: return "WL_CONNECTION_LOST";
+        case WL_DISCONNECTED:    return "WL_DISCONNECTED";
+        case WL_STOPPED:         return "WL_STOPPED";
+        case WL_NO_SHIELD:       return "WL_NO_SHIELD";
+    }
+    return "UNKNOWN";
 }
 
 AppNetworkManager::AppNetworkManager() 
@@ -117,14 +134,17 @@ void AppNetworkManager::loop() {
         m_lastConnectionAttempt = now; // Reset attempt timer while connected
     }
     
-    // Gestione riconnessione e fallback
+    // The core already retries every transient disconnect at once, and a quicker
+    // kick could cut off an association or DHCP still in progress. The nudge is
+    // for the reasons the core gives up on, such as a password later corrected
+    // on the AP.
     if (currentStatus != WL_CONNECTED) {
-        if (now - m_lastConnectionAttempt >= 15000) {
+        if (now - m_lastConnectionAttempt >= RECONNECT_NUDGE_MS) {
             m_lastConnectionAttempt = now;
-            AppLogger::log("INFO", "[NETWORK] Reconnecting... Attempt on SSID: %s\n", m_ssid.c_str());
-            // Forza una nuova connessione
-            WiFi.disconnect();
-            WiFi.begin(m_ssid.c_str(), m_password.c_str());
+            AppLogger::log("WARN", "[NETWORK] Link still down (%s), asking the driver to reconnect", statusName(currentStatus));
+            if (!WiFi.reconnect()) {
+                AppLogger::log("WARN", "[NETWORK] WiFi.reconnect() failed");
+            }
         }
     }
 }
