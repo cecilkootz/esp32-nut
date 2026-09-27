@@ -63,6 +63,7 @@ void setup() {
         AppLogger::log("WARN", "[MAIN] Starting in AP mode...");
         network_mgr.beginAP("NUT_ESP32_Config", "12345678");
         web_server.setUPS(&usb_ups);
+        web_server.setNetwork(&network_mgr);
         web_server.begin(true);
     } else {
         is_ap_mode = false;
@@ -76,6 +77,7 @@ void setup() {
         // Inizializzazione di AppNetworkManager
         network_mgr.begin(wifi.ssid, wifi.password);
         web_server.setUPS(&usb_ups);
+        web_server.setNetwork(&network_mgr);
         web_server.begin(false);
     }
 
