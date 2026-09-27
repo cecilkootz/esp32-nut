@@ -109,6 +109,11 @@ public:
         if (index >= length()) return 0;
         return (*this)[index];
     }
+
+    bool concat(const uint8_t* s, unsigned int n) {
+        append(reinterpret_cast<const char*>(s), n);
+        return true;
+    }
 };
 
 class Print {
