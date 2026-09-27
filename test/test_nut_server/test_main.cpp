@@ -524,11 +524,140 @@ void test_var_reads_refused_when_data_stale(void) {
     TEST_ASSERT_EQUAL_UINT32(90000, mockHost.lastMaxAge);
 }
 
+static std::string reply(int slot, const char* command) {
+    printer.clear();
+    server.processCommand(printer, slot, command);
+    return printer.getOutput();
+}
+
+void test_protver_answers_as_netver(void) {
+    TEST_ASSERT_EQUAL_STRING("1.3\n", reply(0, "PROTVER").c_str());
+}
+
+void test_starttls_not_supported(void) {
+    TEST_ASSERT_EQUAL_STRING("ERR FEATURE-NOT-SUPPORTED\n", reply(0, "STARTTLS").c_str());
+}
+
+void test_numlogins_counts_logged_in_sessions(void) {
+    // A primary's upsmon waits for this to fall to 1, itself, before shutting
+    // down, so every session that leaves must drop out of it.
+    server.setAuthenticated(0, true);
+    server.setAuthenticated(1, true);
+
+    TEST_ASSERT_EQUAL_STRING("OK\n", reply(0, "LOGIN testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("NUMLOGINS testups 1\n", reply(3, "GET NUMLOGINS testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", reply(0, "LOGIN testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("NUMLOGINS testups 1\n", reply(3, "GET NUMLOGINS testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", reply(1, "LOGIN testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("NUMLOGINS testups 2\n", reply(3, "GET NUMLOGINS testups").c_str());
+
+    // Refused logins do not count.
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(2, "LOGIN testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", reply(2, "LOGIN wrongups").c_str());
+    TEST_ASSERT_EQUAL_STRING("NUMLOGINS testups 2\n", reply(3, "GET NUMLOGINS testups").c_str());
+
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", reply(0, "LOGOUT").c_str());
+    TEST_ASSERT_EQUAL_STRING("NUMLOGINS testups 1\n", reply(3, "GET NUMLOGINS testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", reply(1, "LOGOUT").c_str());
+    TEST_ASSERT_EQUAL_STRING("NUMLOGINS testups 0\n", reply(3, "GET NUMLOGINS testups").c_str());
+}
+
+void test_primary_and_master_need_authentication(void) {
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "PRIMARY testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "MASTER testups").c_str());
+
+    TEST_ASSERT_EQUAL_STRING("OK\n", reply(0, "USERNAME admin").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", reply(0, "PASSWORD secret").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", reply(0, "PRIMARY").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", reply(0, "PRIMARY wrongups").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK PRIMARY-GRANTED\n", reply(0, "PRIMARY testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK MASTER-GRANTED\n", reply(0, "master TESTUPS").c_str());
+}
+
+void test_primary_refused_without_credentials_configured(void) {
+    // Anyone who reached the port could otherwise raise FSD and shut down
+    // every secondary.
+    NUTServerConfig open;
+    open.ups_name = "testups";
+    server.begin(open, &mockHost, 3493);
+
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "PRIMARY testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "FSD testups").c_str());
+
+    // Still refused should a session on an open device ever count as
+    // authenticated.
+    server.setAuthenticated(0, true);
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "MASTER testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "FSD testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.status \"OL\"\n",
+                             reply(1, "GET VAR testups ups.status").c_str());
+}
+
+void test_fsd_needs_primary(void) {
+    server.setAuthenticated(0, true);
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "FSD testups").c_str());
+
+    TEST_ASSERT_EQUAL_STRING("OK PRIMARY-GRANTED\n", reply(0, "PRIMARY testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", reply(0, "FSD").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", reply(0, "FSD wrongups").c_str());
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.status \"OL\"\n",
+                             reply(1, "GET VAR testups ups.status").c_str());
+
+    // Primary goes with the session.
+    reply(0, "LOGOUT");
+    server.setAuthenticated(0, true);
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "FSD testups").c_str());
+}
+
+void test_fsd_stays_in_ups_status(void) {
+    // Secondaries shut down on seeing FSD, so it must outlive the primary's
+    // session and any later change in the UPS's own status.
+    server.setLogCallback(captureLog);
+    server.setAuthenticated(0, true);
+    reply(0, "PRIMARY testups");
+    TEST_ASSERT_EQUAL_STRING("OK FSD-SET\n", reply(0, "FSD testups").c_str());
+
+    TEST_ASSERT_EQUAL(1, (int)logged.size());
+    TEST_ASSERT_EQUAL_STRING("WARN", logged[0].first.c_str());
+    TEST_ASSERT_TRUE(logged[0].second.find("FSD set on testups") != std::string::npos);
+
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.status \"OL FSD\"\n",
+                             reply(1, "GET VAR testups ups.status").c_str());
+
+    reply(0, "LOGOUT");
+    mockHost.statusString = "OB LB";
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.status \"OB LB FSD\"\n",
+                             reply(1, "GET VAR testups ups.status").c_str());
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST VAR testups\n"
+                             "VAR testups ups.status \"OB LB FSD\"\n"
+                             "END LIST VAR testups\n",
+                             reply(1, "LIST VAR testups").c_str());
+
+    // Not doubled when the UPS itself reports FSD.
+    mockHost.statusString = "OB LB FSD";
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.status \"OB LB FSD\"\n",
+                             reply(1, "GET VAR testups ups.status").c_str());
+}
+
+void test_set_var_is_refused(void) {
+    mockHost.data.set("battery.charge", "95");
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "SET VAR testups battery.charge 50").c_str());
+
+    server.setAuthenticated(0, true);
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", reply(0, "SET VAR testups battery.charge 50").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", reply(0, "set var testups UPS.STATUS \"OL\"").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", reply(0, "SET VAR testups input.voltage 230").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", reply(0, "SET VAR wrongups battery.charge 50").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", reply(0, "SET VAR testups battery.charge").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", reply(0, "SET TRACKING ON").c_str());
+}
+
 void test_replies_written_once_outside_usb_lock(void) {
     // Every write can block the loop for 10 s on a peer that stops reading, and
     // one made under the USB data lock stalls the USB task along with it.
     mockHost.data.set("ups.beeper.status", "enabled");
     mockHost.data.set("battery.charge", "95");
+    server.setAuthenticated(0, true);
 
     const char* commands[] = {
         "LIST UPS",
@@ -538,6 +667,7 @@ void test_replies_written_once_outside_usb_lock(void) {
         "GET VAR testups battery.charge",
         "GET VAR testups ups.status",
         "GET VAR testups input.voltage",
+        "SET VAR testups battery.charge 50",
     };
 
     for (const char* command : commands) {
@@ -569,6 +699,14 @@ int main(int argc, char **argv) {
     RUN_TEST(test_var_reads_refused_when_driver_not_connected);
     RUN_TEST(test_var_reads_refused_without_ups);
     RUN_TEST(test_var_reads_refused_when_data_stale);
+    RUN_TEST(test_protver_answers_as_netver);
+    RUN_TEST(test_starttls_not_supported);
+    RUN_TEST(test_numlogins_counts_logged_in_sessions);
+    RUN_TEST(test_primary_and_master_need_authentication);
+    RUN_TEST(test_primary_refused_without_credentials_configured);
+    RUN_TEST(test_fsd_needs_primary);
+    RUN_TEST(test_fsd_stays_in_ups_status);
+    RUN_TEST(test_set_var_is_refused);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     return UNITY_END();
 }
@@ -593,6 +731,14 @@ void setup() {
     RUN_TEST(test_var_reads_refused_when_driver_not_connected);
     RUN_TEST(test_var_reads_refused_without_ups);
     RUN_TEST(test_var_reads_refused_when_data_stale);
+    RUN_TEST(test_protver_answers_as_netver);
+    RUN_TEST(test_starttls_not_supported);
+    RUN_TEST(test_numlogins_counts_logged_in_sessions);
+    RUN_TEST(test_primary_and_master_need_authentication);
+    RUN_TEST(test_primary_refused_without_credentials_configured);
+    RUN_TEST(test_fsd_needs_primary);
+    RUN_TEST(test_fsd_stays_in_ups_status);
+    RUN_TEST(test_set_var_is_refused);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     UNITY_END();
 }
