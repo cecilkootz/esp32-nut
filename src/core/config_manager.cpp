@@ -1,55 +1,67 @@
 #include "core/config_manager.h"
 #include <ArduinoJson.h>
+#include <esp_app_desc.h>
+#include "build_config_json.h"
 #include "core/app_logger.h"
+#include "core/build_config.h"
+#include "core/device_id.h"
 
 ConfigManager::ConfigManager() : is_valid(false) {}
+
+static void mergeBuildConfig(JsonDocument& doc) {
+    JsonDocument build;
+    deserializeJson(build, BUILD_CONFIG_JSON); // checked by scripts/build_config.py
+    String device_id = getDeviceId();
+    applyBuildConfig(doc, build.as<JsonObjectConst>(), device_id.c_str());
+    AppLogger::log("INFO", "[CONFIG] Applying the settings built into this firmware.");
+    if (build["devices"].size() > 0 && build["devices"][device_id].isNull()) {
+        AppLogger::log("WARN", "[CONFIG] The built-in settings have no entry for %s: shared settings only.",
+                       device_id.c_str());
+    }
+}
 
 bool ConfigManager::begin() {
     is_valid = false;
     
     preferences.begin("nutos", false);
     String config_json = preferences.getString("config_json", "");
-    
-    if (config_json == "") {
-        return false;
-    }
 
     JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, config_json);
-    if (error) {
-        AppLogger::log("ERROR", "[CONFIG] ERROR: JSON parsing from NVS failed. Details: %s\n", error.c_str());
-        return false;
-    }
-    
-    // Estrazione dei campi Wi-Fi
-    if (doc["wifi"].is<JsonObject>()) {
-        JsonObject wifi = doc["wifi"].as<JsonObject>();
-        wifi_config.ssid = wifi["ssid"].as<String>();
-        wifi_config.password = wifi["password"].as<String>();
-    } else {
-        AppLogger::log("ERROR", "[CONFIG] ERROR: 'wifi' section missing or invalid in JSON.");
-        return false;
-    }
-    
-    // Estrazione dei campi NUT
-    if (doc["nut"].is<JsonObject>()) {
-        JsonObject nut = doc["nut"].as<JsonObject>();
-        nut_config.username = nut["username"].as<String>();
-        nut_config.password = nut["password"].as<String>();
-        nut_config.ups_name = nut["ups_name"].as<String>();
-    } else {
-        AppLogger::log("ERROR", "[CONFIG] ERROR: 'nut' section missing or invalid in JSON.");
-        return false;
+    if (config_json != "") {
+        DeserializationError error = deserializeJson(doc, config_json);
+        if (error) {
+            AppLogger::log("ERROR", "[CONFIG] ERROR: JSON parsing from NVS failed. Details: %s\n", error.c_str());
+            doc.clear();
+        }
     }
 
-    // Optional: configurations saved before MQTT support have no such section
-    mqtt_config = MqttConfig();
-    if (doc["mqtt"].is<JsonObject>()) {
-        JsonObject mqtt = doc["mqtt"].as<JsonObject>();
-        mqtt_config.host = mqtt["host"] | "";
-        mqtt_config.port = mqtt["port"] | 1883;
-        mqtt_config.username = mqtt["username"] | "";
-        mqtt_config.password = mqtt["password"] | "";
+    // Once per image, not every boot: web UI changes then last until the next update, and
+    // the setup hotspot can still fix built-in Wi-Fi settings a board can't join.
+    char image[65];
+    esp_app_get_elf_sha256(image, sizeof(image));
+    bool apply_build = BUILD_CONFIG_JSON[0] != '\0' && preferences.getString("config_image", "") != image;
+    if (apply_build) {
+        mergeBuildConfig(doc);
+    }
+
+    // Any section can be missing: saved before MQTT support, or left out of config.json
+    JsonObjectConst wifi = doc["wifi"];
+    wifi_config.ssid = wifi["ssid"] | "";
+    wifi_config.password = wifi["password"] | "";
+
+    JsonObjectConst nut = doc["nut"];
+    nut_config.username = nut["username"] | "";
+    nut_config.password = nut["password"] | "";
+    nut_config.ups_name = nut["ups_name"] | "";
+
+    JsonObjectConst mqtt = doc["mqtt"];
+    mqtt_config.host = mqtt["host"] | "";
+    mqtt_config.port = mqtt["port"] | 1883;
+    mqtt_config.username = mqtt["username"] | "";
+    mqtt_config.password = mqtt["password"] | "";
+
+    if (apply_build && save()) {
+        preferences.putString("config_image", image);
     }
     
     // Saving the NUT form before Wi-Fi stores an empty SSID, which station mode can't use.
@@ -59,7 +71,6 @@ bool ConfigManager::begin() {
         return false;
     }
 
-    // Se siamo arrivati qui, la configurazione è valida
     is_valid = true;
     
     AppLogger::log("INFO", "[CONFIG] Configuration successfully loaded from NVS.");

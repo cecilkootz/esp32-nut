@@ -1,0 +1,9 @@
+{
+  "wifi": {"ssid": "MyNetwork", "password": "wifi-password"},
+  "nut": {"username": "monuser", "password": "nut-password"},
+  "mqtt": {"host": "192.168.1.10", "port": 1883, "username": "esp32-nut", "password": "mqtt-password"},
+  "devices": {
+    "ESP32-S3-A1B2C3": {"nut": {"ups_name": "rack-ups"}},
+    "ESP32-S3-D4E5F6": {"nut": {"ups_name": "desk-ups"}}
+  }
+}

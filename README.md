@@ -125,6 +125,11 @@ You can install the firmware directly from your browser without downloading any 
 3. Connect your ESP32-S3 to your PC (using the UART/UART-Prog USB port).
 4. Click **Build** and then **Upload**.
 
+**Settings built into the firmware (optional)**
+To flash boards that come up already configured, copy `config.example.json` to `config.json` and fill it in. It takes the Wi-Fi, NUT and MQTT settings of the web UI. Settings for a single board, such as its UPS name, go under `devices`, keyed by the `device_id` from `/api/system-status`. A setting you leave out keeps its saved value.
+
+Every build then includes these settings, and each board applies them the first time it boots the new image, flashed over USB or OTA. Changes made in the web UI last until the next update. The image holds the passwords in plain text, so keep it to yourself.
+
 ### 2. First Boot & Configuration
 1. On first boot (or if no valid Wi-Fi configuration is saved), the ESP32 will create an Access Point named **`NUT_ESP32_Config`** (Password: `12345678`).
    > **Note:** To manually force Access Point mode (e.g., to change Wi-Fi settings), plug in the ESP32 and unplug it within 3 seconds. On the next boot, the ESP32 will start in Access Point mode. (The AP no longer activates automatically upon signal loss).
