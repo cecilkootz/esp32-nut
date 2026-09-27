@@ -23,7 +23,7 @@ USBHostUPS::USBHostUPS() :
     _hid_dev_handle(NULL), _dev_handle(NULL),
     _vid(0), _pid(0),
     _initialized(false), _is_ready_to_poll(false),
-    _is_fetching(false), _control_pending(false),
+    _control_pending(false),
     _driver(nullptr), _log_cb(nullptr), _quirks(0), _usb_task_handle(NULL), _usb_task_run(false)
 {
 }
@@ -205,13 +205,21 @@ void USBHostUPS::process_input_report(const InputReport& report) {
     }
 
     if (length > 0) {
-        std::vector<uint8_t> payload(data, data + length);
-        uint16_t key = (1 << 8) | r_id; // type 1 = INPUT
-        _cached_reports[key] = {r_id, 1, payload};
+        cache_report(r_id, 1, data, length); // type 1 = INPUT
         _interrupt_report_seen[r_id] = millis();
     }
 
     _driver->decodeReport(this, r_id, 1, data, length, _ups_data);
+}
+
+void USBHostUPS::cache_report(uint8_t report_id, uint8_t report_type, const uint8_t* data, size_t length) {
+    // Updating the existing entry in place reuses its buffer, so a report seen
+    // before costs no allocation.
+    uint16_t key = (report_type << 8) | report_id;
+    CachedReport& cached = _cached_reports[key];
+    cached.report_id = report_id;
+    cached.report_type = report_type;
+    cached.data.assign(data, data + length);
 }
 
 void USBHostUPS::drain_events() {
@@ -323,6 +331,14 @@ void USBHostUPS::reset_device_state() {
     _ups_data = UPSData();
     if (_driver) { delete _driver; _driver = nullptr; }
     _hid_parser = HIDParser();
+    // Per device; the since-boot counters and the last descriptor stay for diagnosis.
+    _cached_reports.clear();
+    _interrupt_report_seen.clear();
+    _vid = 0;
+    _pid = 0;
+    _quirks = 0;
+    _last_logged_interrupt_id = 0;
+    _last_logged_interrupt_len = 0;
 }
 
 bool USBHostUPS::isInterruptReport(uint8_t report_id) const {
@@ -369,9 +385,7 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
             actual_id = data[0];
         }
 
-        std::vector<uint8_t> payload(data, data + length);
-        uint16_t key = (actual_type << 8) | actual_id;
-        _cached_reports[key] = {actual_id, actual_type, payload};
+        cache_report(actual_id, actual_type, data, length);
 
         if (_driver) {
             _driver->decodeReport(this, actual_id, actual_type, data, length, _ups_data);
