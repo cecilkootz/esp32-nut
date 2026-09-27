@@ -6,12 +6,15 @@
 #include "core/config_manager.h"
 #include "USBHostUPS.h"
 
+class AppNetworkManager;
+
 class WebConfigServer {
 public:
     WebConfigServer(ConfigManager& config_mgr);
     void begin(bool isAPMode);
     void loop();
     void setUPS(USBHostUPS* ups);
+    void setNetwork(AppNetworkManager* network);
 
 private:
     WebServer server;
@@ -33,6 +36,7 @@ private:
     bool should_restart = false;
     unsigned long restart_request_time = 0;
     USBHostUPS* usb_ups = nullptr;
+    AppNetworkManager* network_mgr = nullptr;
 };
 
 #endif // WEB_CONFIG_SERVER_H

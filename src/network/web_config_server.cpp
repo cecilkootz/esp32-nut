@@ -5,6 +5,7 @@
 #include "core/app_logger.h"
 #include "core/device_id.h"
 #include "core/memory_stats.h"
+#include "network/network_manager.h"
 #include "network/web_assets.h"
 #include <Update.h>
 
@@ -105,6 +106,10 @@ void WebConfigServer::loop() {
 
 void WebConfigServer::setUPS(USBHostUPS* ups) {
     usb_ups = ups;
+}
+
+void WebConfigServer::setNetwork(AppNetworkManager* network) {
+    network_mgr = network;
 }
 
 void WebConfigServer::handleConnect() {
@@ -221,7 +226,17 @@ void WebConfigServer::handleSystemStatus() {
     } else {
         wifi_status_str = "Connecting";
     }
-    doc["wifi"]["status"] = wifi_status_str;
+    JsonObject wifi = doc["wifi"].to<JsonObject>();
+    wifi["status"] = wifi_status_str;
+    if (network_mgr && !is_ap_mode) {
+        uint32_t disconnects = network_mgr->disconnectCount();
+        wifi["disconnects"] = disconnects;
+        if (disconnects > 0) {
+            wifi["last_disconnect_reason"] = network_mgr->lastDisconnectReasonName();
+            wifi["last_disconnect_code"] = network_mgr->lastDisconnectReason();
+            wifi["last_disconnect_ms"] = network_mgr->lastDisconnectMillis();
+        }
+    }
     
     // UPS status
     String ups_status_str = "Disconnected";
