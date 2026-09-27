@@ -80,7 +80,7 @@ void setup() {
 
     // Inizializzazione della libreria USBHostUPS (sempre attiva)
     usb_ups.setLogCallback([](const char* level, const char* msg) {
-        AppLogger::log(level, msg);
+        AppLogger::log(level, "%s", msg);
     });
 
     // Delay USB host initialization on cold boot to allow the UPS USB interface to stabilize

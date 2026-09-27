@@ -4,11 +4,13 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
+// Plain data so a slot is copied under a lock without touching the heap.
+// msg is truncated; the serial output keeps the full line.
 struct LogMessage {
     uint32_t id;
     unsigned long time;
-    String level;
-    String msg;
+    char level[8];
+    char msg[128];
 };
 
 class AppLogger {
@@ -20,6 +22,8 @@ public:
     static String getLogsJSON();
 
 private:
+    static void emit(const char* level, const char* msg);
+
     static LogMessage logBuffer[MAX_LOGS];
     static int head;
     static int count;
