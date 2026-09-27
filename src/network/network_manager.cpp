@@ -37,6 +37,11 @@ void AppNetworkManager::begin(const String& ssid, const String& password) {
     // mains/UPS power the saving isn't worth that.
     WiFi.setSleep(false);
     WiFi.setAutoReconnect(true); // Consente all'ESP32 di gestire le riconnessioni a basso livello
+    // The default fast scan joins the first AP that answers for the SSID and the
+    // station never roams, so on a multi-AP network that choice would hold until
+    // the link drops. WiFi.begin() copies both settings into the station config.
+    WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+    WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
     
     AppLogger::log("INFO", "[NETWORK] Connecting to SSID: %s...\n", m_ssid.c_str());
     WiFi.begin(m_ssid.c_str(), m_password.c_str());
