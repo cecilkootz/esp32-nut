@@ -30,6 +30,31 @@ public:
     }
 };
 
+#ifndef PIO_UNIT_TESTING
+// Stops forwarding after a short write, which NetworkClient returns after 10 s
+// without progress or once the connection has failed.
+class ClientWriter : public Print {
+public:
+    explicit ClientWriter(Print& client) : _client(client) {}
+
+    bool shortWrite = false;
+
+    size_t write(uint8_t c) override {
+        return write(&c, 1);
+    }
+
+    size_t write(const uint8_t* buf, size_t size) override {
+        if (shortWrite) return 0;
+        size_t sent = _client.write(buf, size);
+        if (sent < size) shortWrite = true;
+        return sent;
+    }
+
+private:
+    Print& _client;
+};
+#endif
+
 }  // namespace
 
 NUTServer::NUTServer() : 
@@ -170,7 +195,7 @@ void NUTServer::loop() {
             }
 
             // Leggi dati disponibili dal buffer del client
-            for (int b = 0; b < 128 && _clients[i].available(); b++) {
+            for (int b = 0; b < 128 && _clientActive[i] && _clients[i].available(); b++) {
                 char c = _clients[i].read();
                 _clientLastActivity[i] = millis(); // Resetta il timer di inattività
                 
@@ -192,7 +217,14 @@ void NUTServer::loop() {
 
 void NUTServer::handleCommand(int slot, const String& cmdLine) {
 #ifndef PIO_UNIT_TESTING
-    processCommand(_clients[slot], slot, cmdLine);
+    ClientWriter client(_clients[slot]);
+    processCommand(client, slot, cmdLine);
+    // Close now: each command the peer queued before it stopped reading would
+    // cost another 10 s. LOGOUT has already closed the session itself.
+    if (client.shortWrite && _clientActive[slot]) {
+        Serial.printf("[NUTServer] Write to slot %d fell short. Disconnecting.\n", slot);
+        closeSession(slot);
+    }
 #endif
 }
 
