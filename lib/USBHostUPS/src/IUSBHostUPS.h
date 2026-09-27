@@ -46,6 +46,9 @@ public:
     virtual String getActiveBeeperPath() const = 0;
     virtual uint32_t getQuirks() const = 0;
     virtual bool isControlPending() const = 0;
+    // True when this report is currently arriving unsolicited on the interrupt
+    // endpoint, so polling it over the control pipe adds nothing.
+    virtual bool isInterruptReport(uint8_t report_id) const { return false; }
     virtual bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) = 0;
     virtual bool requestStringDescriptor(uint8_t string_index) = 0;
     virtual uint16_t getVID() const { return 0; }

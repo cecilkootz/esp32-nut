@@ -18,6 +18,7 @@
 #include "PowercomDriver.h"
 #include "GenericDriver.h"
 #include "OpenUPSDriver.h"
+#include "GoldenMateDriver.h"
 
 class ReplayMockHost : public IUSBHostUPS {
 public:
@@ -34,8 +35,7 @@ public:
     bool setBeeper(bool) override { return true; }
     bool isConnected() const override { return true; }
 
-    HIDParser _hid_parser;
-    const HIDParser* getHIDParser() const override { return &_hid_parser; }
+    const HIDParser* getHIDParser() const override { return &_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _parser.getUsages(); }
     const HIDUsageDef* getUsageDef(uint32_t usage) const override { return _parser.getUsageDef(usage); }
     String getActiveBeeperPath() const override {
@@ -164,6 +164,10 @@ public:
                 break;
             case 0x04D8:
                 driver = new OpenUPSDriver();
+                break;
+            case 0x075D:
+                driver = (pid == 0x0300) ? static_cast<IUPSDriver*>(new GoldenMateDriver())
+                                         : static_cast<IUPSDriver*>(new GenericDriver());
                 break;
             default:
                 driver = new GenericDriver();

@@ -84,7 +84,9 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                         for (uint16_t pair : rids) {
                             if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
                         }
-                        if (has_feature) {
+                        // Polling a report the interrupt endpoint is already
+                        // pushing only adds a chance to decode a bad response.
+                        if (has_feature || host->isInterruptReport(id)) {
                             it = rids.erase(it);
                             continue;
                         }
@@ -279,8 +281,13 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         if (u.report_id != report_id || u.report_type != report_type) continue;
         for (const auto& m : mappings) {
             if (strcmp(u.path, m.path) == 0) {
-                double val = HIDParser::extractUsage(&u, report_id, data, length);
-                m.apply(this, ups_data, val, &u);
+                double val;
+                // A report that does not carry this field must leave the previous
+                // reading alone; writing the extractor's zero would publish a
+                // mismatched or truncated report as a real measurement.
+                if (HIDParser::tryExtractUsage(&u, report_id, data, length, val)) {
+                    m.apply(this, ups_data, val, &u);
+                }
                 break;
             }
         }

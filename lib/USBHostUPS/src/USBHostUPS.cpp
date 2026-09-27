@@ -6,6 +6,7 @@
 #include "EatonDriver.h"
 #include "CyberPowerDriver.h"
 #include "OpenUPSDriver.h"
+#include "GoldenMateDriver.h"
 #include <ArduinoJson.h>
 
 #ifndef FIRMWARE_VERSION
@@ -129,14 +130,22 @@ void USBHostUPS::handle_interface_event(hid_host_device_handle_t hid_device_hand
         uint8_t data[256];
         if (hid_host_device_get_raw_input_report_data(hid_device_handle, data, sizeof(data), &length) == ESP_OK) {
             uint8_t r_id = (length > 0) ? data[0] : 0;
-            char dbg[128];
-            snprintf(dbg, sizeof(dbg), "INPUT_REPORT: id=%d, len=%d", r_id, length);
-            if (_log_cb) _log_cb("INFO", dbg);
+            // This fires on every interrupt report, roughly once a second, and the
+            // log is a 50-entry ring: logging each one buries everything else
+            // within a minute. Report the stream's shape only when it changes.
+            if (r_id != _last_logged_interrupt_id || length != _last_logged_interrupt_len) {
+                _last_logged_interrupt_id = r_id;
+                _last_logged_interrupt_len = length;
+                char dbg[128];
+                snprintf(dbg, sizeof(dbg), "INPUT_REPORT: id=%d, len=%d", r_id, length);
+                if (_log_cb) _log_cb("INFO", dbg);
+            }
 
             if (length > 0) {
                 std::vector<uint8_t> payload(data, data + length);
                 uint16_t key = (1 << 8) | r_id; // type 1 = INPUT
                 _cached_reports[key] = {r_id, 1, payload};
+                _interrupt_report_seen[r_id] = millis();
             }
 
             _driver->decodeReport(this, r_id, 1, data, length, _ups_data);
@@ -207,6 +216,7 @@ void USBHostUPS::loop() {
                 else if (_vid == 0x0463) { _driver = new EatonDriver(); }
                 else if (_vid == 0x0d9f) { _driver = new PowercomDriver(); }
                 else if (_vid == 0x04D8 && (_pid == 0xD004 || _pid == 0xD005)) { _driver = new OpenUPSDriver(); }
+                else if (_vid == 0x075D && _pid == 0x0300) { _driver = new GoldenMateDriver(); }
                 else { _driver = new GenericDriver(); }
 
                 _quirks = 0;
@@ -239,20 +249,53 @@ void USBHostUPS::loop() {
     }
 }
 
+bool USBHostUPS::isInterruptReport(uint8_t report_id) const {
+    // Long enough to ride out a gap in a slow device's reporting, short enough
+    // that polling resumes if the endpoint goes quiet for good.
+    static const uint32_t INTERRUPT_REPORT_TTL_MS = 30000;
+    auto it = _interrupt_report_seen.find(report_id);
+    if (it == _interrupt_report_seen.end()) return false;
+    return (millis() - it->second) < INTERRUPT_REPORT_TTL_MS;
+}
+
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
     if (!_is_ready_to_poll || !_hid_dev_handle) return false;
     
     uint8_t data[256];
     size_t length = expected_length > 0 ? expected_length : 255;
-    
+
+    // Devices that answer with the wrong report also truncate it to whatever the
+    // requested report's length happens to be, so ask for the longest one.
+    bool shifted = (_quirks & QUIRK_SHIFTED_REPORTS) != 0;
+    if (shifted) {
+        uint16_t max_len = _hid_parser.getMaxExpectedLength();
+        if (max_len > length) length = max_len;
+        if (length > sizeof(data)) length = sizeof(data);
+    }
+
     esp_err_t err = hid_class_request_get_report(_hid_dev_handle, report_type, report_id, data, &length);
     if (err == ESP_OK && length > 0) {
+        uint8_t actual_id = report_id;
+        uint8_t actual_type = report_type;
+        _reports_received++;
+
+        // Trust the ID the response carries over the one we asked for; decoding it
+        // as the requested report would read every field from the wrong offsets.
+        if (shifted && report_id != 0 && data[0] != report_id) {
+            if (!_hid_parser.resolveReportType(data[0], report_type, actual_type)) {
+                _reports_discarded++;
+                return false;
+            }
+            _reports_rekeyed++;
+            actual_id = data[0];
+        }
+
         std::vector<uint8_t> payload(data, data + length);
-        uint16_t key = (report_type << 8) | report_id;
-        _cached_reports[key] = {report_id, report_type, payload};
+        uint16_t key = (actual_type << 8) | actual_id;
+        _cached_reports[key] = {actual_id, actual_type, payload};
 
         if (_driver) {
-            _driver->decodeReport(this, report_id, report_type, data, length, _ups_data);
+            _driver->decodeReport(this, actual_id, actual_type, data, length, _ups_data);
         }
         return true;
     } else {
@@ -389,6 +432,12 @@ String USBHostUPS::dumpUSBDiagnostics() {
         doc["quirks"] = _quirks;
         doc["driver"] = _driver ? _driver->getDriverName() : "None";
 
+        JsonObject counters = doc["report_counters"].to<JsonObject>();
+        counters["received"] = _reports_received;
+        counters["rekeyed"] = _reports_rekeyed;
+        counters["discarded"] = _reports_discarded;
+        counters["uptime_ms"] = millis();
+
         JsonArray scenarios = doc["scenarios"].to<JsonArray>();
         JsonObject scenario = scenarios.add<JsonObject>();
         scenario["description"] = "Live ESP32 dump";
@@ -454,5 +503,4 @@ void USBHostUPS::populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_in
     wcstombs(buf, dev_info.iSerialNumber, sizeof(buf));
     if (String(buf).length() > 0 && String(buf) != "Blank") ups_data.set("ups.serial", String(buf));
 }
-
 

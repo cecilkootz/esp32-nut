@@ -53,6 +53,7 @@ public:
     String getActiveBeeperPath() const override;
     uint32_t getQuirks() const override { return _quirks; }
     bool isControlPending() const override { return _control_pending; }
+    bool isInterruptReport(uint8_t report_id) const override;
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) override;
     bool requestStringDescriptor(uint8_t string_index) override;
     uint16_t getVID() const override { return _vid; }
@@ -91,6 +92,20 @@ private:
     LogCallback _log_cb;
     
     std::map<uint16_t, CachedReport> _cached_reports;
+    // millis() of the last unsolicited interrupt report seen per report ID.
+    std::map<uint8_t, uint32_t> _interrupt_report_seen;
+
+    // Since boot: GET_REPORT responses received, how many carried a different
+    // report ID than requested, and how many carried an ID the descriptor does
+    // not declare. Read as a ratio; a rising rekeyed/received means the device
+    // is currently answering out of step.
+    uint32_t _reports_received = 0;
+    uint32_t _reports_rekeyed = 0;
+    uint32_t _reports_discarded = 0;
+
+    // Last interrupt report shape logged, so a steady stream stays quiet.
+    uint8_t _last_logged_interrupt_id = 0;
+    size_t _last_logged_interrupt_len = 0;
 
     uint32_t _quirks;
 };

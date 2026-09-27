@@ -200,6 +200,39 @@ void test_extract_short_report_tolerance(void) {
     TEST_ASSERT_EQUAL_FLOAT(2300.0, val);
 }
 
+void test_try_extract_distinguishes_absent_from_zero(void) {
+    HIDUsageDef def;
+    def.usage = 0x008500d0; // ACPresent
+    def.report_id = 0x01;
+    def.report_type = 3;
+    def.bit_offset = 144; // payload byte 18, as the GoldenMate descriptor declares
+    def.bit_size = 1;
+    def.exponent = 0;
+    def.unit = 0;
+    def.found = true;
+    double val = 12.0;
+
+    // Field present and clear: a real reading of 0.
+    uint8_t full[20] = { 0x01 };
+    TEST_ASSERT_TRUE(HIDParser::tryExtractUsage(&def, 0x01, full, sizeof(full), val));
+    TEST_ASSERT_EQUAL_FLOAT(0.0, val);
+
+    // Report truncated before the field ever starts: no reading at all.
+    uint8_t truncated[] = { 0x01, 33, 1, 2, 3, 4, 3 };
+    TEST_ASSERT_FALSE(HIDParser::tryExtractUsage(&def, 0x01, truncated, sizeof(truncated), val));
+
+    // Device answered with a different report than the one requested.
+    uint8_t other_report[20] = { 0x02 };
+    TEST_ASSERT_FALSE(HIDParser::tryExtractUsage(&def, 0x01, other_report, sizeof(other_report), val));
+
+    // A field that merely runs off the end is still decoded from what arrived.
+    def.bit_offset = 0;
+    def.bit_size = 32;
+    uint8_t partial[] = { 0x01, 0xFC, 0x08 };
+    TEST_ASSERT_TRUE(HIDParser::tryExtractUsage(&def, 0x01, partial, sizeof(partial), val));
+    TEST_ASSERT_EQUAL_FLOAT(2300.0, val);
+}
+
 void test_null_or_corrupted_buffer_tolerance(void) {
     HIDUsageDef def;
     def.found = true;
@@ -332,6 +365,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_extract_exponent_and_unit_scaling);
     RUN_TEST(test_report_id_mismatch_and_no_report_id);
     RUN_TEST(test_extract_short_report_tolerance);
+    RUN_TEST(test_try_extract_distinguishes_absent_from_zero);
     RUN_TEST(test_null_or_corrupted_buffer_tolerance);
     RUN_TEST(test_has_feature_beeper_control);
     RUN_TEST(test_cyberpower_br700elcd_beeper);
@@ -347,6 +381,7 @@ void setup() {
     RUN_TEST(test_extract_exponent_and_unit_scaling);
     RUN_TEST(test_report_id_mismatch_and_no_report_id);
     RUN_TEST(test_extract_short_report_tolerance);
+    RUN_TEST(test_try_extract_distinguishes_absent_from_zero);
     RUN_TEST(test_null_or_corrupted_buffer_tolerance);
     RUN_TEST(test_has_feature_beeper_control);
     RUN_TEST(test_cyberpower_br700elcd_beeper);
