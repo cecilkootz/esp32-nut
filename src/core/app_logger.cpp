@@ -6,20 +6,13 @@ int AppLogger::head = 0;
 int AppLogger::count = 0;
 uint32_t AppLogger::nextId = 1;
 
+// The loop task and the USB HID host task both log. Created during static
+// initialisation, before any task can take it.
+static StaticSemaphore_t ringLockBuffer;
+static SemaphoreHandle_t ringLock = xSemaphoreCreateMutexStatic(&ringLockBuffer);
+
 void AppLogger::log(const String& level, const String& msg) {
-    // Print to serial
-    Serial.printf("[%lu] [%s] %s\n", millis(), level.c_str(), msg.c_str());
-
-    // Add to buffer
-    logBuffer[head].id = nextId++;
-    logBuffer[head].time = millis();
-    logBuffer[head].level = level;
-    logBuffer[head].msg = msg;
-
-    head = (head + 1) % MAX_LOGS;
-    if (count < MAX_LOGS) {
-        count++;
-    }
+    emit(level.c_str(), msg.c_str());
 }
 
 void AppLogger::log(const char* level, const char* format, ...) {
@@ -29,13 +22,38 @@ void AppLogger::log(const char* level, const char* format, ...) {
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
 
-    log(String(level), String(buffer));
+    emit(level, buffer);
+}
+
+void AppLogger::emit(const char* level, const char* msg) {
+    // A String whose allocation failed has a null c_str().
+    if (!level) level = "";
+    if (!msg) msg = "";
+
+    unsigned long now = millis();
+    // Serial has its own lock; never nest it inside ours.
+    Serial.printf("[%lu] [%s] %s\n", now, level, msg);
+
+    xSemaphoreTake(ringLock, portMAX_DELAY);
+    LogMessage& slot = logBuffer[head];
+    slot.id = nextId++;
+    slot.time = now;
+    strlcpy(slot.level, level, sizeof(slot.level));
+    strlcpy(slot.msg, msg, sizeof(slot.msg));
+    head = (head + 1) % MAX_LOGS;
+    if (count < MAX_LOGS) {
+        count++;
+    }
+    xSemaphoreGive(ringLock);
 }
 
 String AppLogger::getLogsJSON() {
     JsonDocument doc;
     JsonArray array = doc.to<JsonArray>();
 
+    // Serialised after the lock is released, so the document must own its
+    // strings: ArduinoJson copies char arrays but keeps const ones by pointer.
+    xSemaphoreTake(ringLock, portMAX_DELAY);
     int startIdx = (count < MAX_LOGS) ? 0 : head;
     for (int i = 0; i < count; i++) {
         int idx = (startIdx + i) % MAX_LOGS;
@@ -45,6 +63,7 @@ String AppLogger::getLogsJSON() {
         obj["level"] = logBuffer[idx].level;
         obj["msg"] = logBuffer[idx].msg;
     }
+    xSemaphoreGive(ringLock);
 
     String output;
     serializeJson(doc, output);
