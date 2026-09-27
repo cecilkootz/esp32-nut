@@ -20,6 +20,11 @@ void EatonDriver::setup() {
     _chemStrIdx = 0;
 }
 
+// CRITICAL QUIRK (NUT): polling reports 254/255 freezes or stalls Eaton devices.
+bool EatonDriver::shouldPoll(uint8_t report_id, uint8_t) const {
+    return report_id != 254 && report_id != 255;
+}
+
 void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
@@ -55,33 +60,7 @@ void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
             } else if (_poll_step == 4) {
                 if (_slow_poll_counter == 0 && _chemStrIdx > 0 && !data.hasKey("battery.type")) host->requestStringDescriptor(_chemStrIdx);
             } else {
-                const auto& usages = host->getUsages();
-                std::vector<uint16_t> rids;
-                for (const auto& u : usages) {
-                    if (u.report_type == 2) continue; // Skip OUTPUT reports
-                    if (u.report_id == 254 || u.report_id == 255) continue; // CRITICAL QUIRK (NUT): Skip reports 254/255 for Eaton devices to prevent USB freeze/stall
-                    uint16_t pair = (u.report_type << 8) | u.report_id;
-                    bool found = false;
-                    for (uint16_t id : rids) {
-                        if (id == pair) { found = true; break; }
-                    }
-                    if (!found) rids.push_back(pair);
-                }
-                for (auto it = rids.begin(); it != rids.end(); ) {
-                    if ((*it >> 8) == 1) { // If Input report
-                        uint8_t id = *it & 0xFF;
-                        bool has_feature = false;
-                        for (uint16_t pair : rids) {
-                            if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
-                        }
-                        if (has_feature) {
-                            it = rids.erase(it);
-                            continue;
-                        }
-                    }
-                    ++it;
-                }
-                
+                const auto& rids = pollList(host);
                 int index = _poll_step - 5;
                 if (index >= 0 && index < rids.size()) {
                     uint8_t r_type = rids[index] >> 8;

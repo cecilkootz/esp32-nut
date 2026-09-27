@@ -16,6 +16,9 @@ public:
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
+protected:
+    bool shouldPoll(uint8_t report_id, uint8_t report_type) const override;
+
 private:
     uint8_t _chemStrIdx;
 };

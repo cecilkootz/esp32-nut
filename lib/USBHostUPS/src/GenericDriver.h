@@ -3,6 +3,7 @@
 
 #include "IUPSDriver.h"
 #include <Arduino.h>
+#include <vector>
 
 class GenericDriver : public IUPSDriver {
 public:
@@ -17,6 +18,14 @@ public:
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
 protected:
+    // Reports worth polling, as (type << 8) | id in descriptor order: those
+    // shouldPoll() accepts, less Output reports and Input reports that share
+    // an ID with a Feature report. The usage table is fixed per connection, so
+    // this is built on first use after setup(), which the host calls for every
+    // new descriptor.
+    const std::vector<uint16_t>& pollList(IUSBHostUPS* host);
+    virtual bool shouldPoll(uint8_t report_id, uint8_t report_type) const;
+
     uint32_t _last_poll;
     uint32_t _last_fast_poll;
     uint32_t _last_step_time;
@@ -24,6 +33,10 @@ protected:
     uint8_t _slow_poll_counter;
     String _active_beeper;
     uint8_t _batteryDateStringIndex;
+
+private:
+    std::vector<uint16_t> _poll_list;
+    bool _poll_list_ready = false;
 };
 
 #endif // GENERIC_DRIVER_H
