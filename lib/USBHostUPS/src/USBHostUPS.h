@@ -44,6 +44,7 @@ public:
 
     bool setBeeper(bool enable) override;
     bool isConnected() const override;
+    bool hasFreshData(uint32_t max_age_ms) const override;
     bool supportsBeeperToggle() const override;
     
     void setLogCallback(LogCallback cb);
@@ -124,6 +125,9 @@ private:
     std::map<uint16_t, CachedReport> _cached_reports;
     // millis() of the last unsolicited interrupt report seen per report ID.
     std::map<uint8_t, uint32_t> _interrupt_report_seen;
+    // When a report with data last reached the driver, from either endpoint.
+    bool _has_decoded_report = false;
+    uint32_t _last_decoded_ms = 0;
 
     // Since boot: GET_REPORT responses received, how many carried a different
     // report ID than requested, and how many carried an ID the descriptor does

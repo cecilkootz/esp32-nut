@@ -59,12 +59,13 @@ void test_status_multiple_alarm_flags(void) {
     TEST_ASSERT_EQUAL_STRING("OL RB OVER", UPSData::computeUPSStatusString(data).c_str());
 }
 
-void test_status_shutdown_imminent_and_comm_lost(void) {
+void test_status_shutdown_imminent_without_comm_lost_token(void) {
     UPSData data;
     data.set("ups.status.shutdown_imminent", "1");
     data.set("ups.status.comm_lost", "1");
 
-    TEST_ASSERT_EQUAL_STRING("FSD COMM_LOST", UPSData::computeUPSStatusString(data).c_str());
+    // COMM_LOST is not a NUT status token, so no client recognises it.
+    TEST_ASSERT_EQUAL_STRING("FSD", UPSData::computeUPSStatusString(data).c_str());
 }
 
 void test_status_empty_data_returns_unknown(void) {
@@ -82,7 +83,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_status_on_battery_low_battery);
     RUN_TEST(test_status_online_charging);
     RUN_TEST(test_status_multiple_alarm_flags);
-    RUN_TEST(test_status_shutdown_imminent_and_comm_lost);
+    RUN_TEST(test_status_shutdown_imminent_without_comm_lost_token);
     RUN_TEST(test_status_empty_data_returns_unknown);
     return UNITY_END();
 }
@@ -95,7 +96,7 @@ void setup() {
     RUN_TEST(test_status_on_battery_low_battery);
     RUN_TEST(test_status_online_charging);
     RUN_TEST(test_status_multiple_alarm_flags);
-    RUN_TEST(test_status_shutdown_imminent_and_comm_lost);
+    RUN_TEST(test_status_shutdown_imminent_without_comm_lost_token);
     RUN_TEST(test_status_empty_data_returns_unknown);
     UNITY_END();
 }

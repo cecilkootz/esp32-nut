@@ -207,6 +207,8 @@ void USBHostUPS::process_input_report(const InputReport& report) {
     if (length > 0) {
         cache_report(r_id, 1, data, length); // type 1 = INPUT
         _interrupt_report_seen[r_id] = millis();
+        _has_decoded_report = true;
+        _last_decoded_ms = millis();
     }
 
     _driver->decodeReport(this, r_id, 1, data, length, _ups_data);
@@ -334,6 +336,8 @@ void USBHostUPS::reset_device_state() {
     // Per device; the since-boot counters and the last descriptor stay for diagnosis.
     _cached_reports.clear();
     _interrupt_report_seen.clear();
+    _has_decoded_report = false;
+    _last_decoded_ms = 0;
     _vid = 0;
     _pid = 0;
     _quirks = 0;
@@ -389,6 +393,8 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
 
         if (_driver) {
             _driver->decodeReport(this, actual_id, actual_type, data, length, _ups_data);
+            _has_decoded_report = true;
+            _last_decoded_ms = millis();
         }
         return true;
     } else {
@@ -479,6 +485,11 @@ bool USBHostUPS::setBeeper(bool enable) {
 
 bool USBHostUPS::isConnected() const {
     return _is_ready_to_poll;
+}
+
+bool USBHostUPS::hasFreshData(uint32_t max_age_ms) const {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return isConnected() && _has_decoded_report && millis() - _last_decoded_ms <= max_age_ms;
 }
 
 String USBHostUPS::getActiveBeeperPath() const {
