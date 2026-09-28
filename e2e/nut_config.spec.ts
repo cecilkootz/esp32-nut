@@ -1,20 +1,6 @@
-import { test, expect } from '@playwright/test';
-import * as path from 'path';
+import { test, expect } from './fixtures';
 
 test.describe('NUT Configuration UI', () => {
-  test.beforeEach(async ({ page }) => {
-    // Serve static files over HTTP
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
-  });
-
   test('submits NUT credentials successfully', async ({ page }) => {
     // Intercept the connect calls
     await page.route('**/api/nut/config', async route => {
@@ -25,7 +11,7 @@ test.describe('NUT Configuration UI', () => {
       await route.fulfill({ json: { success: true } });
     });
 
-    await page.goto('http://esp32.local/');
+    await page.goto('/');
     
     // Switch to NUT tab
     await page.click('button[data-target="nut"]');

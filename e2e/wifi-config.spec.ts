@@ -1,22 +1,8 @@
-import { test, expect } from '@playwright/test';
-import * as path from 'path';
+import { test, expect } from './fixtures';
 
 test.describe('Wi-Fi Configuration UI', () => {
-  test.beforeEach(async ({ page }) => {
-    // Serve static files over HTTP to allow fetch to work without CORS/file issues
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
-  });
-
   test('renders the main interface correctly', async ({ page }) => {
-    await page.goto('http://esp32.local/');
+    await page.goto('/');
     await page.click('button[data-target=\"wifi\"]');
     
     // Verify title and headers
@@ -37,7 +23,7 @@ test.describe('Wi-Fi Configuration UI', () => {
       window.alert = () => {};
     });
 
-    await page.goto('http://esp32.local/');
+    await page.goto('/');
     await page.click('button[data-target=\"wifi\"]');
     
     // Fill SSID and password manually

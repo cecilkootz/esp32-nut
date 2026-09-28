@@ -1,21 +1,8 @@
-import { test, expect } from '@playwright/test';
-import * as path from 'path';
+import { test, expect } from './fixtures';
 
 test.describe('UPS Parameters UI', () => {
   test.beforeEach(async ({ page }) => {
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
-    await page.route('**/*ups.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/ups.css') });
-    });
-    // Mock the global config so app.js doesn't fail fetching it
+    // Mock the global config so bundle.js doesn't fail fetching it
     await page.route('**/api/config', async route => {
         await route.fulfill({ json: {} });
     });
@@ -38,7 +25,7 @@ test.describe('UPS Parameters UI', () => {
       await route.fulfill({ json: mockData });
     });
 
-    await page.goto('http://esp32.local/');
+    await page.goto('/');
 
     // Click UPS tab
     await page.click('button[data-target="ups"]');
@@ -94,7 +81,7 @@ test.describe('UPS Parameters UI', () => {
       await route.fulfill({ json: mockData });
     });
 
-    await page.goto('http://esp32.local/');
+    await page.goto('/');
     await page.click('button[data-target="ups"]');
     
     await expect(page.locator('#generic-ups-banner')).toBeVisible();
@@ -123,7 +110,7 @@ test.describe('UPS Parameters UI', () => {
       await route.fulfill({ json: mockData });
     });
 
-    await page.goto('http://esp32.local/');
+    await page.goto('/');
     await page.click('button[data-target="ups"]');
 
     // Wait for the table to render

@@ -1,29 +1,11 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import * as path from 'path';
 
 test.describe('Generate Screenshots', () => {
   test.beforeEach(async ({ page }) => {
-    // Intercetta i file statici
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*ups.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/ups.css') });
-    });
-    await page.route('**/*mobile.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/mobile.css') });
-    });
-    await page.route('http://esp32.local/logo.png', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/logo.png') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
-    await page.route('http://esp32.local/update.html', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/update.html') });
+    // update.html links placeholder stylesheets that scripts/inline_update.py fills in
+    await page.route('**/update', async route => {
+      await route.fulfill({ path: path.resolve(__dirname, '../data/www/update_inlined.html') });
     });
 
     // Mock API responses
@@ -32,9 +14,8 @@ test.describe('Generate Screenshots', () => {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          wifi_ssid: 'MyHomeNetwork',
-          nut_user: 'homeassistant',
-          nut_pass: 'secretpassword'
+          wifi: { ssid: 'MyHomeNetwork', mode: 'STA' },
+          nut: { username: 'homeassistant', ups_name: 'eaton' }
         })
       });
     });
@@ -45,7 +26,8 @@ test.describe('Generate Screenshots', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           wifi: { status: 'Connected', ip: '192.168.1.100' },
-          ups: { status: 'Eaton 3S 700' }
+          ups: { status: 'Eaton 3S 700' },
+          device_id: 'ESP32-S3-8A4F'
         })
       });
     });
@@ -62,6 +44,7 @@ test.describe('Generate Screenshots', () => {
           'input.voltage': '230.5',
           'output.voltage': '230.5',
           'ups.beeper.status': 'enabled',
+          'ups.beeper.switchable': true,
           'ups.model': 'Eaton 3S 700',
           'ups.mfr': 'EATON',
           'ups.realpower': '150'
@@ -87,10 +70,12 @@ test.describe('Generate Screenshots', () => {
   test('capture tabs', async ({ page }) => {
     // Imposta una dimensione adatta
     await page.setViewportSize({ width: 1024, height: 768 });
-    await page.goto('http://esp32.local/');
-    await page.waitForTimeout(500); // aspetta l'animazione e i dati
+    await page.goto('/');
+    await expect(page.locator('#lbl-wifi')).toHaveText('Wi-Fi: Connected');
 
     // 1. Wi-Fi Tab
+    await page.locator('.tab[data-target="wifi"]').click();
+    await page.waitForTimeout(500); // aspetta l'animazione e i dati
     await page.screenshot({ path: 'docs/images/ui-wifi.png' });
 
     // 2. NUT Tab
@@ -108,8 +93,8 @@ test.describe('Generate Screenshots', () => {
     await page.waitForTimeout(2500);
     await page.screenshot({ path: 'docs/images/ui-logs.png' });
 
-    // 5. OTA Tab (separate page usually, but in app.js it might navigate or iframe)
-    await page.goto('http://esp32.local/update.html');
+    // 5. OTA Tab, a separate page
+    await page.goto('/update');
     await page.waitForTimeout(300);
     await page.screenshot({ path: 'docs/images/ui-ota.png' });
   });

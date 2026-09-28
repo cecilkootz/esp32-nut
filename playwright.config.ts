@@ -4,9 +4,14 @@ import { defineConfig, devices } from '@playwright/test';
 // recording is configured per-run by 'archetipo e2e demo'.
 export default defineConfig({
   testDir: './e2e',
+  // Rewrites docs/images, so it runs only from playwright.screenshots.config.ts
+  testIgnore: 'screenshot.spec.ts',
   fullyParallel: true,
+  forbidOnly: !!process.env.CI,
   reporter: 'list',
   use: {
+    // Served by e2e/fixtures.ts
+    baseURL: 'http://esp32.local',
     trace: 'on-first-retry',
     video: 'off',
   },

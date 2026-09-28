@@ -1,20 +1,7 @@
-import { test, expect } from '@playwright/test';
-import * as path from 'path';
+import { test, expect } from './fixtures';
 
 test.describe('Default Tab', () => {
   test.beforeEach(async ({ page }) => {
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
-    await page.route('**/*ups.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/ups.css') });
-    });
     await page.route('**/api/config', async route => {
       await route.fulfill({ json: {} });
     });
@@ -36,7 +23,7 @@ test.describe('Default Tab', () => {
       await route.fulfill({ json: { wifi: { status: 'Connected' }, ups: { status: 'OL' } } });
     });
 
-    await page.goto('http://esp32.local/');
+    await page.goto('/');
 
     const activeTab = page.locator('.tab.active');
     await expect(activeTab).toHaveAttribute('data-target', 'ups');
