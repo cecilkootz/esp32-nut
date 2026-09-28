@@ -9,7 +9,7 @@ IMAGES := $(addprefix $(BUILD_DIR)/,bootloader.bin partitions.bin firmware.bin)
 BOOT_APP0 = $(firstword $(shell find $(or $(PLATFORMIO_CORE_DIR),$(HOME)/.platformio)/packages -path '*/tools/partitions/boot_app0.bin' 2>/dev/null))
 
 .DEFAULT_GOAL := help
-.PHONY: help build site serve
+.PHONY: help build test site serve
 
 help: ## Show this help
 	@echo "Usage: make <target> [VAR=value]"
@@ -28,6 +28,12 @@ help: ## Show this help
 
 build: ## Build the firmware (OTA image: .pio/build/<ENV>/firmware.bin)
 	PLATFORMIO_BUILD_FLAGS='-DFIRMWARE_VERSION=\"$(VERSION)\"' pio run -e $(ENV)
+
+# platformio.ini pulls in MinGW for Windows hosts; elsewhere the system compiler builds the tests.
+test: ## Run the unit tests on this computer
+	@mkdir -p .pio
+	sed '/toolchain-gccmingw32/d' platformio.ini > .pio/native.ini
+	pio test -e native -c .pio/native.ini
 
 site: build ## Build the web installer into .pio/build/<ENV>/web-installer
 	@test -n "$(BOOT_APP0)" || { echo "boot_app0.bin not found in the PlatformIO packages" >&2; exit 1; }
