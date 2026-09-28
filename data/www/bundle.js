@@ -238,6 +238,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (pageTitle) {
                 pageTitle.textContent = tab.textContent.trim();
             }
+
+            if (target === 'logs') {
+                fetchLogs();
+            }
         });
     });
 
