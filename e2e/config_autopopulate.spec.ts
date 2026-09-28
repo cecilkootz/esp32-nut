@@ -41,7 +41,7 @@ test.describe('Config Auto-populate', () => {
                     mode: "AP"
                 },
                 nut: {
-                    username: ""
+                    username: "mockadmin"
                 }
             };
             await route.fulfill({ json });
@@ -50,6 +50,9 @@ test.describe('Config Auto-populate', () => {
         // Navigate to the app
         await page.goto('/');
     await page.click('button[data-target=\"wifi\"]');
+
+        // The NUT username shows the config was applied, so the empty SSID is not a race
+        await expect(page.locator('#nut-username')).toHaveValue('mockadmin');
 
         // Verify SSID field remains empty
         const ssidInput = page.locator('#ssid');
