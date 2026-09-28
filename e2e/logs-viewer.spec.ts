@@ -17,6 +17,10 @@ test.describe('System Logs View', () => {
       }
     });
 
+    // Timers fire only when the test runs the clock, so auto-refresh can't load the logs
+    await page.clock.install({ time: 0 });
+    await page.clock.pauseAt(0);
+
     // 1. Navigate to /
     await page.goto('/');
 
@@ -32,6 +36,24 @@ test.describe('System Logs View', () => {
     // Verify the correct class is applied to the log line (e.g., span containing the log)
     const logLine = page.locator('.terminal-line', { hasText: 'Mocked warning message' });
     await expect(logLine.locator('.terminal-level-warn')).toBeVisible();
+  });
+
+  test('should append new logs on each auto-refresh', async ({ page }) => {
+    const logs = [{ id: 1, time: 1000, level: 'INFO', msg: 'First message' }];
+    await page.route('**/api/logs', route => route.fulfill({ json: logs }));
+
+    await page.clock.install({ time: 0 });
+    await page.clock.pauseAt(0);
+    await page.goto('/');
+    await page.click('[data-target="logs"]');
+
+    const terminalOutput = page.locator('#terminal-output');
+    await expect(terminalOutput).toContainText('First message');
+
+    logs.push({ id: 2, time: 3000, level: 'INFO', msg: 'Second message' });
+    await page.clock.runFor(2000);
+    await expect(terminalOutput).toContainText('Second message');
+    await expect(page.locator('.terminal-line', { hasText: 'First message' })).toHaveCount(1);
   });
 
   test('should pause and resume auto-refresh', async ({ page }) => {
