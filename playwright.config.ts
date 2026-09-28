@@ -7,6 +7,7 @@ export default defineConfig({
   // Rewrites docs/images, so it runs only from playwright.screenshots.config.ts
   testIgnore: 'screenshot.spec.ts',
   fullyParallel: true,
+  forbidOnly: !!process.env.CI,
   reporter: 'list',
   use: {
     // Served by e2e/fixtures.ts
