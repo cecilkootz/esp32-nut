@@ -1,19 +1,6 @@
-import { test, expect } from '@playwright/test';
-import * as path from 'path';
+import { test, expect } from './fixtures';
 
 test.describe('System Logs View', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
-  });
-
   test('should display mocked system logs in the terminal', async ({ page }) => {
     // Intercept the API call to /api/logs
     await page.route('**/api/logs', async (route) => {
@@ -26,12 +13,12 @@ test.describe('System Logs View', () => {
           ])
         });
       } else {
-        await route.continue();
+        await route.fallback();
       }
     });
 
     // 1. Navigate to /
-    await page.goto('http://esp32.local/');
+    await page.goto('/');
 
     // 2. Click on the "System Logs" tab
     await page.click('[data-target="logs"]');
@@ -49,7 +36,7 @@ test.describe('System Logs View', () => {
 
   test('should pause and resume auto-refresh', async ({ page }) => {
     // 1. Navigate to /
-    await page.goto('http://esp32.local/');
+    await page.goto('/');
 
     // 2. Click on the "System Logs" tab
     await page.click('[data-target="logs"]');
@@ -87,7 +74,7 @@ test.describe('System Logs View', () => {
       });
     });
 
-    await page.goto('http://esp32.local/');
+    await page.goto('/');
     await page.click('[data-target="logs"]');
 
     const btnExportUsb = page.locator('#link-export-usb');

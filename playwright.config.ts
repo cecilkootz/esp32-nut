@@ -9,6 +9,8 @@ export default defineConfig({
   fullyParallel: true,
   reporter: 'list',
   use: {
+    // Served by e2e/fixtures.ts
+    baseURL: 'http://esp32.local',
     trace: 'on-first-retry',
     video: 'off',
   },

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -21,29 +21,8 @@ test.describe('OTA Update Flow', () => {
     } catch(e) {}
   });
 
-  test.beforeEach(async ({ page }) => {
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('http://esp32.local/update', async route => {
-      if (route.request().method() === 'GET') {
-        await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/update.html') });
-      } else {
-        await route.continue();
-      }
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
-  });
-
   test('should navigate to OTA page from index', async ({ page }) => {
-    // We can't really navigate to OTA from index without mocking the HTML first 
-    // unless we use http://esp32.local and intercept it. But let's just use absolute URL
-    await page.goto('http://esp32.local/');
+    await page.goto('/');
     
     // Clicca sul tab OTA
     await page.click('button[data-target="ota"]');
@@ -53,7 +32,7 @@ test.describe('OTA Update Flow', () => {
   });
 
   test('should load OTA page and have upload elements', async ({ page }) => {
-    await page.goto('http://esp32.local/update');
+    await page.goto('/update');
     
     await expect(page.locator('h2')).toContainText('OTA');
     await expect(page.locator('#fileInput')).toBeAttached();
@@ -61,7 +40,7 @@ test.describe('OTA Update Flow', () => {
   });
 
   test('demo__user-uploads-firmware', async ({ page }) => {
-    await page.goto('http://esp32.local/update');
+    await page.goto('/update');
 
     // Assicura che la richiesta OTA venga intercettata per non fallire sul backend inesistente o restituire OK fittizio
     await page.route('**/update', route => {
@@ -72,7 +51,7 @@ test.describe('OTA Update Flow', () => {
           body: 'OK',
         });
       } else {
-        route.continue();
+        route.fallback();
       }
     });
 

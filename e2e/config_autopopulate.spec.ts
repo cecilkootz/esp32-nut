@@ -1,20 +1,6 @@
-import { test, expect } from '@playwright/test';
-import * as path from 'path';
+import { test, expect } from './fixtures';
 
 test.describe('Config Auto-populate', () => {
-  test.beforeEach(async ({ page }) => {
-    // Serve static files over HTTP
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
-  });
-
     test('should pre-populate SSID and NUT username from /api/config', async ({ page }) => {
         // Mock the /api/config response
         await page.route('**/api/config', async route => {
@@ -31,7 +17,7 @@ test.describe('Config Auto-populate', () => {
         });
 
         // Navigate to the app
-        await page.goto('http://esp32.local/');
+        await page.goto('/');
     await page.click('button[data-target=\"wifi\"]');
 
         // Verify SSID field is populated
@@ -62,7 +48,7 @@ test.describe('Config Auto-populate', () => {
         });
 
         // Navigate to the app
-        await page.goto('http://esp32.local/');
+        await page.goto('/');
     await page.click('button[data-target=\"wifi\"]');
 
         // Verify SSID field remains empty
