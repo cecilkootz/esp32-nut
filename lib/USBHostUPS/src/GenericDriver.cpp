@@ -205,6 +205,12 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         { "UPS.PowerSummary.ShutdownImminent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.shutdown_imminent", v != 0 ? "1" : "0"); } },
         { "UPS.PowerSummary.PresentStatus.CommunicationLost", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.comm_lost", v != 0 ? "1" : "0"); } },
         { "UPS.PowerSummary.CommunicationLost", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.comm_lost", v != 0 ? "1" : "0"); } },
+        // Standard PresentStatus flags rendered by computeUPSStatusString().
+        // BatteryPresent is inverted, as upstream nobattery_info.
+        { "UPS.PowerSummary.PresentStatus.BatteryPresent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.no_battery", v == 0 ? "1" : "0"); } },
+        { "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.remaining_time_limit_expired", v != 0 ? "1" : "0"); } },
+        { "UPS.PowerSummary.PresentStatus.FullyCharged", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.fully_charged", v != 0 ? "1" : "0"); } },
+        { "UPS.PowerSummary.PresentStatus.FullyDischarged", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.depleted", v != 0 ? "1" : "0"); } },
         
         { "UPS.PowerConverter.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
         { "UPS.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },

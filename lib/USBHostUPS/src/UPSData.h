@@ -90,18 +90,40 @@ public:
         bool onBattery = d.hasKey("ups.status.discharging") && discharging;
         bool online = hasAc ? (acPresent && !onBattery)
                             : (d.hasKey("ups.status.good") && good && !onBattery);
+        // Extended PresentStatus flags are internal bits in usbhid-ups, exactly
+        // like lowbatt/dischrg/chrg: ups_status_set() derives standard NUT tokens
+        // from them and never publishes the raw flags. We mirror that here.
+        bool depleted = d.getBool("ups.status.depleted");
+        bool timeLimitExpired = d.getBool("ups.status.remaining_time_limit_expired");
+        bool noBattery = d.getBool("ups.status.no_battery");
+
         if (online) status += "OL ";
         if (onBattery || (hasAc && !acPresent)) status += "OB ";
-        if (onBattery) status += "DISCHRG "; // from the Discharging usage, as usbhid-ups
-        if (d.getBool("ups.status.battery_low")) status += "LB ";
-        
-        if (d.hasKey("ups.status.charging") && charging && !(batteryCharge == 100.0f && d.hasKey("ups.status.ac_present") && acPresent)) status += "CHRG ";
-        
-        if (d.getBool("ups.status.replace_battery")) status += "RB ";
+        // DEPLETED suppresses DISCHRG, as upstream: DISCHRG && !DEPLETED.
+        if (onBattery && !depleted) status += "DISCHRG "; // from the Discharging usage, as usbhid-ups
+        // LB covers lowbatt and timelimitexp, as upstream
+        // (LOWBATT | TIMELIMITEXP | SHUTDOWNIMM). ShutdownImminent still renders
+        // as FSD here instead of contributing to LB; issue #65 aligns that.
+        if (d.getBool("ups.status.battery_low") || timeLimitExpired) status += "LB ";
+
+        // CHRG is qualified by FullyCharged when the device reports it: present
+        // and false (notfullycharged) shows CHRG, present and true hides it.
+        // Absent, fall back to battery.charge in (0, 100), as upstream. The flag
+        // only qualifies an active charging state, it does not create one.
+        if (d.hasKey("ups.status.charging") && charging) {
+            if (d.hasKey("ups.status.fully_charged")) {
+                if (!d.getBool("ups.status.fully_charged")) status += "CHRG ";
+            } else if (batteryCharge > 0.0f && batteryCharge < 100.0f) {
+                status += "CHRG ";
+            }
+        }
+
+        // RB covers replacebatt and nobattery, as upstream (REPLACEBATT | NOBATTERY).
+        if (d.getBool("ups.status.replace_battery") || noBattery) status += "RB ";
         if (d.getBool("ups.status.overload")) status += "OVER ";
         if (d.getBool("ups.status.shutdown_imminent")) status += "FSD ";
         if (d.getBool("ups.status.comm_lost")) status += "COMM_LOST ";
-        
+
         if (status.length() == 0) status = "Unknown";
         status.trim();
         return status;

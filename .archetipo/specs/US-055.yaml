@@ -1,0 +1,64 @@
+schema: archetipo/spec/v2
+code: US-055
+title: Derive standard NUT status tokens from standard HID PresentStatus flags
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: LOW
+points: 3
+status: REVIEW
+body: |-
+  #### US-055: Derive standard NUT status tokens from standard HID PresentStatus flags
+
+  **Epic:** EP-001 | **Priority:** LOW | **Points:** 3 | **Status:** REVIEW
+  **Blocked by:** -
+
+  **User Story**
+  As a NUT client user,
+  I want the firmware to derive the standard `ups.status` tokens (`LB`, `RB`, `CHRG`, `DISCHRG`) from the standard HID PDC PresentStatus flags (`nobattery`, `depleted`, `timelimitexp`, `fullycharged`/`notfullycharged`) with the same semantics as upstream `usbhid-ups` `ups_status_set()`,
+  so that `upsmon`, Home Assistant and other clients see the same status as upstream NUT on any supported device that reports them.
+
+  **Demonstrates**
+  After implementing this spec, a device reporting `RemainingTimeLimitExpired = 1` shows `LB` (with `OL`, or `OB DISCHRG LB` while discharging); a device reporting `FullyDischarged = 1` shows `OB` without `DISCHRG`; a device reporting `BatteryPresent = 0` shows `RB`; and a device reporting `FullyCharged` uses it to decide `CHRG` (`FullyCharged = 1` hides `CHRG`, `0` shows it, absent falls back to `battery.charge` in `(0, 100)`). Devices that do not report these usages are unchanged.
+
+  **Acceptance Criteria**
+  - [x] `GenericDriver` maps the four standard usages to internal flags: `UPS.PowerSummary.PresentStatus.BatteryPresent` → `ups.status.no_battery` (inverted, as upstream `nobattery_info`), `FullyDischarged` → `ups.status.depleted`, `RemainingTimeLimitExpired` → `ups.status.remaining_time_limit_expired`, `FullyCharged` → `ups.status.fully_charged`.
+  - [x] `UPSData::computeUPSStatusString()` derives standard tokens with the semantics of upstream `ups_status_set()` and never publishes the raw flags: `remaining_time_limit_expired` adds `LB` (together with `battery_low`); `depleted` suppresses `DISCHRG`; `no_battery` adds `RB` (together with `replace_battery`); `fully_charged` present and false (`notfullycharged`) → `CHRG`, present and true (`fullycharged`) → no `CHRG`, absent → fall back to `battery.charge` in `(0, 100)`.
+  - [x] `fully_charged` only qualifies an active charging state (the `ups.status.charging` flag), it does not create `CHRG` on its own, matching upstream.
+  - [x] `shutdown_imminent` continues to render `FSD` here instead of contributing to `LB`; aligning it with upstream is issue #65 and is intentionally out of scope.
+  - [x] `OpenUPSDriver` (WalleCube / OpenUPS, `04d8:d004`/`04d8:d005`) drops `ups.status.no_battery`: `BatteryPresent` is unreliable across units and firmware (the esp32-nut#26 unit recorded in the W150 fixture reports 0, networkupstools/nut#3246 and #3582 report 1) and the battery is internal, so the W150 fixture stays `"OL"`.
+  - [x] `test/test_ups_status` and `test/test_generic_driver` cover each derived token, the `DISCHRG` suppression, the `CHRG` qualification and fallback, the not-charging guard, and the inverted `BatteryPresent`; all existing status tests stay green.
+  - [x] The full native suite (`pio test -e native`) is re-run and every affected fixture is updated.
+
+  **Device support**
+  These usages are standard HID PDC and are mapped by several upstream subdrivers. The table below was derived by parsing the raw `report_descriptor_hex` of every checked-in fixture (`test/fixtures/`) and cross-checking the matching upstream subdriver. The last column lists the standard tokens the flags yield when active:
+
+  | Vendor / driver | Models with fixture data | PresentStatus usages found | Derived tokens when active |
+  |---|---|---|---|
+  | APC (`APCDriver`) | Back-UPS CS 500, CS 750-RS, BX1500G, XS 700U, RS 900MI; Smart-UPS 750 | `BatteryPresent`, `RemainingTimeLimitExpired` | `RB`, `LB` |
+  | CyberPower (`CyberPowerDriver`) | BR700ELCD, CP1350C, CP1500EPFCLCD | `FullyCharged`, `RemainingTimeLimitExpired` | `CHRG` qualification, `LB` |
+  | WalleCube (`OpenUPSDriver`) | Smart UPS W150 | `BatteryPresent` (ignored, see below), `RemainingTimeLimitExpired` | `LB` |
+  | Powercom (`PowercomDriver`) | SPD-750U | `BatteryPresent`, `RemainingTimeLimitExpired` | `RB`, `LB` |
+  | Eaton (`EatonDriver`) | 3S, 5P | none | none (`mge-hid.c` does not map them) |
+  | EcoFlow | River 3 Plus / Delta 3 Plus | All four, per upstream `ecoflow-hid.c` | `RB`, `CHRG` qualification, `DISCHRG` suppression, `LB` |
+  | Other HID PDC (`GenericDriver`) | unknown devices | descriptor-dependent | descriptor-dependent |
+
+  Notes:
+  - EcoFlow has no driver on this branch yet: a device falls back to `GenericDriver` until the separate EcoFlow work lands (issue #61).
+  - No current fixture exposes `FullyDischarged`; the `DISCHRG` suppression stays unit-test-only.
+  - `RB` only appears when `BatteryPresent = 0` (except OpenUPS, where it is ignored) and `LB` only when `RemainingTimeLimitExpired = 1`; both are normally inactive, so most devices gain no visible token.
+  - `CHRG` qualification is the most visible change: CyberPower devices that report `FullyCharged` no longer surface a non-standard `FULLYCHARGED` token, they keep a standard `ups.status`.
+
+history:
+  - status: TODO
+    at: "2026-09-27T12:06:00Z"
+  - status: PLANNED
+    at: "2026-09-27T17:10:00Z"
+  - status: IN PROGRESS
+    at: "2026-09-27T17:20:00Z"
+  - status: REVIEW
+    at: "2026-09-27T17:30:00Z"
+  - status: IN PROGRESS
+    at: "2026-09-28T10:00:00Z"
+  - status: REVIEW
+    at: "2026-09-28T10:30:00Z"

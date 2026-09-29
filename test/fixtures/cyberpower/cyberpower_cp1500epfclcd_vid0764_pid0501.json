@@ -198,6 +198,7 @@
         }
       ],
       "expected_ups_data": {
+        "ups.status": "OL",
         "ups.mfr": "CPS",
         "ups.model": "CP1500EPFCLCD",
         "ups.serial": "redacted",
