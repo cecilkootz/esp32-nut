@@ -15,4 +15,5 @@ Benvenuto nella documentazione del progetto **esp32-nut**, organizzata seguendo 
 - [PDR (Product Decision Records)](pdr/index.md) - Requisiti di prodotto, vision e scope.
 - [Concepts](concepts/index.md) - Documentazione concettuale, architettura generale e compliance.
 - [Plans](plans/index.md) - Piani di migrazione, refactoring o sviluppo.
+- [Release Notes](releases/index.md) - Template e regole per scrivere le release notes.
 - [Issues](issues/index.md) - Tracciamento locale del contesto di issue e bug.

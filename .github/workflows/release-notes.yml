@@ -1,0 +1,58 @@
+name: Release notes
+
+# Applies docs/releases/vX.Y.Z.md to the existing GitHub release vX.Y.Z when
+# the file lands on main, so the notes can be written or fixed after the tag.
+# A file whose release does not exist yet is skipped: release.yml picks it up
+# when the tag is pushed.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/releases/v*.md'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to update from docs/releases/<tag>.md (e.g. v1.6.1)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  update-release-notes:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Update release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            FILES="docs/releases/$INPUT_TAG.md"
+          else
+            FILES=$(git diff --name-only --diff-filter=AM "$BEFORE" "$GITHUB_SHA" -- 'docs/releases/v*.md')
+          fi
+
+          for NOTES in $FILES; do
+            TAG=$(basename "$NOTES" .md)
+            if [ ! -f "$NOTES" ]; then
+              echo "::error::$NOTES not found"
+              exit 1
+            fi
+            if ! gh release view "$TAG" > /dev/null 2>&1; then
+              echo "Release $TAG does not exist yet, skipping $NOTES"
+              continue
+            fi
+            python3 scripts/release_notes.py "$NOTES" > release-body.md
+            gh release edit "$TAG" --notes-file release-body.md
+            echo "Updated release $TAG from $NOTES"
+          done
