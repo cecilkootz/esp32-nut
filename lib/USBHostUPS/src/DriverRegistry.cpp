@@ -3,6 +3,7 @@
 #include "APCDriver.h"
 #include "CyberPowerDriver.h"
 #include "EatonDriver.h"
+#include "EcoFlowDriver.h"
 #include "OpenUPSDriver.h"
 #include "PowercomDriver.h"
 
@@ -21,6 +22,7 @@ const DriverEntry DRIVERS[] = {
     { 0x051D, DriverRegistry::ANY_PID, make<APCDriver> },        // APC
     { 0x0764, DriverRegistry::ANY_PID, make<CyberPowerDriver> }, // CyberPower
     { 0x0463, DriverRegistry::ANY_PID, make<EatonDriver> },      // Eaton / MGE
+    { 0x3746, DriverRegistry::ANY_PID, make<EcoFlowDriver> },    // EcoFlow
     { 0x0D9F, DriverRegistry::ANY_PID, make<PowercomDriver> },   // Powercom
     { 0x04D8, 0xD004, make<OpenUPSDriver> },                     // OpenUPS
     { 0x04D8, 0xD005, make<OpenUPSDriver> },                     // OpenUPS2 / WalleCube

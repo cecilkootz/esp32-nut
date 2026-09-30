@@ -57,6 +57,16 @@ public:
         if (bit_size == 1) return enable ? 1 : 0;
         return enable ? 2 : 1; // Default standard HID PDC (1 = disabled, 2 = enabled)
     }
+
+    /**
+     * @brief True when the beeper can be controlled (SET_REPORT) on this device.
+     *
+     * Some devices expose an AudibleAlarmControl field but ignore the beeper
+     * commands (ecoflow-hid.c leaves them commented out for this reason). Returning
+     * false hides the toggle in the Web UI and the NUT beeper commands, while
+     * ups.beeper.status is still reported read-only.
+     */
+    virtual bool beeperControllable() const { return true; }
 };
 
 #endif // I_UPS_DRIVER_H

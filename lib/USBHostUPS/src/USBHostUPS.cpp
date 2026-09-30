@@ -657,6 +657,8 @@ bool USBHostUPS::setBeeper(bool enable) {
 
 bool USBHostUPS::setBeeperLocked(bool enable) {
     if (!_is_ready_to_poll || !_hid_dev_handle) return false;
+    // Devices that ignore the beeper commands must not be written to at all
+    if (_driver && !_driver->beeperControllable()) return false;
     if (!_link.canPoll(millis())) return false;
 
     HIDUsageDef def;
@@ -740,6 +742,10 @@ String USBHostUPS::getActiveBeeperPath() const {
 
 bool USBHostUPS::supportsBeeperToggle() const {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
+    // A device that ignores the beeper commands (e.g. EcoFlow) still reports
+    // ups.beeper.status, but must not advertise the toggle. Checked under _mutex:
+    // handleDisconnected() deletes _driver with the same lock held.
+    if (_driver && !_driver->beeperControllable()) return false;
     return getActiveBeeperPath() != "";
 }
 

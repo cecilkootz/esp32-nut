@@ -1,0 +1,192 @@
+schema: archetipo/plan/v2
+spec_code: US-053
+body: |-
+  ## Technical Solution
+
+  Introduce `EcoFlowDriver`, a subdriver for EcoFlow USB HID UPS / portable power stations (VID `0x3746`), faithfully mirroring `nut/drivers/ecoflow-hid.c`. It inherits `GenericDriver` (ADR 0004): the base class already decodes the standard USB HID Power Device Class fields (`battery.charge`, `battery.charge.low`, `battery.voltage`, `battery.voltage.nominal`, `ups.mfr.date`, `AudibleAlarmControl`, and the PresentStatus flags behind `OL/OB/CHRG/DISCHRG/LB/RB/OVER/FSD`). The new driver therefore only adds the EcoFlow-specific mappings plus the one conversion that differs from the generic behaviour.
+
+  **ADR impact:** no new ADR. The work applies ADR 0003 (mirror the official NUT subdriver as the source of truth) and ADR 0004 (new drivers inherit `GenericDriver` and call the base `decodeReport()`).
+
+  **Key Decisions:**
+
+  - **Driver selection.** Register `{ 0x3746, DriverRegistry::ANY_PID, make<EcoFlowDriver> }` in `DriverRegistry.cpp`. Upstream claims the `0x3746:0xffff` pair, so `ANY_PID` is the faithful equivalent here.
+  - **Inheritance and override order.** `EcoFlowDriver::decodeReport()` calls `GenericDriver::decodeReport()` first, then applies its own table through `UsageMapIndex<EcoFlowDriver>`. This is what lets the EcoFlow entry for `UPS.PowerSummary.RunTimeToEmpty` overwrite the base value with the ×60 seconds conversion.
+  - **Runtime conversion.** `ecoflow-hid.c` treats `RunTimeToEmpty` as **minutes** and multiplies by 60 (`ecoflow_battery_runtime_conversion`). The base class stores the raw value, so the driver re-maps the same usage to `battery.runtime` in seconds; negative values are ignored, matching upstream returning `NULL`.
+  - **Capacity and warning mappings.** Mirror upstream `battery.capacity.nominal` (`DesignCapacity`), `battery.capacity` (`FullChargeCapacity`), `battery.charge.warning` (`WarningCapacityLimit`) and `battery.runtime.low` (`RemainingTimeLimit`) with the upstream raw-percent units (no `/3600`), because these usages are `PowerSummary` percentages on this device.
+  - **`ups.power.nominal`.** Upstream maps `UPS.Flow.[4].ConfigActivePower` to `ups.power.nominal`. This repo's `HIDParser` does not emit NUT's `[n]` collection index, so the observed path is `UPS.Flow.ConfigActivePower`; the base class also maps that path to `ups.realpower.nominal` (the `mge-hid` behaviour). Both keys therefore result, which is accepted and documented. The River 3 Plus object dump shows a single `ConfigActivePower`, so there is no ambiguity.
+  - **Chemistry string.** `iDeviceChemistry` is a USB string index, handled with the `EatonDriver::_chemStrIdx` pattern: capture the value in `decodeReport()`, request it from `collectStringRequests()` while `battery.type` is missing, and resolve it in `parseStringDescriptor()`.
+  - **Traceability.** Every mapping carries a short comment citing `drivers/ecoflow-hid.c`, per ADR 0003.
+  - **Out of scope (separate specs).** Extended status tokens (US-055), CDC enrichment (US-056), record/replay fixture (US-054) and beeper-control suppression (US-057). This plan ships HID-only support with unit tests and docs.
+
+  ## Test Strategy
+
+  Backend-only change with no new user-facing surface, so no e2e tests. Verification runs in the native unit-test environment, which links every driver — including `EcoFlowDriver.cpp` — through the `platformio.ini` `build_src_filter`.
+
+  - **New unit tests** in `test/test_ecoflow_driver/` using a mock `IUSBHostUPS` and hand-built `HIDUsageDef` entries (same pattern as `test_eaton_driver`), because the record/replay fixture is deferred to US-054:
+    - minutes→seconds conversion for `RunTimeToEmpty`, and that it overrides the base raw value;
+    - `DesignCapacity` / `FullChargeCapacity` / `WarningCapacityLimit` / `RemainingTimeLimit` mappings and units;
+    - `UPS.Flow.ConfigActivePower` → `ups.power.nominal` with the inherited `ups.realpower.nominal` present;
+    - `UPS.OutletSystem.Outlet.DelayBeforeReboot/Shutdown` → `ups.timer.reboot/shutdown`;
+    - chemistry string: index capture, request through `loop()`, and `battery.type` resolution;
+    - PresentStatus report decoding yields the expected `ups.status` via `UPSData::computeUPSStatusString()`.
+  - **Regression guard:** the full native suite (`pio test -e native`) must stay green, proving the new registry row does not affect existing vendor fixtures.
+  - **Firmware build:** `pio run -e esp32-s3-standard` must compile with the new driver.
+  - **Hardware bring-up (post-merge):** attach a River 3 Plus and confirm `battery.runtime` is in seconds and the new keys appear; this run also feeds the US-054 fixture.
+
+  ## As-built / review notes
+
+  Two review rounds after the first implementation led to these deliberate deviations from the text above; the driver and tests reflect them:
+
+  - `battery.runtime.low`: `RemainingTimeLimit` is normalized minutes -> seconds like `battery.runtime`, because NUT defines the variable in seconds while `ecoflow-hid.c` stores the raw minutes value.
+  - `battery.capacity.nominal`: the Web UI label is "(percent)", not "(Ah)". Only `EcoFlowDriver` produces this key and `DesignCapacity` is a percentage on these devices.
+  - A negative `RunTimeToEmpty` now drops `battery.runtime` instead of leaving the raw negative value that `GenericDriver` stored first.
+
+  The record/replay fixture stays deferred to US-054; hardware bring-up is post-merge.
+tasks:
+  - id: TASK-01
+    title: Add EcoFlowDriver skeleton and register VID 0x3746
+    type: Impl
+    status: DONE
+    body: |-
+      ## Description
+      Create `EcoFlowDriver` inheriting `GenericDriver` (ADR 0004) and register it so a `0x3746` device is handled by it. Only the class scaffolding and dispatch are required here; `decodeReport()` delegates to `GenericDriver`.
+
+      ## Files Involved
+      - `lib/USBHostUPS/src/EcoFlowDriver.h` — new class with `getDriverName()` returning `"EcoFlowDriver"` and overrides for `setup()`, `decodeReport()`, `collectStringRequests()`, `parseStringDescriptor()`.
+      - `lib/USBHostUPS/src/EcoFlowDriver.cpp` — minimal implementation delegating to the base class.
+      - `lib/USBHostUPS/src/DriverRegistry.cpp` — `#include "EcoFlowDriver.h"` and the `{ 0x3746, DriverRegistry::ANY_PID, make<EcoFlowDriver> }` row.
+      - `platformio.ini` — add `+<../lib/USBHostUPS/src/EcoFlowDriver.cpp>` to the `native` `build_src_filter`.
+
+      ## Done Criteria
+      - [ ] `EcoFlowDriver` compiles and `getDriverName()` returns `"EcoFlowDriver"`.
+      - [ ] `DriverRegistry::create(0x3746, 0xffff)` returns an `EcoFlowDriver`.
+      - [ ] `pio test -e native` still links and passes (existing tests).
+    ref: TASK-01
+  - id: TASK-02
+    title: Implement EcoFlow HID mappings
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Description
+      Add the EcoFlow-specific mapping table to `EcoFlowDriver::decodeReport()` after the call to `GenericDriver::decodeReport()`, mirroring `drivers/ecoflow-hid.c` with a traceability comment.
+
+      Mappings to implement:
+      - `UPS.Flow.ConfigActivePower` → `ups.power.nominal`
+      - `UPS.PowerSummary.DesignCapacity` → `battery.capacity.nominal`
+      - `UPS.PowerSummary.FullChargeCapacity` → `battery.capacity`
+      - `UPS.PowerSummary.WarningCapacityLimit` → `battery.charge.warning`
+      - `UPS.PowerSummary.RemainingTimeLimit` → `battery.runtime.low`
+      - `UPS.PowerSummary.RunTimeToEmpty` → `battery.runtime` (value × 60, skip negatives)
+      - `UPS.OutletSystem.Outlet.DelayBeforeReboot` → `ups.timer.reboot`
+      - `UPS.OutletSystem.Outlet.DelayBeforeShutdown` → `ups.timer.shutdown`
+
+      ## Files Involved
+      - `lib/USBHostUPS/src/EcoFlowDriver.cpp` — mapping table via `UsageMapIndex<EcoFlowDriver>::Mapping`.
+
+      ## Done Criteria
+      - [ ] All eight mappings above are present, each with a comment citing `ecoflow-hid.c`.
+      - [ ] `battery.runtime` is multiplied by 60 and negative values are skipped.
+      - [ ] `setup()` invalidates the mapping index.
+      - [ ] The native build compiles.
+    ref: TASK-02
+  - id: TASK-03
+    title: Resolve battery.type from the iDeviceChemistry string descriptor
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Description
+      Mirror `EatonDriver`'s chemistry handling. Capture the `UPS.PowerSummary.iDeviceChemistry` value (a USB string index) into `_chemStrIdx`, request it during a full poll while `battery.type` is missing, and set `battery.type` when that string descriptor arrives. Upstream uses `stringid_conversion` for this; the optional `experimental...ioeminformation` variable is intentionally omitted.
+
+      ## Files Involved
+      - `lib/USBHostUPS/src/EcoFlowDriver.h` — `uint8_t _chemStrIdx;`
+      - `lib/USBHostUPS/src/EcoFlowDriver.cpp` — capture in `decodeReport()`, override `collectStringRequests()`, resolve in `parseStringDescriptor()`.
+
+      ## Done Criteria
+      - [ ] `iDeviceChemistry` sets `_chemStrIdx` when its value is greater than 0.
+      - [ ] `collectStringRequests()` pushes `_chemStrIdx` only while `battery.type` is absent.
+      - [ ] The matching string descriptor sets `battery.type`, using the base UTF-16LE decoding.
+      - [ ] `setup()` resets `_chemStrIdx` to 0.
+    ref: TASK-03
+  - id: TASK-04
+    title: Unit tests for EcoFlow telemetry mappings
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Description
+      Add `test/test_ecoflow_driver/test_main.cpp` with a mock host (pattern from `test_eaton_driver`) and hand-built `HIDUsageDef` entries, covering the TASK-02 mappings.
+
+      ## Files Involved
+      - `test/test_ecoflow_driver/test_main.cpp` — new test suite.
+
+      ## Done Criteria
+      - [ ] `RunTimeToEmpty` minutes are converted to seconds (e.g. 1928 → 115680) and override the raw base value.
+      - [ ] `DesignCapacity`, `FullChargeCapacity`, `WarningCapacityLimit`, `RemainingTimeLimit` map to the expected keys and values.
+      - [ ] `UPS.Flow.ConfigActivePower` sets `ups.power.nominal`, and the inherited `ups.realpower.nominal` is also present.
+      - [ ] `UPS.OutletSystem.Outlet.DelayBeforeReboot/Shutdown` map to `ups.timer.reboot`/`ups.timer.shutdown`.
+      - [ ] `pio test -e native` runs the new suite green.
+    ref: TASK-04
+  - id: TASK-05
+    title: Unit tests for the chemistry string and status decoding
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Description
+      Extend the EcoFlow test suite to cover the string-descriptor flow and the PresentStatus → `ups.status` computation.
+
+      ## Files Involved
+      - `test/test_ecoflow_driver/test_main.cpp` — additional test cases.
+
+      ## Done Criteria
+      - [ ] Decoding `iDeviceChemistry` captures the index; `loop()` requests it; `parseStringDescriptor()` sets `battery.type`.
+      - [ ] A PresentStatus report (ACPresent / Discharging / Charging / BelowRemainingCapacityLimit / …) yields the expected `ups.status` via `UPSData::computeUPSStatusString()`.
+      - [ ] `pio test -e native` is green.
+    ref: TASK-05
+  - id: TASK-06
+    title: Document EcoFlow support and add the missing Web UI label
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Description
+      Add EcoFlow to the supported-device lists and label the one new variable that has no entry in the Web UI description map. `include/network/web_assets.h` is regenerated automatically by the pre-build `scripts/embed_web.py`.
+
+      ## Files Involved
+      - `README.md` — EcoFlow entry in the supported-devices section.
+      - `README.it.md` — same list, in Italian.
+      - `data/www/bundle.js` — add `'battery.capacity.nominal'` to `NUT_DESCRIPTIONS` (all other new keys already have labels).
+
+      ## Done Criteria
+      - [ ] `README.md` and `README.it.md` list EcoFlow River 3 Plus / Delta 3 Plus (USB HID).
+      - [ ] `battery.capacity.nominal` has a label in `NUT_DESCRIPTIONS`.
+      - [ ] No other variable introduced by this driver is missing a label (verified against the mapping table).
+    ref: TASK-06
+  - id: TASK-07
+    title: Full native suite and firmware build regression
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Description
+      Final verification that the new driver does not regress existing devices and that the target firmware builds.
+
+      ## Files Involved
+      - None (verification only).
+
+      ## Done Criteria
+      - [ ] `pio test -e native` passes all suites (existing vendor fixtures plus the new EcoFlow tests).
+      - [ ] `pio run -e esp32-s3-standard` compiles.
+      - [ ] The new registry row does not change driver selection for existing VID/PIDs (spot-check one fixture per vendor).
+    ref: TASK-07
