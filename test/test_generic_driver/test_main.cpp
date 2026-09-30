@@ -103,6 +103,20 @@ void test_unrelated_report_creates_no_extended_keys(void) {
     TEST_ASSERT_FALSE(ups_data.hasKey("ups.status.fully_charged"));
 }
 
+// Issue 67: arrotondata come il "%.0f" di mge-hid/cps-hid, non troncata.
+void test_battery_voltage_nominal_is_rounded(void) {
+    addUsage("UPS.PowerSummary.ConfigVoltage", 0x08, 3, 0, 16);
+    mockHost._usages.back().exponent = -1;
+
+    uint8_t v129[] = { 0x08, 0x81, 0x00 }; // 12.9 V
+    driver.decodeReport(&mockHost, 0x08, 3, v129, sizeof(v129), ups_data);
+    TEST_ASSERT_EQUAL_STRING("13", ups_data.get("battery.voltage.nominal").c_str());
+
+    uint8_t v240[] = { 0x08, 0xF0, 0x00 }; // 24.0 V
+    driver.decodeReport(&mockHost, 0x08, 3, v240, sizeof(v240), ups_data);
+    TEST_ASSERT_EQUAL_STRING("24", ups_data.get("battery.voltage.nominal").c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -111,6 +125,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_remaining_time_limit_expired);
     RUN_TEST(test_fully_charged_and_discharged);
     RUN_TEST(test_unrelated_report_creates_no_extended_keys);
+    RUN_TEST(test_battery_voltage_nominal_is_rounded);
     return UNITY_END();
 }
 #else
@@ -120,6 +135,7 @@ void setup() {
     RUN_TEST(test_remaining_time_limit_expired);
     RUN_TEST(test_fully_charged_and_discharged);
     RUN_TEST(test_unrelated_report_creates_no_extended_keys);
+    RUN_TEST(test_battery_voltage_nominal_is_rounded);
     UNITY_END();
 }
 void loop() {}

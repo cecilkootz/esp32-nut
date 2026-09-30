@@ -4,6 +4,7 @@
 #include "HIDUsages.h"
 #include "Quirks.h"
 #include <algorithm>
+#include <cmath>
 
 /**
  * @brief Generic HID UPS Driver Implementation
@@ -308,8 +309,10 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         
         // Tensione nominale della batteria, non della rete: così in tutti i sottodriver NUT
         // (apc-hid, cps-hid, mge-hid, ...). Issue 48: su un APC scriveva 12 in input.voltage.nominal.
-        { "UPS.PowerSummary.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String((int)v)); } },
-        { "UPS.Battery.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String((int)v)); } },
+        // Arrotondata come il "%.0f" di mge-hid/cps-hid/powercom-hid (lrint: pari sui .5, come printf),
+        // non troncata (issue 67); i driver il cui sottodriver NUT usa "%.1f" la riscrivono con un decimale.
+        { "UPS.PowerSummary.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String(lrint(v))); } },
+        { "UPS.Battery.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String(lrint(v))); } },
         { "UPS.Flow.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage.nominal", String((int)v)); } },
         { "UPS.Input.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage.nominal", String((int)v)); } },
         
