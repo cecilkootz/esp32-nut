@@ -56,5 +56,6 @@ Il file sostituisce **tutto** il testo della release: niente "What's Changed" au
 ## Release
 
 <!-- Una riga per ogni vX.Y.Z.md, dalla più recente. -->
+- [v1.7.0](v1.7.0.md) - Supporto EcoFlow (#61), letture Powercom SPD-750U (#36), token ups.status da PresentStatus (#62), battery.voltage.nominal arrotondato (#67).
 - [v1.6.1](v1.6.1.md) - Boot loop APC Back-UPS (#55), mappature APC ripristinate (#48).
 - [v1.6.0](v1.6.0.md) - Deadlock USB (#47): valori a zero o mancanti, crash e freeze; layer USB irrobustito.
