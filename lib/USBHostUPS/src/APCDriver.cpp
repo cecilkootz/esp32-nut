@@ -58,6 +58,9 @@ void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t repor
         { "UPS.APCGeneralCollection.APCDelayBeforeReboot", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.timer.reboot", String((int)v)); } },
         { "UPS.APCEnvironment.APCProbe1.Temperature", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ambient.temperature", String((v > 200.0) ? (v - 273.15) : v, 1)); } },
         { "UPS.APCEnvironment.APCProbe1.Humidity", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ambient.humidity", String(v, 1)); } },
+        // apc-hid.c: battery.voltage.nominal con "%.1f", non intero come in GenericDriver (issue 67)
+        { "UPS.Battery.ConfigVoltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String(v, 1)); } },
+        { "UPS.PowerSummary.ConfigVoltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String(v, 1)); } },
         // apc-hid.c: Back-UPS CS espone il carico solo qui (issue 48, perso nella 1.5.0)
         { "UPS.PowerConverter.PercentLoad", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
             d.set("ups.load", String((int)v));

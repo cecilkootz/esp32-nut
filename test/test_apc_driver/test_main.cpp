@@ -248,6 +248,28 @@ void test_apc_realpower_recalculated_when_config_arrives_after_load(void) {
     TEST_ASSERT_EQUAL_UINT16(210, ups_data.getFloat("ups.realpower"));
 }
 
+// Issue 67: apc-hid.c espone battery.voltage.nominal con "%.1f".
+void test_apc_battery_voltage_nominal_one_decimal(void) {
+    HIDUsageDef u;
+    u.report_id = 0x08;
+    u.report_type = 3;
+    u.bit_offset = 0;
+    u.bit_size = 16;
+    u.exponent = -2;
+    u.unit = 0;
+    strcpy(u.path, "UPS.PowerSummary.ConfigVoltage");
+    u.found = true;
+    mockHost._usages.push_back(u);
+
+    uint8_t r1200[] = { 0x08, 0xB0, 0x04 }; // 12.00 V (Back-UPS CS, issue 48)
+    driver.decodeReport(&mockHost, 0x08, 3, r1200, sizeof(r1200), ups_data);
+    TEST_ASSERT_EQUAL_STRING("12.0", ups_data.get("battery.voltage.nominal").c_str());
+
+    uint8_t r1360[] = { 0x08, 0x50, 0x05 }; // 13.60 V
+    driver.decodeReport(&mockHost, 0x08, 3, r1360, sizeof(r1360), ups_data);
+    TEST_ASSERT_EQUAL_STRING("13.6", ups_data.get("battery.voltage.nominal").c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -257,6 +279,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_load_and_real_power_calculation);
     RUN_TEST(test_apc_loop_polling_and_string_requests);
     RUN_TEST(test_apc_realpower_recalculated_when_config_arrives_after_load);
+    RUN_TEST(test_apc_battery_voltage_nominal_one_decimal);
     return UNITY_END();
 }
 #else
@@ -267,6 +290,7 @@ void setup() {
     RUN_TEST(test_apc_load_and_real_power_calculation);
     RUN_TEST(test_apc_loop_polling_and_string_requests);
     RUN_TEST(test_apc_realpower_recalculated_when_config_arrives_after_load);
+    RUN_TEST(test_apc_battery_voltage_nominal_one_decimal);
     UNITY_END();
 }
 void loop() {}

@@ -111,6 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
     'battery.voltage': 'Battery voltage (V)',
     'battery.current': 'Battery current (A)',
     'battery.capacity': 'Battery capacity (Ah)',
+    'battery.capacity.nominal': 'Nominal battery capacity (percent)',
     'battery.temperature': 'Battery temperature (degrees C)',
     'battery.voltage.nominal': 'Nominal battery voltage (V)',
     'battery.runtime': 'Battery runtime (seconds)',

@@ -1,0 +1,163 @@
+schema: archetipo/plan/v2
+spec_code: US-055
+body: |-
+  ## Technical Solution
+
+  Implement the extended PresentStatus tokens entirely in the shared layer: `GenericDriver` maps the four standard HID PDC usages to internal flags, and `UPSData::computeUPSStatusString()` renders them into `ups.status`. No vendor driver, registry, Web UI or NUT server change is needed — internal `ups.status.*` keys are already filtered out of both consumers.
+
+  **Key Decisions:**
+
+  - **Mapping home.** The usages are standard HID PDC, so they belong in `GenericDriver::decodeReport()`'s table (ADR 0004). Exact paths, verified against every checked-in fixture's report descriptor:
+    - `UPS.PowerSummary.PresentStatus.BatteryPresent` → `ups.status.no_battery` (`v == 0`, inverted like upstream `nobattery_info`)
+    - `UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired` → `ups.status.remaining_time_limit_expired` (`v != 0`)
+    - `UPS.PowerSummary.PresentStatus.FullyDischarged` → `ups.status.depleted` (`v != 0`)
+    - `UPS.PowerSummary.PresentStatus.FullyCharged` → `ups.status.fully_charged` (`v != 0`)
+  - **`UPS.PresentStatus.*` duplicates are out of scope.** Some APC (BX1500G, CS750-RS, RS900MI) and Powercom descriptors also expose `UPS.PresentStatus.BatteryPresent`/`RemainingTimeLimitExpired`, but every one of them also exposes the `PowerSummary.PresentStatus` path, so the four rows above already cover them and match the spec's acceptance criteria.
+  - **Rendering (upstream `ups_status_set()` semantics).** `computeUPSStatusString()` never publishes the raw flags; it derives standard tokens from them, as upstream `ups_status_set()` does: `remaining_time_limit_expired` adds `LB` together with `battery_low`; `depleted` suppresses `DISCHRG`; `no_battery` adds `RB` together with `replace_battery`; `fully_charged` qualifies `CHRG` while the device is charging (present and false → `CHRG`, present and true → none), falling back to `battery.charge` in `(0, 100)` when absent. `shutdown_imminent` keeps rendering `FSD` here; issue #65 aligns it with upstream's `LB`.
+  - **Global effect, assessed.** Because the mapping is shared, devices that report these usages change input:
+    - APC, Powercom: `BatteryPresent = 0` yields `RB`, and `RemainingTimeLimitExpired = 1` yields `LB`; both are normally inactive.
+    - WalleCube/OpenUPS: `BatteryPresent` is dropped in `OpenUPSDriver` (unreliable across units); `RemainingTimeLimitExpired` still yields `LB`.
+    - CyberPower: `FullyCharged` now qualifies `CHRG`, and `timelimitexp` yields `LB`.
+    - Eaton (`mge-hid.c` maps none): unchanged.
+  - **Out of scope.** Upstream tokens not covered here (`awaitingpower`, `fanfail`, `overheat`, `chargerfail`, `vrange`/`frange`, etc.) and `ups.alarm` support are not added.
+
+  ## Test Strategy
+
+  Backend-only change; `ups.status` is data rather than a new UI surface, so there are no e2e tests.
+
+  - **Mapping tests** in a new `test/test_generic_driver/` (mock `IUSBHostUPS` + hand-built `HIDUsageDef` entries, same pattern as `test_eaton_driver`): feed a PresentStatus report and assert each internal key, including the inverted `BatteryPresent`, and that an unrelated report does not create the keys.
+  - **Status-engine tests** in `test/test_ups_status`: each token alone and combined with existing tokens; the absent-vs-false distinction for `fullycharged`/`notfullycharged`; `Unknown` unchanged when no flags are present; all existing status tests stay green.
+  - **Regression:** `pio test -e native` must pass. Only the Eaton fixture asserts `ups.status` (`"OL"`) and Eaton exposes none of these usages, so no fixture expectation should change; any that does is investigated before merging.
+  - **Firmware:** `pio run -e esp32-s3-standard` must still compile.
+
+  ## As-built / review notes
+
+  The first implementation published the extended flags as raw `ups.status` tokens (`DEPLETED`, `TIMELIMITEXP`, `FULLYCHARGED`/`NOTFULLYCHARGED`, `NOBATTERY`). Review against upstream `usbhid-ups.c` showed those are internal `status_info[]` bits that `ups_status_set()` converts to standard tokens, so the code was reworked to derive `LB`/`RB`/`CHRG`/`DISCHRG` instead. Points worth recording:
+
+  - The WalleCube W150 reports `PresentStatus.BatteryPresent = 0` in its normal state, but the flag is unreliable across OpenUPS/WalleCube units and firmware (the esp32-nut#26 unit recorded in the W150 fixture reports 0, networkupstools/nut#3246 and #3582 report 1). `OpenUPSDriver` drops `ups.status.no_battery` for this family; the fixture expectation stays `"OL"` and its `notes` field documents why.
+  - CyberPower devices that report `FullyCharged` keep a standard `ups.status`: they no longer surface a non-standard `FULLYCHARGED` token. The CP1350C and CP1500EPFCLCD fixtures assert `ups.status: "OL"` end-to-end.
+  - `UPS.BatterySystem.Battery.PresentStatus.*` (where upstream `tripplite-hid.c` places `FullyCharged`/`FullyDischarged`) is intentionally not mapped: no supported fixture exposes that collection and there is no tripplite driver in this repo. Revisit only if a supported device needs it.
+
+  Verified: `pio test -e native` all green; `pio run -e esp32-s3-standard` SUCCESS.
+tasks:
+  - id: TASK-01
+    title: Map the four standard PresentStatus usages in GenericDriver
+    type: Impl
+    status: DONE
+    body: |-
+      ## Description
+      Add four rows to the mapping table in `GenericDriver::decodeReport()`, next to the existing PresentStatus rows. Each sets an internal `ups.status.*` flag; `BatteryPresent` is inverted as in upstream `nobattery_info`.
+
+      ```cpp
+      { "UPS.PowerSummary.PresentStatus.BatteryPresent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.no_battery", v == 0 ? "1" : "0"); } },
+      { "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.remaining_time_limit_expired", v != 0 ? "1" : "0"); } },
+      { "UPS.PowerSummary.PresentStatus.FullyCharged", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.fully_charged", v != 0 ? "1" : "0"); } },
+      { "UPS.PowerSummary.PresentStatus.FullyDischarged", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.depleted", v != 0 ? "1" : "0"); } },
+      ```
+
+      ## Files Involved
+      - `lib/USBHostUPS/src/GenericDriver.cpp` — four entries in the `mappings[]` table.
+
+      ## Done Criteria
+      - [ ] The four internal keys are set from the four `UPS.PowerSummary.PresentStatus.*` paths.
+      - [ ] `BatteryPresent` sets `ups.status.no_battery` to 1 when the HID value is 0.
+      - [ ] No `UPS.PresentStatus.*` variants are added (out of scope, documented in the plan).
+      - [ ] The native build compiles.
+    ref: TASK-01
+  - id: TASK-02
+    title: Derive standard tokens in computeUPSStatusString
+    type: Impl
+    status: DONE
+    body: |-
+      ## Description
+      Change `UPSData::computeUPSStatusString()` to derive standard tokens from the internal flags, mirroring upstream `ups_status_set()`:
+
+      ```cpp
+      // DEPLETED suppresses DISCHRG.
+      if (onBattery && !d.getBool("ups.status.depleted")) status += "DISCHRG ";
+      // timelimitexp joins lowbatt for LB (shutdownimm is issue #65).
+      if (d.getBool("ups.status.battery_low") || d.getBool("ups.status.remaining_time_limit_expired")) status += "LB ";
+      // CHRG is qualified by FullyCharged while charging; absent falls back to battery.charge in (0, 100).
+      if (d.hasKey("ups.status.charging") && charging) {
+          if (d.hasKey("ups.status.fully_charged")) {
+              if (!d.getBool("ups.status.fully_charged")) status += "CHRG ";
+          } else if (batteryCharge > 0.0f && batteryCharge < 100.0f) {
+              status += "CHRG ";
+          }
+      }
+      // nobattery joins replacebatt for RB.
+      if (d.getBool("ups.status.replace_battery") || d.getBool("ups.status.no_battery")) status += "RB ";
+      ```
+
+      Add short comments naming the upstream condition each derivation mirrors.
+
+      ## Files Involved
+      - `lib/USBHostUPS/src/UPSData.h` — `computeUPSStatusString()`.
+
+      ## Done Criteria
+      - [ ] `remaining_time_limit_expired` and `battery_low` both produce `LB`.
+      - [ ] `depleted` suppresses `DISCHRG`.
+      - [ ] `no_battery` produces `RB` alongside `replace_battery`.
+      - [ ] `fully_charged` present and false shows `CHRG`, present and true hides it, absent falls back to `battery.charge` in `(0, 100)`.
+      - [ ] `fully_charged` does not create `CHRG` when `ups.status.charging` is unset or false.
+      - [ ] `Unknown` is still returned when no flag is present.
+    ref: TASK-02
+  - id: TASK-03
+    title: Unit tests for the mapping in GenericDriver
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Description
+      Add `test/test_generic_driver/test_main.cpp` with a mock `IUSBHostUPS` (pattern from `test_eaton_driver`) and hand-built `HIDUsageDef` entries for the four paths, then assert the internal keys after `decodeReport()`.
+
+      ## Files Involved
+      - `test/test_generic_driver/test_main.cpp` — new test suite.
+
+      ## Done Criteria
+      - [ ] A `BatteryPresent = 0` report sets `ups.status.no_battery = 1`; a `BatteryPresent = 1` report sets it to 0.
+      - [ ] `RemainingTimeLimitExpired`, `FullyCharged`, `FullyDischarged` set their keys to 1 when set and 0 when clear.
+      - [ ] A report carrying none of the usages creates none of the keys.
+      - [ ] `pio test -e native` runs the new suite green.
+    ref: TASK-03
+  - id: TASK-04
+    title: Unit tests for the new status tokens
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Description
+      Extend `test/test_ups_status/test_main.cpp` to cover the derived tokens: `LB` from `timelimitexp`, `DISCHRG` suppression by `depleted`, `RB` from `nobattery`, and the `CHRG` qualification and fallback.
+
+      ## Files Involved
+      - `test/test_ups_status/test_main.cpp` — new test cases.
+
+      ## Done Criteria
+      - [ ] `remaining_time_limit_expired = 1` renders `LB`, alone and together with `battery_low`.
+      - [ ] `depleted = 1` suppresses `DISCHRG` while keeping `OB`.
+      - [ ] `no_battery = 1` renders `RB`; `= 0` renders nothing.
+      - [ ] `fully_charged = 0` renders `CHRG` while charging; `= 1` hides it; absent falls back to `battery.charge` in `(0, 100)`; `= 0` without charging renders nothing.
+      - [ ] All existing status tests stay green.
+    ref: TASK-04
+  - id: TASK-05
+    title: Full native regression and firmware build
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Description
+      Confirm the shared mapping does not regress existing devices or the target firmware, and that no fixture expectation changed unexpectedly.
+
+      ## Files Involved
+      - `test/fixtures/` — only if a fixture's `ups.status` expectation correctly changes.
+      - None otherwise.
+
+      ## Done Criteria
+      - [ ] `pio test -e native` passes all suites.
+      - [ ] Fixture expectations that change are explained: the CyberPower fixtures keep `OL`, and the W150 stays `OL` because `OpenUPSDriver` drops the unreliable `BatteryPresent` flag.
+      - [ ] `pio run -e esp32-s3-standard` compiles.
+    ref: TASK-05

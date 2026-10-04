@@ -1651,7 +1651,7 @@
         "ups.realpower.nominal": "415",
         "ups.load": "11",
         "ups.realpower": "45",
-        "battery.voltage.nominal": "12"
+        "battery.voltage.nominal": "12.0"
       }
     },
     {
@@ -1678,7 +1678,7 @@
       ],
       "expected_ups_data": {
         "input.voltage.nominal": "230",
-        "battery.voltage.nominal": "12"
+        "battery.voltage.nominal": "12.0"
       }
     }
   ]

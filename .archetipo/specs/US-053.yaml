@@ -1,0 +1,40 @@
+schema: archetipo/spec/v2
+code: US-053
+title: EcoFlow River 3 Plus / Delta 3 Plus UPS support via EcoFlowDriver (HID)
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 3
+status: REVIEW
+body: |-
+  #### US-053: EcoFlow River 3 Plus / Delta 3 Plus UPS support via EcoFlowDriver (HID)
+
+  **Epic:** EP-001 | **Priority:** HIGH | **Points:** 3 | **Status:** REVIEW
+  **Blocked by:** -
+
+  **User Story**
+  As a user with an EcoFlow power station (e.g. River 3 Plus or Delta 3 Plus) connected over USB,
+  I want the firmware to recognize the device (VID `0x3746`) and expose its UPS data with the same mappings and conversions as the official NUT subdriver `usbhid-ups/ecoflow-hid.c`,
+  so that the power station integrates with Home Assistant/NUT without wrong values (especially the battery runtime in seconds) and without manual configuration.
+
+  **Demonstrates**
+  After implementing this spec, plugging in an EcoFlow device (VID `0x3746`) makes the firmware instantiate `EcoFlowDriver` instead of `GenericDriver`. The "UPS telemetry" page and NUT clients show `battery.charge`, `battery.runtime` in seconds (the HID value in minutes is multiplied by 60), `battery.capacity.nominal`, `battery.capacity`, `battery.charge.warning`, `battery.runtime.low`, `battery.type` and `ups.power.nominal`. The `pio test -e native` suite passes including the new driver tests.
+
+  **Acceptance Criteria**
+  - [x] `EcoFlowDriver` inherits from `GenericDriver`, is instantiated by the `DriverRegistry` for VID `0x3746` (any PID), and calls `GenericDriver::decodeReport()` before applying its specific mappings (ADR 0004).
+  - [x] `battery.runtime` is converted from minutes to seconds (×60) as in `ecoflow-hid.c`; `battery.capacity.nominal` (`DesignCapacity`), `battery.capacity` (`FullChargeCapacity`), `battery.charge.warning` (`WarningCapacityLimit`) and `battery.runtime.low` (`RemainingTimeLimit`) are exposed with the same units as NUT.
+  - [x] `battery.type` is populated from the `UPS.PowerSummary.iDeviceChemistry` feature report resolved through a string descriptor, and `ups.power.nominal` is mapped from `UPS.Flow.ConfigActivePower` (upstream path `UPS.Flow.[4].ConfigActivePower`).
+  - [x] Mappings are traced with comments citing `drivers/ecoflow-hid.c` (ADR 0003) and no invented values or formulas are introduced.
+  - [x] The beeper is exposed read-only: `EcoFlowDriver::beeperControllable()` returns false, so the Web UI toggle and the NUT beeper commands are hidden while `ups.beeper.status` stays visible.
+  - [x] The native build and the new driver tests pass (`pio test -e native`), including the minutes→seconds, battery capacity and chemistry-string cases.
+  - [x] `README.md` and `README.it.md` list EcoFlow River 3 Plus / Delta 3 Plus as untested / community-contributed, pending a real-device `usb_diagnostics.json`.
+history:
+  - status: TODO
+    at: "2026-09-27T12:00:00Z"
+  - status: PLANNED
+    at: "2026-09-27T12:10:00Z"
+  - status: IN PROGRESS
+    at: "2026-09-27T12:20:00Z"
+  - status: REVIEW
+    at: "2026-09-27T12:30:00Z"
