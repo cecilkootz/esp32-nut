@@ -1,0 +1,33 @@
+schema: archetipo/spec/v2
+code: US-054
+title: EcoFlow record/replay fixture from a real device dump
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 2
+status: TODO
+blocked_by:
+  - US-053
+body: |-
+  #### US-054: EcoFlow record/replay fixture from a real device dump
+
+  **Epic:** EP-001 | **Priority:** MEDIUM | **Points:** 2 | **Status:** TODO
+  **Blocked by:** US-053
+
+  **User Story**
+  As a maintainer of the EcoFlow driver,
+  I want a record/replay fixture from a real EcoFlow device (or reconstructed from the upstream NUT dump) checked into `test/fixtures/ecoflow/`,
+  so that the EcoFlow mappings are protected against regressions by the same mechanism used for every other supported vendor.
+
+  **Demonstrates**
+  After implementing this spec, `pio test -e native` runs a new `test_replay_ecoflow` case that loads `test/fixtures/ecoflow/<model>_vid3746_pidffff.json`, replays its reports and asserts the expected `ups.*`/`battery.*` values, including `battery.runtime` in seconds.
+
+  **Acceptance Criteria**
+  - [ ] A fixture under `test/fixtures/ecoflow/` declares `vid: "0x3746"`, `pid: "0xFFFF"`, a `report_descriptor_hex` and at least one scenario with expected UPS values.
+  - [ ] The case is registered in `test/test_record_replay/test_main.cpp` and passes in the `native` environment.
+  - [ ] The captured descriptor contains the EcoFlow-specific paths used by `EcoFlowDriver` (at minimum `UPS.Flow.ConfigActivePower` and `UPS.PowerSummary.DesignCapacity`); if the device returns a truncated descriptor (River 3 Plus firmware quirk), that is documented next to the fixture together with a proposed quirk.
+  - [ ] The fixture provenance (the device's "Export USB Diagnostics" dump vs. reconstructed from NUT issue #2735) is documented next to the fixture.
+history:
+  - status: TODO
+    at: "2026-09-27T12:05:00Z"

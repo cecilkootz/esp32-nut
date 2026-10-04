@@ -52,6 +52,9 @@ void test_replay_cyberpower_cp1500epfclcd(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json");
 }
 
+// The W150 reports PresentStatus.BatteryPresent = 0 in its normal state, but
+// OpenUPSDriver ignores the unreliable flag, so ups.status stays OL; see the
+// fixture "notes" (US-055).
 void test_replay_openups_wallecube_w150(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json");
 }

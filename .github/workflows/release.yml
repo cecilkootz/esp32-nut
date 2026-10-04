@@ -69,10 +69,28 @@ jobs:
           cd release-pkg
           zip -r ../esp32-nut-${{ github.ref_name }}.zip *
 
+      # docs/releases/<tag>.md is optional: when the tagged commit has it, it is
+      # the release body; otherwise GitHub generates the notes from the merged PRs.
+      # Notes written after the tag are applied by release-notes.yml.
+      - name: Prepare release notes
+        id: notes
+        run: |
+          NOTES="docs/releases/${{ github.ref_name }}.md"
+          if [ -f "$NOTES" ]; then
+            python scripts/release_notes.py "$NOTES" > release-body.md
+            echo "body_path=release-body.md" >> "$GITHUB_OUTPUT"
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$NOTES not found, using GitHub generated notes"
+            echo "body_path=" >> "$GITHUB_OUTPUT"
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.body_path }}
+          generate_release_notes: ${{ steps.notes.outputs.generate }}
           files: esp32-nut-${{ github.ref_name }}.zip
 
       - name: Prepare Web Installer

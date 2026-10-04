@@ -37,6 +37,7 @@ public:
     UPSData data;
     String statusString = "OL";
     bool beeperState = true;
+    bool beeperToggleSupported = true;
     bool connected = true;
 
     void end() override {}
@@ -64,6 +65,7 @@ public:
 
     bool stale = false;
     bool isDataStale() const override { return stale; }
+    bool supportsBeeperToggle() const override { return beeperToggleSupported; }
 
     std::vector<HIDUsageDef> _mockUsages;
     HIDParser _hid_parser;
@@ -117,6 +119,7 @@ void setUp(void) {
     mockHost.data = UPSData();
     mockHost.statusString = "OL";
     mockHost.beeperState = true;
+    mockHost.beeperToggleSupported = true;
     mockHost.connected = true;
     mockHost.stale = false;
     mockHost.lockDepth = 0;
@@ -265,6 +268,23 @@ void test_instcmd_beeper(void) {
     printer.clear();
     server.processCommand(printer, 0, "INSTCMD testups invalid.cmd");
     TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", printer.getOutput().c_str());
+}
+
+// A driver that ignores the beeper commands (e.g. EcoFlow) must not expose them,
+// even though ups.beeper.status is still reported read-only.
+void test_beeper_hidden_when_not_controllable(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    mockHost.beeperToggleSupported = false;
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST CMD testups");
+    TEST_ASSERT_TRUE(printer.getOutput().find("beeper") == std::string::npos);
+
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD testups beeper.enable");
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", printer.getOutput().c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState); // unchanged
 }
 
 // Issue #47: frozen values must not be served as current (upsd behaviour)
@@ -740,6 +760,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_list_ups);
     RUN_TEST(test_get_var_compliance);
     RUN_TEST(test_instcmd_beeper);
+    RUN_TEST(test_beeper_hidden_when_not_controllable);
     RUN_TEST(test_list_client_terminates);
     RUN_TEST(test_list_cmd_unaffected_by_client);
     RUN_TEST(test_get_upsdesc_and_numlogins);
@@ -774,6 +795,7 @@ void setup() {
     RUN_TEST(test_list_ups);
     RUN_TEST(test_get_var_compliance);
     RUN_TEST(test_instcmd_beeper);
+    RUN_TEST(test_beeper_hidden_when_not_controllable);
     RUN_TEST(test_list_client_terminates);
     RUN_TEST(test_list_cmd_unaffected_by_client);
     RUN_TEST(test_get_upsdesc_and_numlogins);

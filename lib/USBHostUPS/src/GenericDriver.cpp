@@ -4,6 +4,7 @@
 #include "HIDUsages.h"
 #include "Quirks.h"
 #include <algorithm>
+#include <cmath>
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -179,7 +180,7 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
 
     if (_queue_pos >= _queue.size()) return;
     if (host->isPollingPaused()) return; // the cycle resumes where it stopped
-    if (!_step_now && (now - _last_step) < STEP_SPACING_MS) return;
+    if (!_step_now && (now - _last_step) < stepSpacingMs()) return;
 
     const PollItem item = _queue[_queue_pos++];
     _last_step = now;
@@ -214,6 +215,12 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         { "UPS.PowerSummary.ShutdownImminent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.shutdown_imminent", v != 0 ? "1" : "0"); } },
         { "UPS.PowerSummary.PresentStatus.CommunicationLost", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.comm_lost", v != 0 ? "1" : "0"); } },
         { "UPS.PowerSummary.CommunicationLost", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.comm_lost", v != 0 ? "1" : "0"); } },
+        // Standard PresentStatus flags rendered by computeUPSStatusString().
+        // BatteryPresent is inverted, as upstream nobattery_info.
+        { "UPS.PowerSummary.PresentStatus.BatteryPresent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.no_battery", v == 0 ? "1" : "0"); } },
+        { "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.remaining_time_limit_expired", v != 0 ? "1" : "0"); } },
+        { "UPS.PowerSummary.PresentStatus.FullyCharged", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.fully_charged", v != 0 ? "1" : "0"); } },
+        { "UPS.PowerSummary.PresentStatus.FullyDischarged", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.depleted", v != 0 ? "1" : "0"); } },
         
         { "UPS.PowerConverter.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
         { "UPS.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
@@ -311,8 +318,10 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         
         // Tensione nominale della batteria, non della rete: così in tutti i sottodriver NUT
         // (apc-hid, cps-hid, mge-hid, ...). Issue 48: su un APC scriveva 12 in input.voltage.nominal.
-        { "UPS.PowerSummary.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String((int)v)); } },
-        { "UPS.Battery.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String((int)v)); } },
+        // Arrotondata come il "%.0f" di mge-hid/cps-hid/powercom-hid (lrint: pari sui .5, come printf),
+        // non troncata (issue 67); i driver il cui sottodriver NUT usa "%.1f" la riscrivono con un decimale.
+        { "UPS.PowerSummary.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String(lrint(v))); } },
+        { "UPS.Battery.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String(lrint(v))); } },
         { "UPS.Flow.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage.nominal", String((int)v)); } },
         { "UPS.Input.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage.nominal", String((int)v)); } },
         

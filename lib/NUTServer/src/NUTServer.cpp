@@ -520,7 +520,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             ReplyBuffer reply;
             reply.printf("BEGIN LIST %s %s\n", subcmd.c_str(), upsName.c_str());
             if (subcmd == "CMD" && _usb_ups) {
-                if (_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
+                if (_usb_ups->supportsBeeperToggle() && _usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
                     reply.printf("CMD %s beeper.enable\n", upsName.c_str());
                     reply.printf("CMD %s beeper.disable\n", upsName.c_str());
                     reply.printf("CMD %s beeper.toggle\n", upsName.c_str());
@@ -577,7 +577,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
         }
 
         if (cmdName == "beeper.enable") {
-            if (!_usb_ups || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
+            if (!_usb_ups || !_usb_ups->supportsBeeperToggle() || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
                 client.print("ERR CMD-NOT-SUPPORTED\n");
             } else {
                 _usb_ups->setBeeper(true);
@@ -585,7 +585,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             }
             return;
         } else if (cmdName == "beeper.disable") {
-            if (!_usb_ups || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
+            if (!_usb_ups || !_usb_ups->supportsBeeperToggle() || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
                 client.print("ERR CMD-NOT-SUPPORTED\n");
             } else {
                 _usb_ups->setBeeper(false);
@@ -593,7 +593,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             }
             return;
         } else if (cmdName == "beeper.toggle") {
-            if (!_usb_ups || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
+            if (!_usb_ups || !_usb_ups->supportsBeeperToggle() || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
                 client.print("ERR CMD-NOT-SUPPORTED\n");
             } else {
                 // Read first: the data lock must not be held across setBeeper() (USBHostUPS lock order)
