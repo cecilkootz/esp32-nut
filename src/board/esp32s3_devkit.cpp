@@ -18,7 +18,7 @@ static const BoardConfig ESP32S3_DEVKIT = {
       4, { 0, 3, 45, 46 } },
     { 48, 38 },
     { 1, { { "otg", "USB OTG", 0 } } },  // single USB OTG peripheral
-    { "NUT_ESP32_Config", "12345678", true, 3, 0, NetworkMode::WIFI },
+    { "NUT_ESP32_Config", "12345678", false, 3, 0, NetworkMode::WIFI },
 };
 
 const BoardConfig& board() {
