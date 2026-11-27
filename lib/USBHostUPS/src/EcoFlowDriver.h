@@ -13,25 +13,22 @@ public:
     // ups.beeper.status readable, but do not offer or attempt the toggle.
     bool beeperControllable() const override { return false; }
 
-    EcoFlowDriver();
+    // ecoflow-hid.c leaves shutdown.reboot/shutdown.stop commented out as well (FIXME:
+    // untested): no load.* or shutdown.* commands (US-058)
+    bool shutdownCommandsSupported() const override { return false; }
+
+    // Rows of ecoflow_hid2nut (ecoflow-hid.c), NutTable.h (US-066, US-078)
+    const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::ecoflowHid2Nut(n); }
+    // genericHid2Nut() rows whose keys come from ecoflowHid2Nut() (US-078)
+    const char* const* supersededGenericPaths(size_t& n) const override;
+    // Instant commands from the HU_TYPE_CMD rows of ecoflow_hid2nut: none, they are commented
+    // out upstream (US-078)
+    const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::ecoflowHid2Nut(n); }
+    // ecoflow_format_mfr: "EcoFlow" when the device has no manufacturer string (US-078)
+    void formatDeviceStrings(UPSData& data) override;
+
+    EcoFlowDriver() = default;
     virtual ~EcoFlowDriver() = default;
-
-    void setup() override;
-    void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
-    void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
-
-protected:
-    void collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const override;
-    void onLoop(IUSBHostUPS* host, UPSData& data) override;
-
-private:
-    UsageMapIndex<EcoFlowDriver> _map;
-    uint8_t _chemStrIdx;
-    // Last value seen on UPS.OutletSystem.Outlet.DelayBeforeShutdown. Upstream maps
-    // only that usage to ups.timer.shutdown; the value is cached so the PowerSummary
-    // one can be ignored without depending on which report is decoded last.
-    bool _outletShutdownSeen;
-    String _outletShutdownTimer;
 };
 
 #endif // ECOFLOW_DRIVER_H

@@ -3,16 +3,29 @@
 
 #include <Arduino.h>
 #include <vector>
-#include "IUSBHostUPS.h"
+#include "IUpsSource.h"
+#include "NutTracking.h"
+#include "NutOverrides.h"
 
 #ifndef PIO_UNIT_TESTING
 #include <WiFi.h>
 #endif
 
 #define NUT_DEFAULT_PORT 3493
-#define NUT_MAX_CLIENTS 4
+// Connessioni contemporanee (US-084). Il core precompilato ha CONFIG_LWIP_MAX_SOCKETS 16:
+// restano occupati i listener NUT e web, la richiesta web in corso e in AP il DNS del
+// captive portal, quindi 8 client lasciano 4-5 socket liberi
+#define NUT_MAX_CLIENTS 8
 // upsd drops clients idle for 60 s; this leaves room for once-a-minute pollers.
 #define NUT_TIMEOUT_MS 120000
+// Intervallo minimo tra le righe di rifiuto e tra i riepiloghi degli slot nel System Log,
+// che tiene 50 righe: i client che si riconnettono a ogni lettura lo riempirebbero (US-084)
+#define NUT_LOG_INTERVAL_MS 60000
+// Keepalive TCP sui socket accettati: un client sparito senza chiudere la connessione
+// libera lo slot dopo circa 60 + 10 * 3 = 90 s invece dei 120 s di NUT_TIMEOUT_MS
+#define NUT_KEEPALIVE_IDLE_S 60
+#define NUT_KEEPALIVE_INTVL_S 10
+#define NUT_KEEPALIVE_COUNT 3
 
 struct NUTServerConfig {
     String username;
@@ -22,8 +35,6 @@ struct NUTServerConfig {
 
 class NUTServer {
 public:
-    typedef void (*LogCallback)(const char* level, const char* msg);
-
     // Since boot, updated and read on the loop task only.
     struct Stats {
         uint32_t accepted = 0;
@@ -37,45 +48,139 @@ public:
     NUTServer();
     ~NUTServer();
 
-    // Inizializza il server TCP e memorizza la configurazione e le dipendenze
-    bool begin(const NUTServerConfig& config, IUSBHostUPS* usb_ups, uint16_t port = NUT_DEFAULT_PORT);
-    
-    // Esegue la gestione non bloccante delle connessioni e dei comandi
-    void loop();
-
-    // Without one, messages go to Serial.
-    void setLogCallback(LogCallback cb) { _log_cb = cb; }
-
     uint16_t port() const { return _port; }
     int connectedClients() const;
     const Stats& stats() const { return _stats; }
     // Set by a primary's FSD; like in upsd, only a reboot clears it
     bool forcedShutdown() const { return _forcedShutdown; }
 
+    // Inizializza il server TCP e memorizza la configurazione e le dipendenze
+    bool begin(const NUTServerConfig& config, IUpsSource* usb_ups, uint16_t port = NUT_DEFAULT_PORT);
+    
+    // Esegue la gestione non bloccante delle connessioni e dei comandi
+    void loop();
+
     // Metodi di utilità (esposti per facilitare il testing)
     static std::vector<String> splitTokens(const String& input);
+    // Valore escapato come pconf_encode() di upstream (#, \ e "), per VAR, RW ed ENUM
+    static String encodeValue(const char* raw);
+    // Nome dell'UPS (US-082). In upstream è una sezione di ups.conf e non è mai vuoto: con il
+    // nome vuoto LIST UPS stampava "UPS  ..." e aionut inviava "LIST VAR \n"
+    static String defaultUpsName();
+    static String normalizeUpsName(const String& name);   // vuoto → defaultUpsName()
+    static bool isValidUpsName(const String& name);       // non vuoto, byte 0x21-0x7E senza " \ # @
+    // ups.* source of a device.mfr/model/serial alias (lower case), nullptr for the others
+    static const char* deviceAliasOf(const String& varNameLower);
     void processCommand(Print& client, int slot, const String& cmdLine);
 
+    // Motivo della chiusura di una sessione (US-084): solo il timeout va nel System Log
+    // LinkChanged (US-127): the board switched between Ethernet and Wi-Fi, the sockets point
+    // to the old address; one summary line for all of them (closeAllSessions)
+    // ConfigChanged (US-124): new UPS name or NUT credentials; applyConfig() logs the summary
+    enum class CloseReason { PeerClosed, Logout, Inactivity, LinkChanged, ConfigChanged };
+
+    // Outcome of applyConfig(): whether a value changed and how many sessions were closed
+    struct ApplyResult {
+        bool changed;
+        unsigned closed;
+    };
+    // New UPS name and NUT credentials, at once and without a restart (US-124). The name is
+    // normalized as in begin(). Same values: nothing changes and the sessions stay. Otherwise
+    // every session is closed, so no client stays authenticated (or logged in) with the old
+    // settings: the clients reconnect and are checked against the new ones. One System Log
+    // line, never with the credentials. Before begin() it only stores the settings
+    ApplyResult applyConfig(const NUTServerConfig& config);
+    // begin() was called: false in access point mode without a valid configuration
+    bool isRunning() const { return _initialized; }
+    // NUT username and password both set (US-125). Without them NUT clients can only read
+    // the data, as upsd with no users in upsd.users: INSTCMD and SET VAR are refused
+    bool hasCredentials() const { return _config.username.length() > 0 && _config.password.length() > 0; }
+
+    // Occupa il primo slot libero per un client appena accettato e ne azzera lo stato.
+    // -1 se gli slot sono esauriti: il rifiuto va nel System Log, al più una riga ogni
+    // NUT_LOG_INTERVAL_MS. loop() ci aggancia il socket; i test la chiamano direttamente
+    int openSession(const String& peerIp, uint16_t peerPort);
+    void closeSession(int slot, CloseReason reason);
+    // Closes every open session, sockets included, so the clients reconnect at once (US-127).
+    // Harmless with no session or before begin(): the slots start free. Returns how many
+    // sessions it closed
+    unsigned closeAllSessions(CloseReason reason);
+
     // Helpers per testing
-    void setAuthenticated(int slot, bool auth) { if (slot >= 0 && slot < NUT_MAX_CLIENTS) _clientAuthenticated[slot] = auth; }
-    void setClientUsername(int slot, const String& user) { if (slot >= 0 && slot < NUT_MAX_CLIENTS) _clientUsername[slot] = user; }
+    // Chiude tutte le sessioni aperte e riparte con il log degli slot da adesso
+    void resetSessions() {
+        for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
+            if (_clientActive[i]) closeSession(i, CloseReason::PeerClosed);
+            _clientLoggedIn[i] = false;
+            _clientPrimary[i] = false;
+        }
+        _stats = Stats();
+        _forcedShutdown = false;
+        _lastSummary = "";
+        _lastSummaryMs = _now();
+        _rejectLogged = false;
+        _lastRejectLogMs = 0;
+        _rejectsSinceLog = 0;
+    }
+    // true: USERNAME e PASSWORD giusti inviati; false: nessuna PASSWORD inviata
+    void setAuthenticated(int slot, bool auth) {
+        if (slot < 0 || slot >= NUT_MAX_CLIENTS) return;
+        _clientAuthenticated[slot] = auth;
+        _clientPasswordSet[slot] = auth;
+        if (auth) _clientUsernameSet[slot] = true;
+    }
+    void setClientUsername(int slot, const String& user) {
+        if (slot < 0 || slot >= NUT_MAX_CLIENTS) return;
+        _clientUsername[slot] = user;
+        _clientUsernameSet[slot] = user.length() > 0;
+    }
+    // Svuota la tabella degli esiti e spegne TRACKING su tutte le sessioni
+    void clearTracking() {
+        _tracking.clear();
+        for (int i = 0; i < NUT_MAX_CLIENTS; i++) _clientTracking[i] = false;
+    }
+
+    // System Log: rifiuti di SET VAR (US-067). Gli esiti delle richieste valide li registra l'host.
+    // Without one, messages go to Serial
+    typedef void (*LogFn)(const char* level, const char* msg);
+    void setLogCallback(LogFn cb) { _log_cb = cb; }
+
+    // Custom variables of the NUT Server page (US-115), read at every reply: the Web UI
+    // replaces the list in the same task, so a change applies at once. nullptr = none
+    void setOverrides(const std::vector<NutOverride>* list) { _overrides = list; }
+
+    // Orologio e sorgente casuale di TRACKING, sostituibili nei test (default millis ed esp_random)
+    typedef uint32_t (*ClockFn)();
+    void setClock(ClockFn now);
+    void setRandom(NutTracking::RandomFn rnd);
 
 private:
     void handleCommand(int slot, const String& cmdLine);
-    void closeSession(int slot);
     void resetSlot(int slot);
     bool isOurUps(const String& name) const { return name.equalsIgnoreCase(_config.ups_name); }
-    bool upsAvailable(Print& client) const;
+    // ups.status with the FSD a primary raised
     String statusString() const;
     int loggedInClients() const;
-    void logMessage(const char* level, const char* format, ...) const __attribute__((format(printf, 3, 4)));
+    // IP dei client degli slot attivi, in ordine di slot, separati da ", "
+    String slotSummary() const;
+    // Riepilogo degli slot nel System Log, solo se cambia e al più ogni NUT_LOG_INTERVAL_MS
+    void logClientsSummary(uint32_t now);
+    void setVar(Print& client, int slot, const String& upsName, const String& varName, const String& value);
+    void rejectSet(Print& client, int slot, const String& varName, const String& value, const char* err);
+    // Esito di SET VAR o INSTCMD con TRACKING ON: voce nella tabella condivisa e OK TRACKING <id>
+    void replyTracking(Print& client, NutTable::SetStatus st);
+    const char* missingCredentials(int slot) const;
+    void logInstcmdWithoutCredentials(const std::vector<String>& tokens, int slot, const char* err) const;
+    // Value GET VAR answers for a variable, overrides included (US-115); false when the
+    // variable does not exist. The one place that decides value and presence
+    bool resolveVar(const UPSData& data, const String& varNameLower, String& out) const;
+    const NutOverride* findOverride(const char* name) const { return NutOverrides::find(_overrides, name); }
+    void log(const char* level, const char* fmt, ...) const __attribute__((format(printf, 3, 4)));
 
     NUTServerConfig _config;
-    IUSBHostUPS* _usb_ups;
+    IUpsSource* _usb_ups;
     uint16_t _port;
     bool _initialized;
-    LogCallback _log_cb = nullptr;
-    Stats _stats;
 
 #ifndef PIO_UNIT_TESTING
     WiFiServer _server;
@@ -83,11 +188,30 @@ private:
 #endif
     bool _clientActive[NUT_MAX_CLIENTS];
     bool _clientAuthenticated[NUT_MAX_CLIENTS];
-    bool _clientLoggedIn[NUT_MAX_CLIENTS];
-    bool _clientPrimary[NUT_MAX_CLIENTS];
     uint32_t _clientLastActivity[NUT_MAX_CLIENTS];
     String _clientBuffer[NUT_MAX_CLIENTS];
     String _clientUsername[NUT_MAX_CLIENTS];
+    // USERNAME / PASSWORD inviati, giusti o no: il controllo FLAG_USER di check_command() in upsd
+    bool _clientUsernameSet[NUT_MAX_CLIENTS];
+    bool _clientPasswordSet[NUT_MAX_CLIENTS];
+    // SET TRACKING vale per la sessione; la tabella degli esiti è unica, come in upsd
+    bool _clientTracking[NUT_MAX_CLIENTS];
+    // LOGIN accepted, counted by NUMLOGINS; PRIMARY (or MASTER) granted
+    bool _clientLoggedIn[NUT_MAX_CLIENTS];
+    bool _clientPrimary[NUT_MAX_CLIENTS];
+    // IP del client, per il riepilogo degli slot e il log del timeout (US-084)
+    String _clientPeer[NUT_MAX_CLIENTS];
+    // Ultimo riepilogo registrato e quando; rifiuti non ancora registrati (US-084)
+    String _lastSummary;
+    uint32_t _lastSummaryMs;
+    bool _rejectLogged;
+    uint32_t _lastRejectLogMs;
+    uint32_t _rejectsSinceLog;
+    NutTracking _tracking;
+    ClockFn _now;
+    LogFn _log_cb;
+    const std::vector<NutOverride>* _overrides;
+    Stats _stats;
     // Set by a primary's FSD and, as in upsd, never cleared.
     bool _forcedShutdown = false;
 };

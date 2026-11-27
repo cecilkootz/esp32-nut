@@ -3,10 +3,6 @@
 
 #include <Arduino.h>
 
-// Pin predefinito per il LED integrato della ESP32-S3-DevKitC-1
-#define LED_BUILTIN_PIN 48
-#define NEOPIXEL_POWER_PIN 38
-
 // Costanti per i periodi di lampeggio (millisecondi)
 static const unsigned long LED_BLINK_SLOW_MS = 1000;  // Lampeggio lento (CONNECTING)
 static const unsigned long LED_BLINK_FAST_MS = 125;   // Lampeggio veloce (ERROR)
@@ -34,11 +30,16 @@ class DiagnosticLED {
 public:
     DiagnosticLED();
 
-    // Inizializza il pin del LED; default = LED_BUILTIN_PIN (GPIO 47)
-    void begin(uint8_t pin = LED_BUILTIN_PIN);
+    // Pins from the board profile (US-090); a pin of -1 means no LED: every call is a no-op
+    void begin(int8_t pin, int8_t power_pin);
 
     // Imposta lo stato corrente del LED
     void setState(LedState state);
+
+    // User settings of the Board page (US-094): off keeps following the state but
+    // shows nothing; brightness is the NeoPixel value (0-255)
+    void setUserEnabled(bool on);
+    void setBrightness(uint8_t value);
 
     // Aggiorna il pattern di lampeggio — chiamare nel loop principale
     void update();
@@ -52,7 +53,10 @@ public:
 private:
     static constexpr size_t FRAME_SYMBOLS = 25;  // 24 GRB bits + latch
 
-    uint8_t _pin;
+    int8_t _pin;
+    bool _enabled;      // the board has a LED and begin() ran
+    bool _userOn;       // the user did not turn it off
+    uint8_t _brightness;
     LedState _state;
     bool _ledOn;
     bool _rmtReady;
@@ -63,6 +67,7 @@ private:
 
     void setPixelColorAndShow(uint32_t color);
     void writeFrame(uint32_t color);
+    void show();
 };
 
 #endif // DIAGNOSTIC_LED_H

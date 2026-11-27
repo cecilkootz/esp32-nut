@@ -1,0 +1,76 @@
+[snapshot]
+battery.charge.low=10
+battery.charge.warning=20
+battery.charge=100
+battery.runtime=2160
+battery.voltage.nominal=12.0
+battery.voltage=13.7
+driver.name=esp32-nut
+driver.version.data=LegrandDriver
+driver.version=dev
+input.frequency=50.0
+input.transfer.high=270
+input.transfer.low=180
+input.voltage.nominal=230
+input.voltage=230
+output.frequency=50
+output.voltage=230
+ups.beeper.status=enabled
+ups.delay.shutdown=20
+ups.delay.start=30
+ups.load=25
+ups.mfr=Legrand
+ups.model=KEOR PDU 800
+ups.realpower.nominal=480
+ups.realpower=120
+ups.serial=                
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=1
+ups.status.discharging=0
+ups.status.fully_charged=1
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.status=OL
+[cmd]
+beeper.enable beeper.disable beeper.toggle beeper.mute test.battery.start.quick test.battery.start.deep test.battery.stop load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.default
+[rw]
+ups.delay.shutdown:10 ups.delay.start:10
+[rw.final]
+ups.delay.shutdown:10 ups.delay.start:10
+[snapshot.final]
+battery.charge.low=10
+battery.charge.warning=20
+battery.charge=100
+battery.runtime=2160
+battery.voltage.nominal=12.0
+battery.voltage=13.7
+driver.name=esp32-nut
+driver.version.data=LegrandDriver
+driver.version=dev
+input.frequency=50.0
+input.transfer.high=270
+input.transfer.low=180
+input.voltage.nominal=230
+input.voltage=230
+output.frequency=50
+output.voltage=230
+ups.beeper.status=enabled
+ups.delay.shutdown=20
+ups.delay.start=30
+ups.load=25
+ups.mfr=Legrand
+ups.model=KEOR PDU 800
+ups.realpower.nominal=480
+ups.realpower=120
+ups.serial=                
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=1
+ups.status.discharging=0
+ups.status.fully_charged=1
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.status=OL
+[requests]
+ 8/3 10/3 11/3 15/3 28/3 18/3 19/3 23/3 29/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 10/3 11/3 15/3 28/3 18/3 19/3 23/3 29/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3 8/3 11/3 19/3 23/3 27/3

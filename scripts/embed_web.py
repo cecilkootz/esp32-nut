@@ -25,7 +25,8 @@ def embed_files(root):
     # We only want to embed these specific files
     target_files = [
         "index_inlined.html",
-        "update_inlined.html"
+        "update_inlined.html",
+        "login_inlined.html"
     ]
     
     files = [os.path.join(data_dir, f) for f in target_files if os.path.exists(os.path.join(data_dir, f))]

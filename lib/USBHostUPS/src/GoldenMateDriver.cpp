@@ -1,10 +1,11 @@
 #include "GoldenMateDriver.h"
 #include "HIDParser.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
 #include <string.h>
 
-void GoldenMateDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type,
+void GoldenMateDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type,
                                     const uint8_t* data, size_t length, UPSData& ups_data) {
+    _skipFrame = true;
     if (!host || !data || length == 0) return;
 
     if (report_id == 1 && report_type == 3 &&
@@ -52,9 +53,16 @@ void GoldenMateDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
         _ambiguousStatusReports = 0;
     }
 
+    _skipFrame = false;
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
+}
 
-    // These paths follow NUT's idowell-hid mapping for GoldenMate. The generic
+void GoldenMateDriver::postDecode(IHidTransport* host, uint8_t report_id, uint8_t report_type,
+                                  const uint8_t* data, size_t length, UPSData& ups_data) {
+    if (_skipFrame) return;
+    GenericDriver::postDecode(host, report_id, report_type, data, length, ups_data);
+
+    // The table rows are written by now, so these overrides stick. These paths follow NUT's idowell-hid mapping for GoldenMate. The generic
     // driver treats PowerSummary.ConfigVoltage as the nominal input voltage.
     for (const auto& usage : host->getUsages()) {
         if (usage.report_id != report_id || usage.report_type != report_type) continue;

@@ -4,17 +4,18 @@
 #include <ArduinoJson.h>
 
 class AppNetworkManager;
-class USBHostUPS;
+class IUpsSource;
 class NUTServer;
 class MqttBridge;
+class UpdateService;
 
 // Null pointers leave their section out
 struct SystemStatusSources {
-    bool ap_mode = false;
     AppNetworkManager* network = nullptr;
-    USBHostUPS* ups = nullptr;
+    IUpsSource* ups = nullptr;
     NUTServer* nut = nullptr;
     MqttBridge* mqtt = nullptr;
+    UpdateService* update = nullptr;
 };
 
 // The document behind /api/system-status and the MQTT state topic. Call from the

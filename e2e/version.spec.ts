@@ -1,7 +1,10 @@
-import { test, expect } from './fixtures';
+import { test, expect } from '@playwright/test';
+import { serveIndex } from './support/webui';
 
 test.describe('Dynamic Firmware Version', () => {
   test('should display firmware version fetched from API', async ({ page }) => {
+    await serveIndex(page);
+
     // Intercept the API call to return a mock version
     await page.route('**/api/system-status', async route => {
       await route.fulfill({
@@ -19,7 +22,7 @@ test.describe('Dynamic Firmware Version', () => {
     await page.route('**/api/logs', route => route.fulfill({ json: [] }));
 
     // Load the mock HTTP URL
-    await page.goto('/');
+    await page.goto('http://esp32.local/');
 
     // Verify the version string is updated
     const versionSpan = page.locator('#fw-version');

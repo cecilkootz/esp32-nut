@@ -4,14 +4,30 @@
 #include "core/app_logger.h"
 #include "core/crash_diag.h"
 #include "core/device_id.h"
+#include "core/driver_var_store.h"
 #include "core/memory_stats.h"
 #include "core/restart_guard.h"
 #include "core/system_status.h"
 #include "network/hostname.h"
 #include "network/mqtt_bridge.h"
 #include <Preferences.h>
+#include <WiFi.h>
 #include "esp_task_wdt.h"
 #include "RestartPolicy.h"
+#include "ApIdleTimeout.h"
+#include "board/board.h"
+#include "core/board_settings_store.h"
+#include "core/hostname_store.h"
+#include "core/eth_spi_store.h"
+#include "core/nut_override_store.h"
+#include "core/auto_shutdown.h"
+#include "NetBootPlan.h"
+#include "core/log_dispatcher.h"
+#include "core/update_service.h"
+#include "core/log_settings_store.h"
+#include "network/syslog_output.h"
+#include "network/ntp_clock.h"
+#include "core/time_settings_store.h"
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
@@ -22,13 +38,80 @@ WebConfigServer web_server(config_mgr);
 MqttBridge mqtt_bridge;
 SystemStatusSources status_sources;
 
+// Driver-side variables written with SET VAR (ups.delay.*, outlet.*.desc), NVS "nutrw" (US-067)
+static NvsDriverVarStore driver_var_store;
+
+// Status LED and UPS USB port chosen in the Board page, NVS "board" (US-094)
+static BoardSettingsStore board_settings_store;
+static HostnameStore hostname_store;
+static EthSpiStore eth_spi_store;  // US-126
+
+// Custom variables of the NUT Server page, NVS "nutovr" (US-115). Read by the NUT server
+// and replaced by the web server, both from loop(): no lock needed
+static NvsNutOverrideStore nut_override_store;
+static std::vector<NutOverride> nut_overrides;
+
+// Remote logging (US-116, ADR 0012): queue + log task, syslog output, settings in NVS
+// "logout"
+static LogDispatcher log_dispatcher;
+static UpdateService update_service;
+static SyslogOutput syslog_output;
+static LogSettingsStore log_settings_store;
+
+// Network time and time zone of Board Settings (US-117, ADR 0009), NVS "time"
+static TimeSettingsStore time_settings_store;
+static NtpClock ntp_clock;
+
+// shutdown.default once per OB+LB event, option of the Board page (US-114)
+static AutoShutdown auto_shutdown;
+static const uint32_t AUTO_SHUTDOWN_CHECK_MS = 1000;
+
+// Runs from the loopTask, as INSTCMD and the Web UI commands. It reads the UPS over USB
+// only, so it works without network, in AP mode and with an invalid configuration
+static void checkAutoShutdown() {
+    String status = usb_ups.getUPSStatusString();
+    // The command catalog is read only when it can matter
+    bool available = AutoShutdown::onBatteryLow(status.c_str()) &&
+                     AutoShutdown::offersShutdownDefault(usb_ups.getSupportedCommands());
+    if (!auto_shutdown.update(usb_ups.isConnected(), usb_ups.isDataStale(), status.c_str(), available)) return;
+    AppLogger::log("WARN", "[CMD] Automatic shutdown: UPS status '%s', sending shutdown.default", status.c_str());
+    CommandResult r = usb_ups.executeCommand("shutdown.default");
+    if (r == CommandResult::OK) return;  // the host logs "Command shutdown.default: OK via ..."
+    if (r == CommandResult::NOT_CONNECTED) {
+        // Not sent to the UPS: the event is not used up
+        auto_shutdown.restoreArm();
+        AppLogger::log("WARN", "[CMD] Automatic shutdown: shutdown.default not run, will retry");
+    } else {
+        AppLogger::log("WARN", "[CMD] Automatic shutdown: shutdown.default not run, "
+                               "no new attempt until the UPS is back on line");
+    }
+}
+
 Preferences boot_prefs;
 bool is_ap_mode = false;
 bool clear_ap_flag_pending = false;
 uint32_t boot_time_ms = 0;
 
+// Double reset window: 3 s after boot the manual_ap flag is cleared. Called by loop() and
+// by the W5500 probe of setup() (US-126), so a probe of up to ~20 s does not keep the
+// window open: a power cut during the probe must not open the access point at the next boot
+static void closeManualApWindow(uint32_t now) {
+    if (clear_ap_flag_pending && (now - boot_time_ms > 3000)) {
+        boot_prefs.putBool("manual_ap", false);
+        clear_ap_flag_pending = false;
+        AppLogger::log("INFO", "[MAIN] Manual AP trigger window closed.");
+    }
+}
+
 // Controlled restarts with growing delays, then degraded mode (review A7)
 RestartPolicy restart_policy;
+
+#if NUT_USB_DIAG
+void usbDiagBegin();  // src/core/usb_diag.cpp
+#endif
+
+// Manual AP mode: back to STA after 10 minutes without stations (US-064)
+ApIdleTimeout ap_timeout;
 
 // Task watchdog on the loopTask (issue #47). It replaces a hw_timer whose ISR called
 // esp_restart(): unsafe from an ISR, and unable to fire during a panic, when interrupts
@@ -70,7 +153,7 @@ static void restartOnRequest(const char* cause) {
         return;
     }
     AppLogger::log("WARN", "[MAIN] %s", cause);
-    CrashDiag::recordRequestedRestart(cause);
+    CrashDiag::recordRestartReason(cause);
     mqtt_bridge.end();
     usb_ups.end();
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -96,6 +179,10 @@ void setup() {
     // Prima di tutto: protegge il panic handler se manca la partizione coredump
     CrashDiag::begin();
 
+    // Log queue before the first line: the boot log reaches the remote outputs once the
+    // network is up (US-116). The task starts later, when the outputs are configured
+    if (log_dispatcher.init()) AppLogger::setForwarder(&LogDispatcher::forward, &log_dispatcher);
+
     // Inizializzazione della porta seriale per il debug diagnostico
     Serial.begin(MONITOR_BAUD_RATE);
     delay(1000); // Piccolo delay per stabilizzare la connessione seriale
@@ -103,8 +190,21 @@ void setup() {
     CrashDiag::logBootInfo();
     restart_policy = RestartPolicy(CrashDiag::consecutiveRestarts());
 
-    // Inizializzazione del LED diagnostico
-    diagnostic_led.begin(LED_BUILTIN_PIN);
+    // Inizializzazione del LED diagnostico (pin dal profilo della scheda, US-090)
+    diagnostic_led.begin(board().led.pin, board().led.power_pin);
+    BoardSettings board_settings = board_settings_store.load(board());
+    diagnostic_led.setBrightness(ledBrightness(board_settings.led_level));
+    diagnostic_led.setUserEnabled(board_settings.led_on);
+    auto_shutdown.setEnabled(board_settings.auto_shutdown);
+    if (board_settings.auto_shutdown) {
+        AppLogger::log("INFO", "[MAIN] Automatic shutdown on low battery enabled");
+    }
+    // Hostname of the Network page, "" for the default of the link (US-113)
+    String saved_hostname = hostname_store.load();
+    // W5500 wired by the user (US-126): off on every board until enabled in the Network page
+    EthSpiSettings eth_spi = eth_spi_store.load(board());
+    // Link to use with the W5500 on (US-127): AUTO until the user picks one
+    const NetworkMode net_mode = eth_spi_store.loadMode();
 
     // Task watchdog sul loopTask (30 secondi)
     setupLoopWatchdog();
@@ -124,13 +224,79 @@ void setup() {
 
     // Inizializzazione di ConfigManager
     bool config_ok = config_mgr.begin() && config_mgr.isValid();
-    
-    if (!config_ok || manual_ap_triggered) {
+    // Without a hostname from the Network page, a UPS name the user chose, so the board is
+    // recognisable in DHCP leases and DNS; "" (unusable name) leaves the link default
+    String link_hostname = saved_hostname;
+    if (link_hostname.isEmpty() && config_ok) {
+        const String ups_name = config_mgr.getNutConfig().ups_name;
+        if (ups_name != NUTServer::defaultUpsName()) link_hostname = hostnameFromUpsName(ups_name, "");
+    }
+    // Which link to start, from the board capabilities (US-090, ADR 0010 §3), the W5500
+    // enabled by the user (US-126) and the link mode of the Network page (US-127)
+    const NetBootInput net_input = { board().has_wifi, board().has_ethernet, eth_spi.enabled, config_ok,
+                                     config_ok && config_mgr.getWifiConfig().ssid.length() > 0,
+                                     manual_ap_triggered, net_mode };
+    NetBootPlan net_plan = planNetwork(net_input);
+    if (eth_spi.enabled && board().has_wifi) {
+        AppLogger::log("INFO", "[MAIN] W5500 enabled, link mode %s", networkModeName(net_mode));
+    }
+    if (net_plan.link == BootLink::ETHERNET && net_plan.fallback != BootLink::NONE) {
+        // US-126: Ethernet first. The probe resets the watchdog. Where it falls back to
+        // Wi-Fi (or the access point when Wi-Fi is not configured) depends on the mode
+        // (needsFallback, US-127): a silent module always, a cable without link or address
+        // only in AUTO, where the W5500 stays on standby to come back to Ethernet
+        network_mgr.setEthernetConfig(toEthConfig(eth_spi));
+        const EthProbeOutcome outcome = network_mgr.probeEthernet(link_hostname, closeManualApWindow);
+        if (needsFallback(net_plan, outcome)) {
+            network_mgr.leaveEthernet(net_plan.auto_switch && outcome != EthProbeOutcome::NO_CHIP);
+            net_plan = fallbackPlan(net_plan);
+            if (outcome == EthProbeOutcome::NO_CHIP) net_plan.auto_switch = false;
+        } else if (outcome != EthProbeOutcome::CONNECTED) {
+            AppLogger::log("WARN",
+                           "[MAIN] Ethernet mode: no connection (%s), staying on Ethernet. Double reset for "
+                           "the access point",
+                           ethProbeReason(outcome));
+        }
+    }
+    network_mgr.setAutoSwitch(net_plan.auto_switch);
+    if (net_plan.auto_switch) {
+        AppLogger::log("INFO", "[MAIN] Automatic link choice: Ethernet when the cable is connected, otherwise Wi-Fi");
+    }
+    if (net_plan.default_config) {
+        // No Wi-Fi setup page on this link (a board without Wi-Fi, US-092, or an S3 that
+        // joined the network with its W5500 before any setup, US-126): default NUT settings
+        // (no credentials, UPS name "ups"), the state an S3 reaches after the Wi-Fi setup
+        AppLogger::log("WARN", "[MAIN] No valid configuration: using the default NUT settings");
+        config_mgr.setNutConfig(NutConfig());
+        config_ok = config_mgr.save() && config_mgr.begin() && config_mgr.isValid();
+    }
+    web_server.setNetwork(&network_mgr);
+    web_server.setBoardSettings(&board_settings_store, board_settings);
+    web_server.setHostnameStore(&hostname_store, saved_hostname);
+    web_server.setEthSpi(&eth_spi_store, eth_spi, net_mode);
+    web_server.setStatusLed(&diagnostic_led);
+    web_server.setAutoShutdown(&auto_shutdown);
+    nut_override_store.load(nut_overrides);
+    if (!nut_overrides.empty()) {
+        AppLogger::log("INFO", "[NUT] %u custom variables loaded", (unsigned)nut_overrides.size());
+    }
+    web_server.setNutOverrides(&nut_override_store, &nut_overrides);
+    // US-124: the NUT Server page applies UPS name and credentials at once
+    web_server.setNutServer(&nut_server);
+
+    if (net_plan.link == BootLink::WIFI_ACCESS_POINT) {
         is_ap_mode = true;
         AppLogger::log("WARN", "[MAIN] Starting in AP mode...");
-        network_mgr.beginAP("NUT_ESP32_Config", "12345678");
+        network_mgr.begin(board(), net_plan, "", "", link_hostname);
+        // Only the double reset with a valid config has a normal mode to go back to;
+        // manual_ap is already cleared, so the restart boots in STA (PDR 0001 D7)
+        ap_timeout = ApIdleTimeout(net_plan.ap_idle_timeout);
+        ap_timeout.begin(millis());
+        if (ap_timeout.isEnabled()) {
+            AppLogger::log("INFO", "[MAIN] Manual AP: restart in STA mode after %u min without clients",
+                           (unsigned)(ApIdleTimeout::DEFAULT_TIMEOUT_MS / 60000));
+        }
         web_server.setUPS(&usb_ups);
-        web_server.setNetwork(&network_mgr);
         web_server.begin(true);
     } else {
         is_ap_mode = false;
@@ -138,25 +304,41 @@ void setup() {
         // Stampa parametri per verifica
         WifiConfig wifi = config_mgr.getWifiConfig();
         NutConfig nut = config_mgr.getNutConfig();
-        AppLogger::log("INFO", "[MAIN] Wi-Fi SSID: %s\n", wifi.ssid.c_str());
+        if (net_plan.link == BootLink::WIFI_STATION) AppLogger::log("INFO", "[MAIN] Wi-Fi SSID: %s\n", wifi.ssid.c_str());
         AppLogger::log("INFO", "[MAIN] NUT UPS Name: %s\n", nut.ups_name.c_str());
         
-        // Named after the UPS so the board is recognisable in DHCP leases and DNS
-        String hostname = hostnameFromUpsName(nut.ups_name, getDeviceId());
-        if (hostname != nut.ups_name) {
-            AppLogger::log("INFO", "[MAIN] UPS name '%s' is not a valid hostname, using '%s'",
-                           nut.ups_name.c_str(), hostname.c_str());
-        }
-        network_mgr.begin(wifi.ssid, wifi.password, hostname);
+        // Inizializzazione di AppNetworkManager
+        network_mgr.begin(board(), net_plan, wifi.ssid, wifi.password, link_hostname);
         web_server.setUPS(&usb_ups);
-        web_server.setNetwork(&network_mgr);
         web_server.begin(false);
     }
+    // Boards without Wi-Fi have no AP: the double reset opens the recovery window (US-091)
+    if (net_plan.recovery_window) web_server.openRecoveryWindow(millis());
+
+    // Remote logging (US-116, ADR 0012), in AP, Wi-Fi and Ethernet: the syslog output
+    // waits for a station or Ethernet link and names the board with the hostname of the
+    // Network page (US-113)
+    // Network time (US-117): SNTP starts in poll() once a station or Ethernet link is up
+    ntp_clock.begin(&network_mgr);
+    ntp_clock.configure(time_settings_store.load());
+
+    syslog_output.begin(&network_mgr);
+    syslog_output.setClock(&ntp_clock);
+    syslog_output.configure(log_settings_store.loadSyslog());
+    log_dispatcher.addOutput(&syslog_output);
+    log_dispatcher.start();
+    web_server.setRemoteLog(&log_settings_store, &syslog_output);
+    update_service.begin(&network_mgr);
+    web_server.setUpdateService(&update_service);
+    web_server.setTime(&time_settings_store, &ntp_clock);
 
     // Inizializzazione della libreria USBHostUPS (sempre attiva)
+    // "%s": messages can carry values sent by NUT clients (SET VAR, US-067)
     usb_ups.setLogCallback([](const char* level, const char* msg) {
         AppLogger::log(level, "%s", msg);
     });
+    // The host loads the saved values once, before the first connection (US-067)
+    usb_ups.setDriverVarStore(&driver_var_store);
 
     // Delay USB host initialization on cold boot to allow the UPS USB interface to stabilize
     // Many UPS devices (like APC) take a few seconds to properly handle USB requests after power on.
@@ -165,29 +347,43 @@ void setup() {
         delay(10);
     }
 
+    usb_ups.setPeripheralMap(board().usb.ports[board_settings.usb_port].peripheral_map);
+    usb_ups.setQxSettings(board_settings.qx_protocol, board_settings.qx_novendor); // US-138
+    {
+        // US-146: the custom nominal powers give the ups.realpower estimate
+        float real_w = 0.0f, apparent_va = 0.0f;
+        NutOverrides::powerNominals(nut_overrides, real_w, apparent_va);
+        usb_ups.setCustomPowerNominals(real_w, apparent_va);
+    }
+    usb_ups.setAutomaticRestartCount(CrashDiag::consecutiveRestarts()); // US-121
     if (!usb_ups.begin()) {
         AppLogger::log("ERROR", "[MAIN] ERROR: USBHostUPS initialization failed!");
     } else {
         AppLogger::log("INFO", "[MAIN] USBHostUPS initialized correctly.");
+#if NUT_USB_DIAG
+        // Optional build: log every device the USB host enumerates (src/core/usb_diag.cpp)
+        usbDiagBegin();
+#endif
     }
 
     // Inizializzazione NUTServer (solo se la configurazione è valida)
     if (config_ok) {
         NutConfig nut_config = config_mgr.getNutConfig();
         NUTServerConfig nut_server_config = {nut_config.username, nut_config.password, nut_config.ups_name};
+        // SET VAR refused by the server checks (US-067)
         nut_server.setLogCallback([](const char* level, const char* msg) {
             AppLogger::log(level, "%s", msg);
         });
+        nut_server.setOverrides(&nut_overrides);
         if (!nut_server.begin(nut_server_config, &usb_ups)) {
             AppLogger::log("ERROR", "[MAIN] ERROR: NUTServer initialization failed!");
         } else {
             AppLogger::log("INFO", "[MAIN] NUTServer started correctly on port 3493.");
-            web_server.setNUT(&nut_server);
             status_sources.nut = &nut_server;
         }
     }
 
-    status_sources.ap_mode = is_ap_mode;
+    status_sources.update = &update_service;
     status_sources.network = &network_mgr;
     status_sources.ups = &usb_ups;
     web_server.setMqtt(&mqtt_bridge);
@@ -209,21 +405,49 @@ void loop() {
     esp_task_wdt_reset();
 
     // Check timer per azzeramento flag manual_ap
-    if (clear_ap_flag_pending && (now - boot_time_ms > 3000)) {
-        boot_prefs.putBool("manual_ap", false);
-        clear_ap_flag_pending = false;
-        AppLogger::log("INFO", "[MAIN] Manual AP trigger window closed.");
-    }
+    closeManualApWindow(now);
 
     web_server.loop();
     network_mgr.loop();
+    ntp_clock.poll(now);
+
+    // Before the early return for an invalid config (the timer is disabled there anyway)
+    if (ap_timeout.isEnabled()) {
+        // The station count is read once per second: plenty for a 10 minute timeout
+        static uint32_t last_stations = 0;
+        static uint32_t last_station_check = 0;
+        static uint32_t stations = 0;
+        if (now - last_station_check >= 1000) {
+            last_station_check = now;
+            stations = network_mgr.apStationCount();
+        }
+        if (stations != last_stations) {
+            if (stations > 0) {
+                AppLogger::log("INFO", "[MAIN] Manual AP: %u client(s) connected", (unsigned)stations);
+            } else {
+                AppLogger::log("INFO", "[MAIN] Manual AP: no clients, restart in STA mode in %u min",
+                               (unsigned)(ApIdleTimeout::DEFAULT_TIMEOUT_MS / 60000));
+            }
+            last_stations = stations;
+        }
+        if (ap_timeout.update(stations, now)) {
+            // Reason only, kept in RTC memory and logged after the boot: recordControlledRestart
+            // would count it as a USB recovery restart and delay the next one
+            AppLogger::log("WARN", "[MAIN] Manual AP: no clients for %u min, restarting in STA mode",
+                           (unsigned)(ApIdleTimeout::DEFAULT_TIMEOUT_MS / 60000));
+            CrashDiag::recordRestartReason("Manual AP timeout: no clients for 10 min");
+            delay(200); // lascia uscire il log sulla seriale
+            esp_restart();
+        }
+    }
     // The UPS is served by its own task (USBHostUPS::begin, review A5b)
 
     // Recupero USB esaurito: riavvio controllato dal loopTask (mai da ISR), con attese
     // crescenti tra un riavvio e l'altro e modalità degradata oltre la soglia (review A7)
     static RestartPolicy::Decision last_decision = RestartPolicy::Decision::NONE;
     bool ups_healthy = usb_ups.isConnected() && !usb_ups.isDataStale();
-    RestartPolicy::Decision decision = restart_policy.update(usb_ups.isRestartRequested(), ups_healthy, now);
+    RestartPolicy::Decision decision = restart_policy.update(usb_ups.isRestartRequested(), ups_healthy, now,
+                                                             usb_ups.isControlPipeProven());
     if (restart_policy.takeCleared()) {
         CrashDiag::clearConsecutiveRestarts();
         AppLogger::log("INFO", "[MAIN] UPS data healthy: consecutive restart counter cleared");
@@ -234,13 +458,16 @@ void loop() {
                            (unsigned)restart_policy.consecutive() + 1,
                            (unsigned)(restart_policy.msUntilRestart(now) / 1000), usb_ups.getRestartReason());
         } else if (decision == RestartPolicy::Decision::DEGRADED) {
-            AppLogger::log("ERROR", "[MAIN] Degraded mode: %u restarts in a row, no more restarts (%s). "
-                                    "Replug the UPS or reboot the board.",
-                           (unsigned)restart_policy.consecutive(), usb_ups.getRestartReason());
+            // The counter survives a restart from the Web UI (US-142): only a UPS that comes
+            // back clears it, so the cable is the remedy, not a reboot (issue #78)
+            AppLogger::log("ERROR", "[MAIN] Degraded mode: %u restarts in a row, no more restarts (%s; "
+                                    "the first: %s). Replug the UPS USB cable.",
+                           (unsigned)restart_policy.consecutive(), usb_ups.getRestartReason(),
+                           CrashDiag::firstRestartReason()[0] ? CrashDiag::firstRestartReason() : "unknown");
         } else if (decision == RestartPolicy::Decision::NONE) {
             AppLogger::log("INFO", "[MAIN] Restart no longer needed");
         }
-        CrashDiag::setDegraded(decision == RestartPolicy::Decision::DEGRADED);
+        CrashDiag::setDegraded(decision == RestartPolicy::Decision::DEGRADED, usb_ups.isNotEnumeratedRestart());
         last_decision = decision;
     }
     if (decision == RestartPolicy::Decision::RESTART) {
@@ -249,6 +476,13 @@ void loop() {
         mqtt_bridge.end();
         delay(200); // lascia uscire il log sulla seriale
         esp_restart();
+    }
+
+    // US-114: before the early return below, so it also runs with an invalid configuration
+    static uint32_t last_auto_shutdown_check = 0;
+    if (now - last_auto_shutdown_check >= AUTO_SHUTDOWN_CHECK_MS) {
+        last_auto_shutdown_check = now;
+        checkAutoShutdown();
     }
 
     // Se la configurazione non è valida, rimaniamo in modalità di attesa sicura
@@ -265,6 +499,14 @@ void loop() {
         return;
     }
 
+    // US-127: after a switch between Ethernet and Wi-Fi the sockets of the NUT clients
+    // point to the old address: close them, the clients reconnect to the new one
+    static uint32_t last_link_changes = 0;
+    if (network_mgr.linkChanges() != last_link_changes) {
+        last_link_changes = network_mgr.linkChanges();
+        nut_server.closeAllSessions(NUTServer::CloseReason::LinkChanged);
+    }
+
     nut_server.loop();
 
     mqtt_bridge.loop(now, ups_healthy, buildStatusJson);
@@ -275,24 +517,42 @@ void loop() {
     static uint32_t last_print = 0;
     if (now - last_print >= 5000) {
         last_print = now;
+        // Molti Back-UPS non hanno output.voltage (issue 60: "Voltage = 0.0 V"): si
+        // ripiega su input.voltage, indicando quale delle due
+        const char* volt_key = usb_ups.getUPSData()->hasKey("output.voltage") ? "output.voltage" : "input.voltage";
+        // Senza né output.voltage né input.voltage si scrive "--", non un 0.0 V
+        // inventato (US-109, issue 100)
+        if (!usb_ups.getUPSData()->hasKey(volt_key)) {
+            AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | Voltage = --",
+                          (int)usb_ups.getUPSData()->getFloat("battery.charge"),
+                          usb_ups.getUPSStatusString().c_str());
+        } else {
+            AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | %s = %.1f V",
+                          (int)usb_ups.getUPSData()->getFloat("battery.charge"),
+                          usb_ups.getUPSStatusString().c_str(),
+                          volt_key[0] == 'o' ? "Output" : "Input",
+                          usb_ups.getUPSData()->getFloat(volt_key));
+        }
+    }
+
+    // Memory and Wi-Fi link diagnostics (every 60 s); /api/system-status has the same figures
+    static uint32_t last_stack_log = 0;
+    if (now - last_stack_log >= 60000) {
+        last_stack_log = now;
         MemoryStats mem = readMemoryStats();
         char wifi_diag[24] = "rssi=n/a";
-        if (network_mgr.isConnected()) {
+        if (network_mgr.isConnected() && strcmp(network_mgr.typeName(), "wifi") == 0) {
             snprintf(wifi_diag, sizeof(wifi_diag), "rssi=%d ch=%d", WiFi.RSSI(), (int)WiFi.channel());
         }
-        AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | Voltage = %.1f V"
-                               " | Heap free=%lu min=%lu largest=%lu | Stack min free loop=%lu poll=%ld hid=%ld"
+        AppLogger::log("INFO", "[DIAG] Heap free=%lu min=%lu largest=%lu | Stack min free loop=%lu poll=%ld hid=%ld"
                                " | WiFi %s",
-                      (int)usb_ups.getUPSData()->getFloat("battery.charge"),
-                      usb_ups.getUPSStatusString().c_str(),
-                      usb_ups.getUPSData()->getFloat("output.voltage"),
-                      (unsigned long)mem.free_heap,
-                      (unsigned long)mem.min_free_heap,
-                      (unsigned long)mem.largest_free_block,
-                      (unsigned long)mem.loop_stack_min_free,
-                      (long)mem.poll_stack_min_free,
-                      (long)mem.hid_stack_min_free,
-                      wifi_diag);
+                       (unsigned long)mem.free_heap,
+                       (unsigned long)mem.min_free_heap,
+                       (unsigned long)mem.largest_free_block,
+                       (unsigned long)mem.loop_stack_min_free,
+                       (long)mem.poll_stack_min_free,
+                       (long)mem.hid_stack_min_free,
+                       wifi_diag);
     }
 
     // Aggiornamento stato LED diagnostico

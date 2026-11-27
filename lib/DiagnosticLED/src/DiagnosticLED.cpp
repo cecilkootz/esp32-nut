@@ -10,7 +10,7 @@
 
 namespace {
 
-const uint8_t BRIGHTNESS = 10;
+const uint8_t DEFAULT_BRIGHTNESS = 10;
 
 const uint32_t RMT_RESOLUTION_HZ = 10000000;  // 100 ns ticks
 
@@ -25,15 +25,19 @@ const uint16_t LATCH_HALF_TICKS = 1500;
 // queue and ignores a full queue, so an unbounded wait can block the loop task forever.
 const uint32_t WRITE_TIMEOUT_MS = 10;
 
-uint8_t scale(uint32_t c) {
-    return (uint8_t)(((c & 0xFF) * (BRIGHTNESS + 1)) >> 8);
+// Same scaling as Adafruit_NeoPixel::setBrightness()
+uint8_t scale(uint32_t c, uint8_t brightness) {
+    return (uint8_t)(((c & 0xFF) * (brightness + 1)) >> 8);
 }
 
 }  // namespace
 
 // Costruttore — inizializza i membri a valori predefiniti
 DiagnosticLED::DiagnosticLED()
-    : _pin(LED_BUILTIN_PIN),
+    : _pin(-1),
+      _enabled(false),
+      _userOn(true),
+      _brightness(DEFAULT_BRIGHTNESS),
       _state(CONNECTING),
       _ledOn(false),
       _rmtReady(false),
@@ -43,7 +47,8 @@ DiagnosticLED::DiagnosticLED()
 void DiagnosticLED::writeFrame(uint32_t color) {
     if (!_rmtReady) return;
 
-    const uint8_t grb[] = {scale(color >> 8), scale(color >> 16), scale(color)};
+    const uint8_t grb[] = {scale(color >> 8, _brightness), scale(color >> 16, _brightness),
+                           scale(color, _brightness)};
     rmt_data_t* s = _frame;
     for (uint8_t value : grb) {
         for (uint8_t mask = 0x80; mask; mask >>= 1) {
@@ -64,26 +69,45 @@ void DiagnosticLED::writeFrame(uint32_t color) {
     rmtWrite(_pin, _frame, FRAME_SYMBOLS, WRITE_TIMEOUT_MS);
 }
 
+void DiagnosticLED::show() {
+    if (_enabled) writeFrame(_userOn ? _currentColor : COLOR_OFF);
+}
+
 void DiagnosticLED::setPixelColorAndShow(uint32_t color) {
     if (color == _currentColor) return;
     _currentColor = color;
-    writeFrame(color);
+    show();
 }
 
-void DiagnosticLED::begin(uint8_t pin) {
+void DiagnosticLED::begin(int8_t pin, int8_t power_pin) {
     _pin = pin;
-
-    // Assicurati che l'alimentazione del NeoPixel sia attiva
-    pinMode(NEOPIXEL_POWER_PIN, OUTPUT);
-    digitalWrite(NEOPIXEL_POWER_PIN, HIGH);
-
-    _rmtReady = rmtInit(_pin, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, RMT_RESOLUTION_HZ);
-    _currentColor = COLOR_OFF;
-    writeFrame(COLOR_OFF); // Spento inizialmente
-
+    _enabled = pin >= 0;
     _ledOn = false;
     _state = CONNECTING;
     _previousMillis = millis();
+    _currentColor = COLOR_OFF;
+    if (!_enabled) return;
+
+    // Assicurati che l'alimentazione del NeoPixel sia attiva
+    if (power_pin >= 0) {
+        pinMode(power_pin, OUTPUT);
+        digitalWrite(power_pin, HIGH);
+    }
+
+    _rmtReady = rmtInit(_pin, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, RMT_RESOLUTION_HZ);
+    writeFrame(COLOR_OFF); // Spento inizialmente
+}
+
+void DiagnosticLED::setUserEnabled(bool on) {
+    if (on == _userOn) return;
+    _userOn = on;
+    // Off: dark now; on: show the current colour of the pattern again
+    show();
+}
+
+void DiagnosticLED::setBrightness(uint8_t value) {
+    _brightness = value;
+    show();
 }
 
 // Cambia lo stato corrente e resetta il timer del pattern

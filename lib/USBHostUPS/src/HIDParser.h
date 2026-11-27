@@ -26,6 +26,9 @@ public:
     // Callers must not treat that case as a reading of zero.
     static bool tryExtractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length, double& out);
     static double extractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length);
+    // Inverse of extractUsage() (US-067): the logical value to write for a physical value.
+    // False when it is outside the declared logical range or does not fit the field's bits.
+    static bool toLogical(const HIDUsageDef& def, double physical, int32_t& logical);
     
 private:
     static const uint32_t MAX_USAGE_RANGE = 256;

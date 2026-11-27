@@ -1,4 +1,5 @@
-import { test, expect } from './fixtures';
+import { test, expect } from '@playwright/test';
+import { serveUpdatePage } from './support/webui';
 import * as fflate from 'fflate';
 
 test.describe('OTA Update via ZIP', () => {
@@ -24,7 +25,9 @@ test.describe('OTA Update via ZIP', () => {
     });
 
     test.beforeEach(async ({ page }) => {
-        await page.route('**/update', async route => {
+        // Serve the OTA page as the firmware does; only the upload POST is mocked here
+        await serveUpdatePage(page);
+        await page.route('http://esp32.local/update', async route => {
             if (route.request().method() === 'POST') {
                 await route.fulfill({
                     status: 200,
@@ -36,7 +39,7 @@ test.describe('OTA Update via ZIP', () => {
             }
         });
 
-        await page.goto('/update');
+        await page.goto('http://esp32.local/update');
     });
 
     test('Uploads standard .bin file', async ({ page }) => {

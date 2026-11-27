@@ -1,7 +1,9 @@
-import { test, expect } from './fixtures';
+import { test, expect } from '@playwright/test';
+import { serveIndex } from './support/webui';
 
 test.describe('Default Tab', () => {
   test.beforeEach(async ({ page }) => {
+    await serveIndex(page);
     await page.route('**/api/config', async route => {
       await route.fulfill({ json: {} });
     });
@@ -23,7 +25,7 @@ test.describe('Default Tab', () => {
       await route.fulfill({ json: { wifi: { status: 'Connected' }, ups: { status: 'OL' } } });
     });
 
-    await page.goto('/');
+    await page.goto('http://esp32.local/');
 
     const activeTab = page.locator('.tab.active');
     await expect(activeTab).toHaveAttribute('data-target', 'ups');

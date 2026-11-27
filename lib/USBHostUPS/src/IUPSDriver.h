@@ -3,10 +3,23 @@
 
 #include <Arduino.h>
 #include <stddef.h>
+#include <vector>
+#include "UpsVariables.h" // NutTable::RWVariable, without HID (US-103); the HID tables stay out
+#include "UPSData.h"
 
-struct UPSData;
-class IUSBHostUPS;
+class IUpsControl;
+class IHidDriver;
+class QxDriver;
 
+/**
+ * @brief What the host needs from every driver, whatever its protocol family (ADR 0013,
+ * section 1): setup, poll, first poll done, device strings, control, delays and driver-side
+ * values. The hooks of one family live in its extension, reached only through the family
+ * accessor (hid() for the HID drivers), which returns nullptr for a driver of another
+ * family: a driver never receives the calls of a family it does not belong to.
+ *
+ * A driver receives the transport of its own family outside this interface.
+ */
 class IUPSDriver {
 public:
     virtual ~IUPSDriver() = default;
@@ -18,55 +31,131 @@ public:
     virtual void setup() = 0;
 
     /**
-     * @brief Called periodically to perform polling
-     * 
-     * @param host Pointer to the main USB host controller (to request reports)
+     * @brief Called periodically to perform polling, on the transport the driver was given
+     *
      * @param data Reference to the UPS data structure to update
      * @param now Current time in milliseconds
      */
-    virtual void loop(IUSBHostUPS* host, UPSData& data, uint32_t now) = 0;
+    virtual void poll(UPSData& data, uint32_t now) = 0;
 
     /**
-     * @brief Decodes a received HID report
-     * 
-     * @param report_id The ID of the report
-     * @param data Pointer to the report payload
-     * @param length Length of the payload
-     * @param ups_data Reference to the UPS data structure to update
-     */
-    virtual void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
-
-    /**
-     * @brief Parses a received String Descriptor
-     * 
-     * @param index The string index
-     * @param data Pointer to the string descriptor payload
-     * @param length Length of the payload
-     * @param ups_data Reference to the UPS data structure to update
-     */
-    virtual void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
-
-    /**
-     * @brief Encodes boolean beeper state into device-specific HID value
-     * 
-     * @param enable Desired beeper state
-     * @param bit_size Size of the HID usage field in bits
-     * @return Encoded value to write into HID report
-     */
-    virtual uint8_t encodeBeeperValue(bool enable, uint16_t bit_size) const {
-        if (bit_size == 1) return enable ? 1 : 0;
-        return enable ? 2 : 1; // Default standard HID PDC (1 = disabled, 2 = enabled)
-    }
-
-    /**
-     * @brief True when the beeper can be controlled (SET_REPORT) on this device.
+     * @brief True once the first full poll after setup() has run (issue #60).
      *
-     * Some devices expose an AudibleAlarmControl field but ignore the beeper
-     * commands (ecoflow-hid.c leaves them commented out for this reason). Returning
-     * false hides the toggle in the Web UI and the NUT beeper commands, while
-     * ups.beeper.status is still reported read-only.
+     * Until then the values are partial: the host reports them stale, like upsd while
+     * usbhid-ups is still in upsdrv_initinfo().
      */
-    virtual bool beeperControllable() const { return true; }
+    virtual bool initialPollDone() const { return true; }
+
+    /**
+     * @brief Variables a NUT client may write (LIST RW), sorted as upsd lists them.
+     */
+    virtual void writableVariables(const UPSData& data, std::vector<NutTable::RWVariable>& out) const {}
+
+    /**
+     * @brief Keeps the value of a driver-side variable of the NUT table (HU_FLAG_ABSENT rows
+     * such as outlet.desc), like dstate_setinfo() in setvar(). setup() forgets it: the host
+     * sets it again after every setup().
+     */
+    virtual void setDriverSideValue(const char* name, const char* value) {}
+
+    /**
+     * @brief A value the host set itself right after a write to the device (US-074): the
+     * beeper status after setBeeper(), before the device is read again. A driver whose NUT
+     * table owns the variable must keep it, or the table would write the old value back.
+     */
+    virtual void noteHostValue(const char* name, const char* value) {}
+
+    /**
+     * @brief Forgets the value set with setDriverSideValue() (US-068): the HU_FLAG_ABSENT rows
+     * named name go back to the dfl of the table, also at the next bind.
+     *
+     * @param value The default now in force
+     * @return false when no HU_FLAG_ABSENT row of the table has that name; ups.delay.* is not
+     * one, the host sets it again with applyDefaultDelays()
+     */
+    virtual bool resetDriverSideValue(const char* name, String& value) { return false; }
+
+    /**
+     * @brief Minimum gap between two control requests of the driver (US-119): the on-demand
+     * read of the export keeps it from any other request, as the poll steps do.
+     */
+    virtual uint32_t requestSpacingMs() const { return 50; }
+
+    /**
+     * @brief A SET VAR or an INSTCMD wrote the UPS: the next poll reads the semi-static
+     * values again (US-072), as data_has_changed in usbhid-ups.c:1157, 1239, 1534-1543.
+     * Not called for the driver-side values, which write nothing to the UPS.
+     */
+    virtual void noteDataChanged() {}
+
+    /**
+     * @brief Rewrites the device strings once they are known (issue #76).
+     *
+     * Called after the strings are read from the device info at claim time and after
+     * every string descriptor, like the format_model/format_mfr hooks of the NUT
+     * subdrivers. Must be idempotent.
+     */
+    virtual void formatDeviceStrings(UPSData& data) {}
+
+    /**
+     * @brief True when the load.* and shutdown.* commands are offered (US-058).
+     *
+     * False for subdrivers whose NUT counterpart has no such commands or uses its own
+     * encodings: they are then neither listed nor executed. ups.delay.* follows
+     * delayVariablesSupported().
+     */
+    virtual bool shutdownCommandsSupported() const { return true; }
+
+    /**
+     * @brief Default ups.delay.shutdown / ups.delay.start in seconds, set by the host at
+     * connection: DEFAULT_OFFDELAY / DEFAULT_ONDELAY of usbhid-ups.h (20 / 30).
+     */
+    virtual int32_t defaultOffDelay() const { return 20; }
+    virtual int32_t defaultOnDelay() const { return 30; }
+
+    /**
+     * @brief True when the upstream subdriver declares ups.delay.shutdown/start (US-066).
+     *
+     * Usually the same drivers that offer the shutdown commands; powercom-hid declares the
+     * variables although the commands are not offered here (US-058).
+     */
+    virtual bool delayVariablesSupported() const { return shutdownCommandsSupported(); }
+
+    /**
+     * @brief Commands and SET VAR of the driver's protocol (US-105).
+     *
+     * A static, stateless object: the host uses it after releasing the data lock, when the
+     * poll task may already have deleted the driver. The HID drivers return HidControl, a
+     * driver of another protocol (Q*) its own.
+     */
+    virtual const IUpsControl& control() const = 0;
+
+    /**
+     * @brief The HID extension of the driver (US-131), nullptr for a driver of another family.
+     *
+     * The host reaches the HID hooks only through it (DriverDispatch.h), as HidControl
+     * reaches the HID part of IUpsControlPort only through its HID accessor (US-105).
+     */
+    virtual IHidDriver* hid() { return nullptr; }
+    virtual const IHidDriver* hid() const { return nullptr; }
+
+    /**
+     * @brief The data are stale for the driver itself (US-136, ADR 0013 section 2): the Q*
+     * driver after the consecutive failed polls of upsdrv_updateinfo() (dstate_datastale()).
+     * The host adds it to its own checks; false for the HID drivers, judged by the host.
+     */
+    virtual bool dataStale() const { return false; }
+
+    /**
+     * @brief True when the host may serve the data FIRST_DATA_MAX_MS after the claim even
+     * without a first full poll (issue #60). The Q* driver waits without limit: until the
+     * protocol is recognised and the first walk is done the data stay stale (US-136).
+     */
+    virtual bool firstDataWaitBounded() const { return true; }
+
+    // The Q* extension (US-136), nullptr for a driver of another family, as hid()
+    virtual QxDriver* qx() { return nullptr; }
+    virtual const QxDriver* qx() const { return nullptr; }
 };
 
 #endif // I_UPS_DRIVER_H

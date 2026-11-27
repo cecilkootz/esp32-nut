@@ -3,64 +3,52 @@
 
 #include <Arduino.h>
 #include <vector>
+#include "IUpsSource.h"
+#include "IHidControlPort.h"
+#include "HidControl.h"
 #include "UPSData.h"
 #include "HIDUsages.h"
 #include "HIDParser.h"
+#include "NutTable.h"
 
-class IUSBHostUPS {
+// The USB HID host: the consumer-facing IUpsSource (US-103) and the port of the driver's
+// control (IUpsControlPort with its HID part IHidControlPort, on top of the driver-facing
+// IHidTransport of US-104). Commands and writable variables go through the control of the
+// attached driver (US-105).
+class IUSBHostUPS : public IUpsSource, public IHidControlPort {
 public:
-    virtual ~IUSBHostUPS() = default;
-    virtual void end() {}
-    virtual void lock() const = 0;
-    virtual void unlock() const = 0;
-    
-    class UPSDataLock {
-    private:
-        const UPSData& _data;
-        const IUSBHostUPS* _host;
-    public:
-        UPSDataLock(const UPSData& data, const IUSBHostUPS* host) : _data(data), _host(host) {
-            if (_host) _host->lock();
-        }
-        ~UPSDataLock() {
-            if (_host) _host->unlock();
-        }
-        UPSDataLock(const UPSDataLock&) = delete;
-        UPSDataLock& operator=(const UPSDataLock&) = delete;
-        UPSDataLock(UPSDataLock&& other) noexcept : _data(other._data), _host(other._host) {
-            other._host = nullptr;
-        }
-        const UPSData* operator->() const { return &_data; }
-        const UPSData& get() const { return _data; }
-    };
+    // Declared by both bases: one override implements each for both
+    void lock() const override = 0;
+    void unlock() const override = 0;
+    bool isConnected() const override = 0;
 
-    virtual UPSDataLock getUPSData() const = 0;
-    virtual String getUPSStatusString() const = 0;
-    virtual bool setBeeper(bool enable) = 0;
-    virtual bool isConnected() const = 0;
-    // True when the values can no longer be refreshed: control pipe not answering, or
-    // no device attached (after the boot grace). Consumers must not serve them as current.
-    virtual bool isDataStale() const { return false; }
-    virtual bool supportsBeeperToggle() const { return true; }
-
-    virtual const std::vector<HIDUsageDef>& getUsages() const = 0;
     virtual const HIDUsageDef* getUsageDef(uint32_t usage) const = 0;
-    virtual const HIDParser* getHIDParser() const = 0;
-    virtual String getActiveBeeperPath() const = 0;
-    virtual uint32_t getQuirks() const = 0;
-    // True while polling backs off after a link failure: drivers skip their poll steps
-    virtual bool isPollingPaused() const = 0;
-    virtual bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) = 0;
-    // Fetches a string descriptor and hands it to the driver's parseStringDescriptor()
-    virtual bool requestStringDescriptor(uint8_t string_index) = 0;
-    virtual uint16_t getVID() const { return 0; }
-    virtual uint16_t getPID() const { return 0; }
-    virtual void logDebug(const String& msg) const {}
 
-    // String indices of the device descriptor, set when the interface is claimed
-    uint8_t _iManufacturer = 0;
-    uint8_t _iProduct = 0;
-    uint8_t _iSerialNumber = 0;
+    // Control of the attached driver; the USB host reads it from the driver
+    virtual const IUpsControl& activeControl() const { return HidControl::instance(); }
+    // The host's data, still valid once the temporary lock is released: read it with lock() held
+    const UPSData& upsData() const override { return getUPSData().get(); }
+
+    std::vector<const UPSCommandInfo*> getSupportedCommands() const override {
+        return activeControl().supportedCommands(*this);
+    }
+    CommandResult executeCommand(const char* name, const char* param = nullptr) override {
+        return activeControl().executeCommand(*this, name, param);
+    }
+    NutTable::SetStatus setVariable(const char* name, const char* value) override {
+        return activeControl().setVariable(*this, name, value);
+    }
+    NutTable::SetStatus resetVariable(const char* name) override {
+        String value;
+        return activeControl().resetVariable(*this, name, value);
+    }
+
+    void noteDefaultShutdown(const char* via) override { _last_default_shutdown = via ? via : ""; }
+    // Command shutdown.default ran with its last success, empty if none (US-058)
+    const String& lastDefaultShutdown() const { return _last_default_shutdown; }
+
+protected:
+    String _last_default_shutdown;
 };
 
 #endif // I_USB_HOST_UPS_H

@@ -1,85 +1,239 @@
 #include "WebApiJson.h"
+#include "ChunkWriter.h"
+#include "UsbDiagJson.h"
+#include "AuthPolicy.h"
+#include "AuthService.h"
+#include "UpsCommands.h"
+#include "BoardTime.h"
 #include "network/web_config_server.h"
-#include <WiFi.h>
 #include <ArduinoJson.h>
 #include "core/app_logger.h"
+#include "core/crash_diag.h"
 #include "core/system_status.h"
 #include "network/mqtt_bridge.h"
 #include "network/web_assets.h"
 #include <Update.h>
+#include "esp_task_wdt.h"
+#include "esp_timer.h"
 
 WebConfigServer::WebConfigServer(ConfigManager& config_mgr) 
-    : server(80), config_mgr(config_mgr), is_ap_mode(false) {}
+    : server(80), config_mgr(config_mgr), is_ap_mode(false),
+      credentials(auth_crypto, auth_storage), sessions(auth_crypto, auth_storage),
+      auth(credentials, sessions, throttle) {}
+
+// Testo inviato dal client, solo per il log: caratteri non stampabili sostituiti e al
+// massimo max_len caratteri, così il client non può sporcare il log
+static String loggableText(const String& raw, size_t max_len) {
+    String out;
+    for (size_t i = 0; i < raw.length() && i < max_len; i++) {
+        char c = raw[i];
+        out += (c >= 0x20 && c <= 0x7E) ? c : '?';
+    }
+    return out;
+}
+
+// Ora della scheda di una riga del System Log (US-118), definita più sotto; usata anche per
+// gli scambi Q* dell'export USB (US-136)
+static bool boardTimeOf(void* ctx, uint32_t row_uptime_ms, uint32_t list_uptime_ms, char* out, size_t len);
+
+// Username tentato in un body di login, solo per il log: caratteri non stampabili
+// sostituiti e lunghezza limitata, così il client non può sporcare il log
+static String loggableUsername(const String& body) {
+    if (body.length() > AuthService::kMaxBodyLength) return String("?");
+    JsonDocument filter;
+    filter["username"] = true;
+    JsonDocument req;
+    if (deserializeJson(req, body, DeserializationOption::Filter(filter)) || !req["username"].is<const char*>()) {
+        return String("?");
+    }
+    return loggableText(req["username"].as<String>(), 32);
+}
 
 void WebConfigServer::begin(bool isAPMode) {
     this->is_ap_mode = isAPMode;
+    credentials.begin();
+    // Sessioni "Remember me" salvate nel blob NVS "sessions" (ADR 0009)
+    sessions.begin();
+    AppLogger::log("INFO", credentials.hasCredentials()
+        ? "[AUTH] Web UI credentials configured"
+        : "[AUTH] No Web UI credentials: first-use setup required");
+    if (sessions.persistentCount() > 0) {
+        AppLogger::log("INFO", "[AUTH] Persistent sessions restored: %u", (unsigned)sessions.persistentCount());
+    }
     
-    if (is_ap_mode) {
+    if (!network) {
+        // setNetwork() missing: no captive portal, and the status APIs report no link
+        AppLogger::log("ERROR", "[WEB] No network service set: captive portal disabled");
+    }
+    if (is_ap_mode && network) {
         // Start DNS Server for Captive Portal
         dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-        dnsServer.start(53, "*", WiFi.softAPIP());
+        IPAddress ap_ip;
+        ap_ip.fromString(network->localIP());
+        dnsServer.start(53, "*", ap_ip);
     }
 
     static bool _handlers_registered = false;
     if (_handlers_registered) return;
     _handlers_registered = true;
 
+    // Ogni rotta passa dal guard (ADR 0009): in AP è tutto aperto, in STA rispondono
+    // senza sessione solo le rotte pubbliche elencate in AuthPolicy
+
     // Serve explicitly the index.html on root
-    server.on("/", HTTP_GET, [this]() {
+    server.on("/", HTTP_GET, guarded([this]() {
         server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         server.sendHeader("Pragma", "no-cache");
         server.sendHeader("Expires", "-1");
         server.sendHeader("Content-Encoding", "gzip");
         server.send_P(200, "text/html", (const char*)web_asset_index_inlined_html, web_asset_index_inlined_html_len);
-    });
+    }));
 
-    server.on("/index.html", HTTP_GET, [this]() {
+    server.on("/index.html", HTTP_GET, guarded([this]() {
         server.sendHeader("Location", "/", true);
         server.send(301, "text/plain", "");
-    });
+    }));
 
 
     // REST endpoints
-    server.on("/api/wifi/connect", HTTP_POST, [this]() { handleConnect(); });
-    server.on("/api/nut/config", HTTP_POST, [this]() { handleNutConfig(); });
-    server.on("/api/mqtt/config", HTTP_POST, [this]() { handleMqttConfig(); });
-    server.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
-    server.on("/api/config", HTTP_GET, [this]() { handleGetConfig(); });
-    server.on("/api/ups-vars", HTTP_GET, [this]() { handleUpsVars(); });
-    server.on("/api/system-status", HTTP_GET, [this]() { handleSystemStatus(); });
-    server.on("/api/beeper", HTTP_POST, [this]() { handleBeeper(); });
-    server.on("/api/usb/dump", HTTP_GET, [this]() {
+    // Boards without Wi-Fi have no Wi-Fi settings: the route is not registered (404, US-092)
+    if (board().has_wifi) {
+        server.on("/api/wifi/connect", HTTP_POST, guarded([this]() { handleConnect(); }));
+    }
+    server.on("/api/nut/config", HTTP_POST, guarded([this]() { handleNutConfig(); }));
+    server.on("/api/mqtt/config", HTTP_POST, guarded([this]() { handleMqttConfig(); }));
+    // Custom variables of the NUT Server page (US-115); not public in AuthPolicy, so
+    // protected by the login
+    server.on("/api/nut/overrides", HTTP_GET, guarded([this]() { handleGetNutOverrides(); }));
+    server.on("/api/nut/overrides", HTTP_POST, guarded([this]() { handleSetNutOverrides(); }));
+    // Board page (US-094): not public in AuthPolicy, so protected by the login
+    server.on("/api/board", HTTP_GET, guarded([this]() { handleGetBoard(); }));
+    server.on("/api/board", HTTP_POST, guarded([this]() { handleSetBoard(); }));
+    // Hostname (US-113), on every board; not public in AuthPolicy, so protected by the login
+    server.on("/api/network/hostname", HTTP_POST, guarded([this]() { handleSetHostname(); }));
+    // W5500 wired by the user (US-126), only on boards that offer it (404 on the P4); in AP
+    // and in station, protected by the login like the hostname
+    if (board().spi_eth.available) {
+        server.on("/api/network/eth", HTTP_GET, guarded([this]() { handleGetEthSpi(); }));
+        server.on("/api/network/eth", HTTP_POST, guarded([this]() { handleSetEthSpi(); }));
+    }
+    // Remote logging of the System Logs page (US-116): not public in AuthPolicy (ADR 0009),
+    // so protected by the login
+    server.on("/api/update", HTTP_GET, guarded([this]() { handleGetUpdate(); }));
+    server.on("/api/update/check", HTTP_POST, guarded([this]() { handleUpdateCheck(); }));
+    server.on("/api/update/install", HTTP_POST, guarded([this]() { handleUpdateInstall(); }));
+    server.on("/api/update/settings", HTTP_POST, guarded([this]() { handleUpdateSettings(); }));
+    server.on("/api/logging", HTTP_GET, guarded([this]() { handleGetLogging(); }));
+    server.on("/api/logging", HTTP_POST, guarded([this]() { handleSetLogging(); }));
+    server.on("/api/time", HTTP_GET, guarded([this]() { handleGetTime(); }));
+    server.on("/api/time", HTTP_POST, guarded([this]() { handleSetTime(); }));
+    server.on("/api/logs", HTTP_GET, guarded([this]() { handleLogs(); }));
+    server.on("/api/config", HTTP_GET, guarded([this]() { handleGetConfig(); }));
+    server.on("/api/ups-vars", HTTP_GET, guarded([this]() { handleUpsVars(); }));
+    server.on("/api/system-status", HTTP_GET, guarded([this]() { handleSystemStatus(); }));
+    server.on("/api/system/restart", HTTP_POST, guarded([this]() { handleSystemRestart(); }));
+    server.on("/api/ups/commands", HTTP_GET, guarded([this]() { handleUpsCommands(); }));
+    server.on("/api/ups/command", HTTP_POST, guarded([this]() { handleUpsCommand(); }));
+    server.on("/api/ups/variables", HTTP_GET, guarded([this]() { handleUpsVariables(); }));
+    server.on("/api/ups/variable", HTTP_POST, guarded([this]() { handleUpsVariable(); }));
+    server.on("/api/ups/variable/reset", HTTP_POST, guarded([this]() { handleUpsVariableReset(); }));
+    server.on("/api/usb/dump", HTTP_GET, guarded([this]() {
         if (!usb_ups) {
             server.send(503, "application/json", "{\"error\": \"UPS non inizializzato\"}");
             return;
         }
+        // Istantanea dei dati sotto il lock dell'host, poi JSON scritto a pezzi fuori dal lock,
+        // senza JsonDocument né String dell'export intero: picco di heap minimo (US-095, US-096).
+        // API classica e non chunkWrite(): sendContent() usa il chunked solo con HTTP/1.1
+        UsbDiagSnapshot snap;
+        usb_ups->snapshotUSBDiagnostics(snap);
+        // Ora della scheda degli scambi Q* (US-136), nel formato delle righe del System Log
+        WallClock ref;
+        if (ntp_clock && ntp_clock->reference(ref)) {
+            for (auto& e : snap.qx.exchanges) {
+                char t[BOARD_TIME_LEN + 1];
+                if (boardTimeOf(&ref, e.uptime_ms, snap.qx.uptime_ms, t, sizeof(t))) e.time = t;
+            }
+        }
         server.sendHeader("Content-Disposition", "attachment; filename=\"usb_diagnostics.json\"");
-        server.send(200, "application/json", usb_ups->dumpUSBDiagnostics());
-    });
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        char buf[1024];
+        ChunkWriter writer(buf, sizeof(buf), [this](const char* data, size_t len) {
+            server.sendContent(data, len);
+        });
+        UsbDiagJson::write(snap, writer);
+        writer.flush();
+        server.sendContent("");
+    }));
+    // Lettura su richiesta dei report per l'export (US-119): la POST la chiede al task di
+    // poll e risponde subito, la pagina segue lo stato con la GET e poi scarica /api/usb/dump
+    server.on("/api/usb/dump/read", HTTP_POST, guarded([this]() {
+        if (!usb_ups || !usb_ups->requestDiagRead()) {
+            server.send(503, "application/json", "{\"error\":\"UPS not ready\"}");
+            return;
+        }
+        server.sendHeader("Cache-Control", "no-store");
+        server.send(202, "application/json", WebApiJson::diagReadJson(usb_ups->diagReadStatus()));
+    }));
+    server.on("/api/usb/dump/read", HTTP_GET, guarded([this]() {
+        DiagReadStatus st;
+        if (usb_ups) st = usb_ups->diagReadStatus();
+        server.sendHeader("Cache-Control", "no-store");
+        server.send(200, "application/json", WebApiJson::diagReadJson(st));
+    }));
+
+    // Rotte pubbliche dell'autenticazione (elencate in AuthPolicy)
+    server.on("/login", HTTP_GET, guarded([this]() { handleLoginPage(); }));
+    server.on("/api/auth/login", HTTP_POST, guarded([this]() { handleAuthLogin(); }));
+    server.on("/api/auth/status", HTTP_GET, guarded([this]() { handleAuthStatus(); }));
+    server.on("/api/auth/credentials", HTTP_POST, guarded([this]() { handleAuthCredentials(); }));
+    server.on("/api/auth/logout", HTTP_POST, guarded([this]() { handleAuthLogout(); }));
+    // Non pubblica: il guard richiede una sessione valida (in STA)
+    server.on("/api/auth/logout-all", HTTP_POST, guarded([this]() { handleAuthLogoutAll(); }));
 
     // OTA endpoints
-    server.on("/update", HTTP_GET, [this]() { handleOTAPage(); });
-    server.on("/update", HTTP_POST, 
-        [this]() { 
+    server.on("/update", HTTP_GET, guarded([this]() { handleOTAPage(); }));
+    // Il controllo che conta è nella callback di upload (UPLOAD_FILE_START), che gira
+    // prima di questo handler e prima di qualsiasi scrittura nel flash
+    server.on("/update", HTTP_POST,
+        guarded([this]() {
+            // Nessun file ricevuto (body non multipart): niente "OK" e niente riavvio
+            if (!ota_upload_started) {
+                server.sendHeader("Connection", "close");
+                if (update_service && update_service->busy()) {
+                    server.send(409, "application/json", "{\"error\":\"An online update is in progress\"}");
+                } else {
+                    server.send(400, "application/json", "{\"error\":\"multipart upload required\"}");
+                }
+                return;
+            }
+            ota_upload_started = false;
             server.sendHeader("Connection", "close");
             server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
             if (!Update.hasError()) {
                 should_restart = true;
                 restart_request_time = millis();
             }
-        },
+        }),
         [this]() { handleOTAUpload(); }
     );
 
-    // Catch-all for Captive Portal (redirect to captive page if not found)
+    // Catch-all for Captive Portal (redirect to captive page if not found).
+    // In AP il guard restituisce sempre ALLOW: il redirect captive resta invariato
     server.onNotFound([this]() {
-        if (is_ap_mode && server.hostHeader() != WiFi.softAPIP().toString()) {
-            server.sendHeader("Location", String("http://") + WiFi.softAPIP().toString() + "/", true);
+        if (!authorize()) return;
+        if (is_ap_mode && network && server.hostHeader() != network->localIP()) {
+            server.sendHeader("Location", String("http://") + network->localIP() + "/", true);
             server.send(302, "text/plain", "");
         } else {
             server.send(404, "text/plain", "Not found");
         }
     });
+
+    // Content-Type per requireJson (anti-CSRF), Cookie per la sessione (ADR 0009)
+    static const char* collectedHeaders[] = {"Content-Type", "Cookie"};
+    server.collectHeaders(collectedHeaders, 2);
 
     server.begin();
     AppLogger::log("INFO", "[WEB] Server started on port 80");
@@ -91,12 +245,21 @@ void WebConfigServer::loop() {
     }
     server.handleClient();
 
+    if (recovery.update(millis()) == RecoveryWindow::Event::EXPIRED) {
+        AppLogger::log("INFO", "[AUTH] Recovery window closed: expired, the current credentials stay valid");
+    }
+
+    if (update_service && update_service->takeRestartRequest()) {
+        should_restart = true;
+        restart_request_time = millis();
+    }
+
     if (should_restart && (millis() - restart_request_time >= 1000)) {
         if (mqtt_bridge) {
             mqtt_bridge->end();
         }
-        if (usb_ups) {
-            usb_ups->end();
+        if (ups_source) {
+            ups_source->end();
             vTaskDelay(pdMS_TO_TICKS(100));
         }
         ESP.restart();
@@ -105,14 +268,456 @@ void WebConfigServer::loop() {
 
 void WebConfigServer::setUPS(USBHostUPS* ups) {
     usb_ups = ups;
+    ups_source = ups;
 }
 
-void WebConfigServer::setNetwork(AppNetworkManager* network) {
-    network_mgr = network;
+void WebConfigServer::setNetwork(AppNetworkManager* net) {
+    network = net;
 }
 
-void WebConfigServer::setNUT(NUTServer* nut) {
-    nut_server = nut;
+void WebConfigServer::setBoardSettings(BoardSettingsStore* store, const BoardSettings& settings) {
+    board_store = store;
+    board_settings = settings;
+}
+
+void WebConfigServer::setStatusLed(DiagnosticLED* led) {
+    status_led = led;
+}
+
+void WebConfigServer::setAutoShutdown(AutoShutdown* sd) {
+    auto_shutdown = sd;
+}
+
+AutoShutdownAvailability WebConfigServer::autoShutdownAvailability() const {
+    bool connected = ups_source && ups_source->isConnected();
+    // The catalog is read only with the UPS connected
+    bool has_command = connected && AutoShutdown::offersShutdownDefault(ups_source->getSupportedCommands());
+    return ::autoShutdownAvailability(connected, has_command);
+}
+
+void WebConfigServer::handleGetBoard() {
+    // US-138: the Q* driver section only while a Q* driver is bound
+    String detected;
+    BoardQxInfo qx = { nullptr };
+    bool has_qx = usb_ups && usb_ups->qxDriverInfo(detected);
+    qx.detected = detected.c_str();
+    server.send(200, "application/json",
+                WebApiJson::boardSettingsJson(board(), board_settings, autoShutdownAvailability(),
+                                              has_qx ? &qx : nullptr));
+}
+
+void WebConfigServer::handleSetBoard() {
+    if (!requireJson()) return;
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    BoardSettings next;
+    bool restart = false;
+    String rejected;
+    if (int status = WebApiJson::checkBoardSettingsBody(doc, board(), board_settings, autoShutdownAvailability(),
+                                                        next, restart, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+    if (!board_store || !board_store->save(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
+        return;
+    }
+    bool led_changed = next.led_on != board_settings.led_on || next.led_level != board_settings.led_level;
+    bool sd_changed = next.auto_shutdown != board_settings.auto_shutdown;
+    bool qx_changed = strcmp(next.qx_protocol, board_settings.qx_protocol) != 0 ||
+                      next.qx_novendor != board_settings.qx_novendor;
+    board_settings = next;
+    if (qx_changed) {
+        // US-138: applied by the poll task, the detection starts again without a restart
+        AppLogger::log("INFO", "[BOARD] Q* driver settings: protocol %s, novendor %s (by '%s')",
+                       next.qx_protocol[0] ? next.qx_protocol : "auto", next.qx_novendor ? "on" : "off",
+                       webUiUser().c_str());
+        if (usb_ups) usb_ups->setQxSettings(next.qx_protocol, next.qx_novendor);
+    }
+    if (sd_changed) {
+        if (auto_shutdown) auto_shutdown->setEnabled(next.auto_shutdown);
+        AppLogger::log("INFO", "[BOARD] Automatic shutdown %s", next.auto_shutdown ? "enabled" : "disabled");
+    }
+    if (led_changed) {
+        if (status_led) {
+            status_led->setBrightness(ledBrightness(next.led_level));
+            status_led->setUserEnabled(next.led_on);
+        }
+        AppLogger::log("INFO", "[BOARD] Status LED %s, brightness level %u", next.led_on ? "on" : "off",
+                       (unsigned)next.led_level);
+    }
+    server.send(200, "application/json", restart ? "{\"success\":true,\"restart\":true}"
+                                                 : "{\"success\":true,\"restart\":false}");
+    if (restart) {
+        AppLogger::log("WARN", "[BOARD] UPS USB port set to %s: restarting", board().usb.ports[next.usb_port].label);
+        should_restart = true;
+        restart_request_time = millis();
+    }
+}
+
+void WebConfigServer::setHostnameStore(HostnameStore* store, const String& saved) {
+    hostname_store = store;
+    saved_hostname = saved;
+}
+
+void WebConfigServer::setNutOverrides(NvsNutOverrideStore* store, std::vector<NutOverride>* list) {
+    nut_override_store = store;
+    nut_overrides = list;
+}
+
+void WebConfigServer::setNutServer(NUTServer* server) {
+    nut_server = server;
+}
+
+// Custom variables of the NUT Server page (US-115)
+void WebConfigServer::handleGetNutOverrides() {
+    static const std::vector<NutOverride> none;
+    server.send(200, "application/json",
+                WebApiJson::nutOverridesJson(nut_overrides ? *nut_overrides : none, ups_source));
+}
+
+// Replaces the whole list: saved first, then used by the NUT server at once (same task)
+void WebConfigServer::handleSetNutOverrides() {
+    if (!requireJson()) return;
+    if (!nut_override_store || !nut_overrides) {
+        server.send(503, "application/json", "{\"error\":\"Not available\"}");
+        return;
+    }
+    String body = server.hasArg("plain") ? server.arg("plain") : String();
+    std::vector<NutOverride> next;
+    String response;
+    if (int status = WebApiJson::checkNutOverridesBody(body, next, response)) {
+        server.send(status, "application/json", response);
+        return;
+    }
+    if (!nut_override_store->save(next)) {
+        AppLogger::log("ERROR", "[NUT] Cannot save the custom variables to NVS");
+        server.send(500, "application/json", "{\"error\":\"Failed to save\"}");
+        return;
+    }
+    *nut_overrides = next;
+    if (usb_ups) {
+        // US-146: the ups.realpower estimate follows them at the next poll, no restart
+        float real_w = 0.0f, apparent_va = 0.0f;
+        NutOverrides::powerNominals(*nut_overrides, real_w, apparent_va);
+        usb_ups->setCustomPowerNominals(real_w, apparent_va);
+    }
+    AppLogger::log("INFO", "[NUT] Custom variables saved (%u) by '%s'", (unsigned)next.size(), webUiUser().c_str());
+    server.send(200, "application/json", WebApiJson::nutOverridesJson(*nut_overrides, ups_source));
+}
+
+void WebConfigServer::handleSetHostname() {
+    if (!requireJson()) return;
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    String next;
+    String rejected;
+    if (int status = WebApiJson::checkHostnameBody(doc, next, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+    if (next == saved_hostname) {
+        server.send(200, "application/json", "{\"success\":true,\"restart\":false}");
+        return;
+    }
+    if (!hostname_store || !hostname_store->save(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save the hostname\"}");
+        return;
+    }
+    saved_hostname = next;
+    server.send(200, "application/json", "{\"success\":true,\"restart\":true}");
+    if (next.length() > 0) {
+        AppLogger::log("INFO", "[NETWORK] Hostname set to %s: restarting", next.c_str());
+    } else {
+        String def = network ? network->defaultHostname() : String();
+        AppLogger::log("INFO", "[NETWORK] Hostname reset to the default %s: restarting", def.c_str());
+    }
+    should_restart = true;
+    restart_request_time = millis();
+}
+
+// --- W5500 of the Network page (US-126) ---
+
+void WebConfigServer::setEthSpi(EthSpiStore* store, const EthSpiSettings& settings, NetworkMode mode) {
+    eth_spi_store = store;
+    eth_spi = settings;
+    eth_mode = mode;
+}
+
+void WebConfigServer::handleGetEthSpi() {
+    // off: module disabled; unused: Wi-Fi mode (US-127); active: the board is on Ethernet;
+    // standby: on Wi-Fi in AUTO mode, the W5500 waits for the cable (US-127); fallback:
+    // enabled but the board is on Wi-Fi or the AP, with the reason of the startup probe
+    const char* state = "off";
+    const char* reason = "";
+    if (eth_spi.enabled) {
+        if (eth_mode == NetworkMode::WIFI) {
+            state = "unused";
+        } else if (network && strcmp(network->typeName(), "ethernet") == 0) {
+            state = "active";
+            // On Ethernet without a connection (Ethernet mode without a cable, or before the
+            // switch to Wi-Fi in AUTO): the live reason, so the page does not just say Active
+            NetLinkInfo info;
+            network->linkInfo(info);
+            if (info.state == NetLinkState::DISCONNECTED) {
+                reason = ethProbeReason(EthProbeOutcome::NO_LINK);
+            } else if (info.state == NetLinkState::CONNECTING) {
+                reason = ethProbeReason(EthProbeOutcome::NO_IP);
+            }
+        } else if (network && network->ethStandby()) {
+            state = "standby";
+        } else {
+            state = "fallback";
+            reason = network ? ethProbeReason(network->ethProbe()) : "";
+        }
+    }
+    server.send(200, "application/json", WebApiJson::ethSpiJson(board(), eth_spi, eth_mode, state, reason));
+}
+
+void WebConfigServer::handleSetEthSpi() {
+    if (!requireJson()) return;
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    EthSpiSettings next;
+    NetworkMode next_mode = eth_mode;
+    bool restart = false;
+    String response;
+    if (int status = WebApiJson::checkEthSpiBody(doc, board(), eth_spi, eth_mode, next, next_mode, restart,
+                                                 response)) {
+        server.send(status, "application/json", response);
+        return;
+    }
+    if (!restart) {
+        server.send(200, "application/json", response);
+        return;
+    }
+    // Only what changed: the pins (US-126) and the link mode (US-127)
+    const bool saved = eth_spi_store && (next == eth_spi || eth_spi_store->save(next)) &&
+                       (next_mode == eth_mode || eth_spi_store->saveMode(next_mode));
+    if (!saved) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save the W5500 settings\"}");
+        return;
+    }
+    eth_spi = next;
+    eth_mode = next_mode;
+    server.send(200, "application/json", response);
+    AppLogger::log("INFO", "[NETWORK] W5500 settings saved (%s, link mode %s): restarting",
+                   next.enabled ? "enabled" : "disabled", networkModeName(next_mode));
+    should_restart = true;
+    restart_request_time = millis();
+}
+
+// --- Remote logging of the System Logs page (US-116, ADR 0012) ---
+
+void WebConfigServer::setUpdateService(UpdateService* updates) {
+    update_service = updates;
+}
+
+void WebConfigServer::handleGetUpdate() {
+    if (!update_service) {
+        server.send(503, "application/json", "{\"error\":\"Online update not available\"}");
+        return;
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", WebApiJson::updateStatusJson(update_service->status()));
+}
+
+static int updateRequestStatus(UpdateService::Request r, String& response) {
+    switch (r) {
+    case UpdateService::Request::Accepted:
+        response = "{\"success\":true}";
+        return 202;
+    case UpdateService::Request::TooSoon:
+        response = "{\"error\":\"Checked a moment ago, try again in 30 seconds\"}";
+        return 429;
+    case UpdateService::Request::NotInstallable:
+        response = "{\"error\":\"No verified update to install\"}";
+        return 409;
+    default:
+        response = "{\"error\":\"An update check or install is already running\"}";
+        return 409;
+    }
+}
+
+void WebConfigServer::handleUpdateCheck() {
+    if (!requireJson()) return;
+    if (!update_service) {
+        server.send(503, "application/json", "{\"error\":\"Online update not available\"}");
+        return;
+    }
+    String response;
+    int status = updateRequestStatus(update_service->requestCheck(), response);
+    server.send(status, "application/json", response);
+}
+
+void WebConfigServer::handleUpdateInstall() {
+    if (!requireJson()) return;
+    if (!update_service) {
+        server.send(503, "application/json", "{\"error\":\"Online update not available\"}");
+        return;
+    }
+    if (ota_upload_started || Update.isRunning()) {
+        server.send(409, "application/json", "{\"error\":\"A firmware upload is in progress\"}");
+        return;
+    }
+    String response;
+    UpdateService::Request r = update_service->requestInstall();
+    int status = updateRequestStatus(r, response);
+    if (r == UpdateService::Request::Accepted) {
+        AppLogger::log("INFO", String("[UPDATE] Online update started from the Web UI by '") + webUiUser() + "'");
+    }
+    server.send(status, "application/json", response);
+}
+
+void WebConfigServer::handleUpdateSettings() {
+    if (!requireJson()) return;
+    if (!update_service) {
+        server.send(503, "application/json", "{\"error\":\"Online update not available\"}");
+        return;
+    }
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    bool auto_check = true;
+    String rejected;
+    if (int status = WebApiJson::checkUpdateSettingsBody(doc, auto_check, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+    if (!update_service->setAutoCheck(auto_check)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
+        return;
+    }
+    AppLogger::log("INFO", String("[UPDATE] Daily update check ") + (auto_check ? "enabled" : "disabled") + " by '" +
+                               webUiUser() + "'");
+    server.send(200, "application/json", "{\"success\":true}");
+}
+
+void WebConfigServer::setRemoteLog(LogSettingsStore* store, SyslogOutput* syslog) {
+    log_store = store;
+    syslog_output = syslog;
+}
+
+void WebConfigServer::handleGetLogging() {
+    if (!log_store || !syslog_output) {
+        server.send(503, "application/json", "{\"error\":\"Remote logging not available\"}");
+        return;
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json",
+                WebApiJson::remoteLogJson(log_store->loadSyslog(), syslog_output->status()));
+}
+
+void WebConfigServer::handleSetLogging() {
+    if (!requireJson()) return;
+    if (!log_store || !syslog_output) {
+        server.send(503, "application/json", "{\"error\":\"Remote logging not available\"}");
+        return;
+    }
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    SyslogSettings next;
+    String rejected;
+    if (int status = WebApiJson::checkRemoteLogBody(doc, log_store->loadSyslog(), next, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+    if (!log_store->saveSyslog(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
+        return;
+    }
+    // Applied by the log task within a second, no restart; the log task logs the change
+    // and tells the syslog server (SyslogChange.h)
+    String who = webUiUser();
+    syslog_output->configure(next, who.length() > 0 ? who : String("Web UI"));
+    server.send(200, "application/json", "{\"success\":true}");
+}
+
+// --- Network time of Board Settings (US-117, ADR 0009) ---
+
+void WebConfigServer::setTime(TimeSettingsStore* store, NtpClock* clock) {
+    time_store = store;
+    ntp_clock = clock;
+}
+
+void WebConfigServer::handleGetTime() {
+    if (!time_store || !ntp_clock) {
+        server.send(503, "application/json", "{\"error\":\"Time not available\"}");
+        return;
+    }
+    NtpClock::Status s = ntp_clock->status();
+    TimeStatusView view = { s.state,  s.has_time, String(), String(), String(), s.since_sync_s,
+                            String(), s.origin,   s.dhcp,   String() };
+    // US-145: the server in use, the DHCP one or the one of the settings
+    if (s.dhcp_addr != 0) {
+        char ip[IPV4_TEXT_MAX];
+        formatIpv4(s.dhcp_addr, ip);
+        view.dhcp_server = ip;
+    }
+    view.server = s.origin == NtpOrigin::Dhcp ? view.dhcp_server : s.settings.server;
+    if (s.has_time) {
+        struct tm t;
+        char buf[32];
+        NtpClock::localTm(s.epoch_ms, t);
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &t);
+        view.local = buf;
+        strftime(buf, sizeof(buf), "%Z", &t);
+        view.abbr = buf;
+        NtpClock::utcTm(s.epoch_ms, t);
+        strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &t);
+        view.utc = buf;
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    // The saved settings: the clock may apply a POST a loop later
+    server.send(200, "application/json", WebApiJson::timeJson(time_store->load(), view));
+}
+
+void WebConfigServer::handleSetTime() {
+    if (!requireJson()) return;
+    if (!time_store || !ntp_clock) {
+        server.send(503, "application/json", "{\"error\":\"Time not available\"}");
+        return;
+    }
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    TimeSettings next;
+    String rejected;
+    if (int status = WebApiJson::checkTimeBody(doc, time_store->load(), next, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+    if (!time_store->save(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
+        return;
+    }
+    // Applied by NtpClock::poll() in the next loop, no restart; it logs the change
+    String who = webUiUser();
+    ntp_clock->configure(next, who.length() > 0 ? who : String("Web UI"));
+    server.send(200, "application/json", "{\"success\":true}");
+}
+
+void WebConfigServer::openRecoveryWindow(uint32_t now) {
+    recovery.open(now);
+    AppLogger::log("INFO", "[AUTH] Recovery window open for %u min: new web credentials can be created "
+                           "without the current password",
+                   (unsigned)(recovery.durationMs() / 60000));
 }
 
 void WebConfigServer::setMqtt(MqttBridge* mqtt) {
@@ -120,6 +725,7 @@ void WebConfigServer::setMqtt(MqttBridge* mqtt) {
 }
 
 void WebConfigServer::handleConnect() {
+    if (!requireJson()) return;
     if (server.hasArg("plain") == false) {
         server.send(400, "application/json", "{\"error\": \"Body not received\"}");
         return;
@@ -157,11 +763,33 @@ void WebConfigServer::handleConnect() {
     }
 }
 
+// Board time of a System Log line (US-118), in the time zone of Board Settings. Called
+// under the logger mutex: it uses only the copied reference (not the NtpClock mutex,
+// whose owner may log) and localtime_r/gmtime_r, guarded by newlib
+static bool boardTimeOf(void* ctx, uint32_t row_uptime_ms, uint32_t list_uptime_ms, char* out, size_t len) {
+    const WallClock* ref = static_cast<const WallClock*>(ctx);
+    int64_t list_epoch_ms;
+    if (!ref->epochMsAt(list_uptime_ms, list_epoch_ms)) return false;
+    int64_t ms = boardEpochMs(list_epoch_ms, list_uptime_ms, row_uptime_ms);
+    struct tm local;
+    struct tm utc;
+    NtpClock::localTm(ms, local);
+    NtpClock::utcTm(ms, utc);
+    return formatBoardTime(local, utc, (uint16_t)(ms % 1000), out, len) > 0;
+}
+
 void WebConfigServer::handleLogs() {
-    server.send(200, "application/json", AppLogger::getLogsJSON());
+    // With the board time each line gets "board_time" (US-118); the UI shows it, and
+    // without it converts the field "time" (millis) to the browser clock (issue 60)
+    WallClock ref;
+    bool has_time = ntp_clock && ntp_clock->reference(ref);
+    String logs = has_time ? AppLogger::getLogsJSON(&boardTimeOf, &ref) : AppLogger::getLogsJSON();
+    server.sendHeader("X-Uptime-Ms", String(millis()));
+    server.send(200, "application/json", logs);
 }
 
 void WebConfigServer::handleNutConfig() {
+    if (!requireJson()) return;
     if (server.hasArg("plain") == false) {
         server.send(400, "application/json", "{\"error\": \"Body not received\"}");
         return;
@@ -175,33 +803,42 @@ void WebConfigServer::handleNutConfig() {
         return;
     }
 
+    // Merged into the saved settings: an empty password keeps the saved one, credentials
+    // both set or both empty, explicit removal (US-125); an invalid ups_name stays a 400
+    // (US-082). On a 400 nothing is saved or applied
     NutConfig nc = config_mgr.getNutConfig();
-    if (doc["username"].is<String>()) {
-        nc.username = doc["username"].as<String>();
+    NUTServerConfig next;
+    String rejected;
+    if (int status = WebApiJson::nutConfigFromBody(doc, {nc.username, nc.password, nc.ups_name}, next, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
     }
-    if (doc["password"].is<String>()) {
-        nc.password = doc["password"].as<String>();
-    }
-    if (doc["ups_name"].is<String>()) {
-        nc.ups_name = doc["ups_name"].as<String>();
-    }
+    nc.username = next.username;
+    nc.password = next.password;
+    nc.ups_name = next.ups_name;
+    bool removed = doc["remove_credentials"].is<bool>() && doc["remove_credentials"].as<bool>();
 
     config_mgr.setNutConfig(nc);
     if (config_mgr.save()) {
-        server.send(200, "application/json", "{\"success\": true}");
-        AppLogger::log("INFO", "[WEB] NUT configuration updated");
-        // Unconfigured, the NUT server isn't running: a restart would only drop the setup
-        // hotspot. The Wi-Fi save applies these settings.
-        if (config_mgr.isValid()) {
-            should_restart = true;
-            restart_request_time = millis();
+        // US-124: applied at once, no restart. Only what was saved is applied, so a restart
+        // keeps the same settings. With no NUT server running (access point without a valid
+        // configuration) begin() reads them at the next start
+        AppLogger::log("INFO", removed ? "[WEB] NUT credentials removed" : "[WEB] NUT configuration saved");
+        String reply;
+        if (nut_server && nut_server->isRunning()) {
+            NUTServer::ApplyResult r = nut_server->applyConfig({nc.username, nc.password, nc.ups_name});
+            reply = WebApiJson::nutConfigAppliedJson(true, r.changed, r.closed);
+        } else {
+            reply = WebApiJson::nutConfigAppliedJson(false, false, 0);
         }
+        server.send(200, "application/json", reply);
     } else {
         server.send(500, "application/json", "{\"error\": \"Failed to save config\"}");
     }
 }
 
 void WebConfigServer::handleMqttConfig() {
+    if (!requireJson()) return;
     if (server.hasArg("plain") == false) {
         server.send(400, "application/json", "{\"error\": \"Body not received\"}");
         return;
@@ -262,10 +899,21 @@ void WebConfigServer::handleGetConfig() {
     JsonObject wifiObj = doc["wifi"].to<JsonObject>();
     wifiObj["ssid"] = config_mgr.getWifiConfig().ssid;
     wifiObj["mode"] = is_ap_mode ? "AP" : "STA";
+    // "ethernet" on boards without Wi-Fi (US-092); links: the sections of the Network page (US-112)
+    doc["network"]["type"] = board().has_wifi ? "wifi" : "ethernet";
+    // US-126: an enabled W5500 adds the Ethernet section on a Wi-Fi board
+    // US-127: in Wi-Fi mode the W5500 is not used, so the board has no Ethernet link
+    WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), board(),
+                                 eth_spi.enabled && eth_mode != NetworkMode::WIFI);
+    // Name in use, saved name and default (US-113)
+    WebApiJson::hostnameJson(doc["network"]["hostname"].to<JsonObject>(), network ? network->hostname() : String(),
+                             saved_hostname, network ? network->defaultHostname() : String());
     
     JsonObject nutObj = doc["nut"].to<JsonObject>();
     nutObj["username"] = config_mgr.getNutConfig().username;
     nutObj["ups_name"] = config_mgr.getNutConfig().ups_name;
+    // US-125: whether a password is saved, never the password itself
+    nutObj["has_password"] = config_mgr.getNutConfig().password.length() > 0;
 
     MqttConfig mqtt = config_mgr.getMqttConfig();
     JsonObject mqttObj = doc["mqtt"].to<JsonObject>();
@@ -280,21 +928,21 @@ void WebConfigServer::handleGetConfig() {
 }
 
 void WebConfigServer::handleUpsVars() {
-    if (!usb_ups) {
+    if (!ups_source) {
         server.send(503, "application/json", "{\"error\": \"UPS non inizializzato\"}");
         return;
     }
-    String response = WebApiJson::generateUpsVars(usb_ups);
+    String response = WebApiJson::generateUpsVars(ups_source, nut_overrides);
     server.send(200, "application/json", response);
 }
 
 void WebConfigServer::handleSystemStatus() {
     SystemStatusSources sources;
-    sources.ap_mode = is_ap_mode;
-    sources.network = network_mgr;
-    sources.ups = usb_ups;
+    sources.network = network;
+    sources.ups = ups_source;
     sources.nut = nut_server;
     sources.mqtt = mqtt_bridge;
+    sources.update = update_service;
 
     JsonDocument doc;
     fillSystemStatus(doc, sources);
@@ -303,30 +951,123 @@ void WebConfigServer::handleSystemStatus() {
     server.send(200, "application/json", response);
 }
 
-void WebConfigServer::handleBeeper() {
-    if (server.hasArg("plain") == false) {
-        server.send(400, "application/json", "{\"error\": \"Body not received\"}");
+// US-142: restart asked from Board Settings. Same path as the restart after a save
+// (loop() closes the UPS source and restarts after 1 s); the cause is recorded without
+// counting it as a USB recovery restart
+void WebConfigServer::handleSystemRestart() {
+    if (!requireJson()) return;
+    UpdatePhase phase = update_service ? update_service->status().phase : UpdatePhase::Idle;
+    const char* blocked = WebApiJson::restartBlockedReason(ota_upload_started || Update.isRunning(), phase);
+    if (blocked) {
+        AppLogger::log("WARN", "[WEB] Restart refused: %s", blocked);
+        JsonDocument err;
+        err["error"] = blocked;
+        String response;
+        serializeJson(err, response);
+        server.send(409, "application/json", response);
         return;
     }
+    CrashDiag::recordManualRestart();
+    AppLogger::log("INFO", String("[WEB] Restart requested from the Web UI by '") + webUiUser() + "'");
+    should_restart = true;
+    restart_request_time = millis();
+    server.send(200, "application/json", "{\"success\":true,\"restart\":true}");
+}
 
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, server.arg("plain"));
+// Catalogo dei comandi supportati dall'UPS (US-059), uguale in STA e in AP (US-068)
+void WebConfigServer::handleUpsCommands() {
+    server.send(200, "application/json", WebApiJson::generateUpsCommands(ups_source));
+}
 
-    if (error) {
-        server.send(400, "application/json", "{\"error\": \"Invalid JSON\"}");
-        return;
-    }
-
-    if (doc["enable"].is<bool>()) {
-        bool enable = doc["enable"].as<bool>();
-        if (usb_ups) {
-            usb_ups->setBeeper(enable);
-            server.send(200, "application/json", "{\"success\": true}");
-            return;
+// Esegue un comando: la logica e gli status sono in WebApiJson::runUpsCommand. Nessun
+// blocco dei distruttivi in AP (US-068): la conferma la chiede la pagina
+void WebConfigServer::handleUpsCommand() {
+    if (!requireJson()) return;
+    String body = server.hasArg("plain") ? server.arg("plain") : String();
+    String response;
+    int status = WebApiJson::runUpsCommand(ups_source, body, response);
+    if (status == 200) {
+        // Il nome è quello del catalogo (stringa costante), non quello del client
+        JsonDocument filter;
+        filter["name"] = true;
+        JsonDocument req;
+        if (!deserializeJson(req, body, DeserializationOption::Filter(filter))) {
+            const UPSCommandInfo* info = UpsCommands::find(req["name"].as<const char*>());
+            if (info && info->destructive) {
+                AppLogger::log("WARN", String("[CMD] Destructive command '") + info->name +
+                               "' run from the Web UI by '" + webUiUser() + "'");
+            }
         }
     }
-    
-    server.send(500, "application/json", "{\"error\": \"Failed to set beeper\"}");
+    server.send(status, "application/json", response);
+}
+
+// Variabili scrivibili dell'UPS (US-068), uguale in STA e in AP
+void WebConfigServer::handleUpsVariables() {
+    server.send(200, "application/json", WebApiJson::generateUpsVariables(ups_source, nut_overrides));
+}
+
+// Scrive una variabile: la logica e gli status sono in WebApiJson::runUpsVariable
+void WebConfigServer::handleUpsVariable() {
+    if (!requireJson()) return;
+    String body = server.hasArg("plain") ? server.arg("plain") : String();
+    String response;
+    bool host_called = false;
+    int status = WebApiJson::runUpsVariable(ups_source, body, response, &host_called, nut_overrides);
+    // L'esito di setVariable() lo registra già l'host: una sola riga per richiesta
+    if (status != 200 && !host_called) logVariableRejected(body, true, response);
+    server.send(status, "application/json", response);
+}
+
+// Riporta al default una variabile lato driver: logica in WebApiJson::resetUpsVariable
+void WebConfigServer::handleUpsVariableReset() {
+    if (!requireJson()) return;
+    String body = server.hasArg("plain") ? server.arg("plain") : String();
+    String response;
+    bool host_called = false;
+    int status = WebApiJson::resetUpsVariable(ups_source, body, response, &host_called, nut_overrides);
+    // L'esito di resetVariable() lo registra già l'host
+    if (status != 200 && !host_called) logVariableRejected(body, false, response);
+    server.send(status, "application/json", response);
+}
+
+String WebConfigServer::webUiUser() {
+    // In AP non c'è sessione: l'utente configurato non è chi ha inviato la richiesta
+    return is_ap_mode ? String("(AP mode)") : credentials.username();
+}
+
+// Nome e valore riletti dal body, che può essere JSON non valido: "?" se mancano, testo
+// del client ripulito e troncato. Il motivo è il campo "error" della risposta
+void WebConfigServer::logVariableRejected(const String& body, bool with_value, const String& response) {
+    String name("?");
+    String value("?");
+    if (body.length() <= WebApiJson::MAX_COMMAND_BODY_LENGTH) {
+        JsonDocument filter;
+        filter["name"] = true;
+        if (with_value) filter["value"] = true;
+        JsonDocument req;
+        if (!deserializeJson(req, body, DeserializationOption::Filter(filter))) {
+            if (req["name"].is<const char*>()) {
+                String raw = req["name"].as<String>();
+                if (raw.length() > 0) name = loggableText(raw, 48);
+            }
+            if (with_value && req["value"].is<const char*>()) {
+                String raw = req["value"].as<String>();
+                value = loggableText(raw, 32);
+                if (raw.length() > 32) value += "...";
+            }
+        }
+    }
+    String reason("rejected");
+    JsonDocument res;
+    if (!deserializeJson(res, response) && res["error"].is<const char*>()) {
+        reason = res["error"].as<String>();
+    }
+    String msg = String("Variable ") + name;
+    if (with_value) msg += String(" = \"") + value + "\"";
+    else msg += " reset";
+    msg += String(" from the Web UI by '") + webUiUser() + "': " + reason;
+    AppLogger::log("WARN", msg);
 }
 
 void WebConfigServer::handleOTAPage() {
@@ -336,16 +1077,40 @@ void WebConfigServer::handleOTAPage() {
 }
 
 void WebConfigServer::handleOTAUpload() {
+    // WebServer chiama questa callback anche per un POST non multipart (percorso "raw",
+    // RequestHandlersImpl::canRaw), prima del guard e senza HTTPUpload: server.upload()
+    // dereferenzierebbe un puntatore nullo. Stesso test che il core usa per isForm
+    if (!server.header("Content-Type").startsWith("multipart/")) return;
+
+    // WebServer legge tutto l'upload dentro handleClient(): loop() non riparte fino alla
+    // fine e con un Wi-Fi lento si superano i 30 s del watchdog del loopTask (US-085).
+    // Un reset a ogni blocco ricevuto non lo disattiva: un upload fermo viene comunque
+    // abbandonato da WebServer dopo HTTP_MAX_DATA_WAIT (5 s)
+    esp_task_wdt_reset();
+
     HTTPUpload& upload = server.upload();
     if (upload.status == UPLOAD_FILE_START) {
+        // uri, metodo e header raccolti sono già disponibili: WebServer analizza gli
+        // header prima del body multipart. Senza sessione Update.begin() non parte
+        bool online_update = update_service && update_service->busy();
+        ota_rejected = !authorizedQuiet() || online_update;
+        ota_upload_started = !ota_rejected;
+        if (ota_rejected) {
+            AppLogger::log("WARN", online_update ? "[OTA] Upload rejected: online update in progress"
+                                                 : "[OTA] Upload rejected: not authenticated");
+            return;
+        }
         AppLogger::log("INFO", String("[OTA] Upload started: ") + upload.filename);
+        ota_start_ms = millis();
         uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
         if (!Update.begin(maxSketchSpace, U_FLASH)) { //start with max available size
             Update.printError(Serial);
         }
+    } else if (ota_rejected) {
+        // Upload rifiutato: chunk ignorati, il guard del handler finale risponde 401
+        if (upload.status == UPLOAD_FILE_END || upload.status == UPLOAD_FILE_ABORTED) ota_rejected = false;
+        return;
     } else if (upload.status == UPLOAD_FILE_WRITE) {
-        // The whole upload is parsed within a single loop() iteration.
-        feedLoopWDT();
         // Validazione magic byte E9 sul primo chunk
         if (upload.totalSize == 0 && upload.currentSize > 0) {
             if (upload.buf[0] != 0xE9) {
@@ -359,11 +1124,172 @@ void WebConfigServer::handleOTAUpload() {
         }
     } else if (upload.status == UPLOAD_FILE_END) {
         if (Update.end(true)) { //true to set the size to the current progress
-            AppLogger::log("INFO", String("[OTA] Success: ") + String(upload.totalSize) + " bytes");
+            AppLogger::log("INFO", String("[OTA] Success: ") + String(upload.totalSize) + " bytes in " +
+                                   String(millis() - ota_start_ms) + " ms");
         } else {
             Update.printError(Serial);
             AppLogger::log("ERROR", "[OTA] Error at the end");
         }
+    } else if (upload.status == UPLOAD_FILE_ABORTED) {
+        // Il handler finale non viene chiamato: il flag non deve valere per la richiesta dopo
+        Update.abort();
+        ota_upload_started = false;
+        AppLogger::log("ERROR", "[OTA] Upload aborted");
     }
+}
+
+// --- Autenticazione (ADR 0009) ---
+
+WebServer::THandlerFunction WebConfigServer::guarded(WebServer::THandlerFunction handler) {
+    return [this, handler]() {
+        if (!authorize()) return;
+        handler();
+    };
+}
+
+String WebConfigServer::sessionToken() {
+    return AuthPolicy::extractCookie(server.header("Cookie"), AuthService::kSessionCookie);
+}
+
+AuthDecision WebConfigServer::evaluateRequest() {
+    // In AP la policy consente tutto: il token non viene nemmeno validato
+    bool authenticated = !is_ap_mode && auth.isAuthenticated(sessionToken(), millis());
+    return AuthPolicy::decide(server.uri(), server.method() == HTTP_GET, is_ap_mode,
+                              credentials.hasCredentials(), authenticated);
+}
+
+bool WebConfigServer::authorize() {
+    switch (evaluateRequest()) {
+        case AuthDecision::ALLOW:
+            return true;
+        case AuthDecision::REDIRECT_LOGIN:
+            server.sendHeader("Location", "/login", true);
+            server.sendHeader("Cache-Control", "no-store");
+            server.send(302, "text/plain", "");
+            return false;
+        case AuthDecision::SETUP_REQUIRED:
+            server.send(401, "application/json", "{\"error\":\"setup_required\"}");
+            return false;
+        case AuthDecision::UNAUTHORIZED:
+        default:
+            server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
+            return false;
+    }
+}
+
+bool WebConfigServer::authorizedQuiet() {
+    return evaluateRequest() == AuthDecision::ALLOW;
+}
+
+bool WebConfigServer::requireJson() {
+    // Solo application/json: una pagina di un'altra origine non può inviarlo
+    // senza preflight CORS, che il server non gestisce (niente CSRF con text/plain)
+    String contentType = server.header("Content-Type");
+    contentType.toLowerCase();
+    if (!contentType.startsWith("application/json")) {
+        server.send(415, "application/json", "{\"error\":\"Unsupported content type\"}");
+        return false;
+    }
+    return true;
+}
+
+void WebConfigServer::sendAuth(const AuthResponse& res) {
+    if (res.set_cookie.length() > 0) {
+        server.sendHeader("Set-Cookie", res.set_cookie);
+    }
+    if (res.retry_after_s > 0) {
+        server.sendHeader("Retry-After", String(res.retry_after_s));
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(res.status, "application/json", res.body);
+}
+
+void WebConfigServer::handleLoginPage() {
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
+    server.sendHeader("Content-Encoding", "gzip");
+    server.send_P(200, "text/html", (const char*)web_asset_login_inlined_html, web_asset_login_inlined_html_len);
+}
+
+void WebConfigServer::handleAuthLogin() {
+    if (!requireJson()) return;
+    String body = server.hasArg("plain") ? server.arg("plain") : String();
+    AuthResponse res = auth.login(body, millis());
+    if (res.status == 200) {
+        throttle_logged_failures = 0;  // il successo azzera anche il throttle
+        AppLogger::log("INFO", String("[AUTH] Login succeeded for user '") + credentials.username() + "'");
+    } else if (res.status == 401) {
+        AppLogger::log("INFO", String("[AUTH] Login failed for user '") + loggableUsername(body) + "'");
+    } else if (res.status == 429 && throttle.failures() != throttle_logged_failures) {
+        // Solo la prima richiesta respinta di ogni finestra (niente flood nel log)
+        throttle_logged_failures = throttle.failures();
+        AppLogger::log("WARN", String("[AUTH] Login throttled for user '") + loggableUsername(body) +
+                       "': retry after " + String(res.retry_after_s) + " s");
+    }
+    sendAuth(res);
+}
+
+void WebConfigServer::handleAuthStatus() {
+    uint32_t now = millis();
+    bool open = recovery.isOpen(now);
+    sendAuth(auth.status(sessionToken(), is_ap_mode, now, open, open ? (recovery.remainingMs(now) + 999) / 1000 : 0));
+}
+
+void WebConfigServer::handleAuthCredentials() {
+    if (!requireJson()) return;
+    String body = server.hasArg("plain") ? server.arg("plain") : String();
+    // Prima creazione (TOFU), reset in AP o cambio in STA (US-063): AP/STA solo da is_ap_mode
+    uint32_t now = millis();
+    bool in_recovery = recovery.isOpen(now);
+    const char* action = !credentials.hasCredentials() ? "created" : (is_ap_mode || in_recovery ? "reset" : "changed");
+    // Durata del PBKDF2 nel log solo alla creazione (verifica dell'obiettivo dell'ADR)
+    bool creating = !credentials.hasCredentials();
+    auth_crypto.setLogTiming(creating);
+    AuthResponse res = auth.updateCredentials(body, sessionToken(), is_ap_mode, now, in_recovery);
+    auth_crypto.setLogTiming(false);
+    if (res.status == 200) {
+        AppLogger::log("INFO", String("[AUTH] Web UI credentials ") + action + " for user '" + credentials.username() + "'");
+        bool sessions_not_closed = res.body.indexOf("\"sessions_closed\":false") >= 0;
+        if (in_recovery) {
+            recovery.markUsed();
+            if (sessions_not_closed) {
+                AppLogger::log("ERROR", "[AUTH] Web credentials replaced from the recovery window, "
+                                        "but the sessions could not be closed");
+            } else {
+                AppLogger::log("WARN", "[AUTH] Web credentials replaced from the recovery window, all sessions closed");
+            }
+            AppLogger::log("INFO", "[AUTH] Recovery window closed: used");
+        } else if (sessions_not_closed) {
+            AppLogger::log("ERROR", "[AUTH] Credentials changed but other sessions could not be closed");
+        }
+    } else if (res.status != 429 || throttle.failures() != throttle_logged_failures) {
+        // 429: solo la prima richiesta respinta di ogni finestra, come per il login
+        if (res.status == 429) throttle_logged_failures = throttle.failures();
+        AppLogger::log("WARN", String("[AUTH] Credentials ") + (creating ? "creation" : "change") +
+                       " refused (HTTP " + String(res.status) + ")");
+    }
+    sendAuth(res);
+}
+
+void WebConfigServer::handleAuthLogout() {
+    if (!requireJson()) return;
+    sendAuth(auth.logout(sessionToken()));
+}
+
+void WebConfigServer::handleAuthLogoutAll() {
+    if (!requireJson()) return;
+    // In AP la policy non valida le sessioni: chiunque sia sull'AP potrebbe chiuderle
+    if (is_ap_mode) {
+        server.send(403, "application/json", "{\"error\":\"Not available in Access Point mode\"}");
+        return;
+    }
+    AuthResponse res = auth.logoutAll();
+    if (res.status == 200) {
+        AppLogger::log("INFO", String("[AUTH] All sessions closed by '") + credentials.username() + "'");
+    } else {
+        AppLogger::log("ERROR", "[AUTH] Logout of all sessions failed: storage not cleared");
+    }
+    sendAuth(res);
 }
 

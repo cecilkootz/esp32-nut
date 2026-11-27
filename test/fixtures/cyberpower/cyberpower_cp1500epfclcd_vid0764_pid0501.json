@@ -214,7 +214,7 @@
         "battery.charge.low": "10",
         "input.voltage.nominal": "230",
         "battery.voltage.nominal": "24",
-        "battery.voltage": "24.00",
+        "battery.voltage": "24.0",
         "ups.beeper.status": "enabled",
         "input.voltage": "238.0",
         "input.transfer.low": "180",

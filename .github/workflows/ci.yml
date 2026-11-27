@@ -15,9 +15,13 @@ concurrency:
 
 jobs:
   firmware:
-    name: Build firmware
+    name: Build firmware (${{ matrix.env }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [esp32-s3-standard, arduino-nano-esp32, esp32-p4-eth, esp32-p4-eth-v1]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -26,9 +30,10 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.platformio
-          key: platformio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          # The ESP32-S3 and ESP32-P4 toolchains differ
+          key: platformio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
       - run: pip install platformio
-      - run: make build
+      - run: make build ENV=${{ matrix.env }}
       - name: Check the generated web assets are committed
         run: |
           if [ -n "$(git status --porcelain)" ]; then
@@ -37,7 +42,20 @@ jobs:
             exit 1
           fi
       - name: Build with the example config.json
-        run: cp config.example.json config.json && make build
+        if: matrix.env == 'esp32-s3-standard'
+        run: cp config.example.json config.json && make build ENV=${{ matrix.env }}
+
+  release-metadata:
+    name: Release manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - run: |
+          python scripts/release_package.py manifests --version v0.0.0 --out manifests
+          python scripts/check_release_manifests.py --out manifests --version v0.0.0
 
   tests:
     name: Unit tests
@@ -49,7 +67,15 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install platformio
+      # test_nut_table checks NutTable.h against the NUT commit its citations are written for
+      - name: Check out NUT at nut_repo.commit
+        run: |
+          git init -q nut_repo
+          git -C nut_repo fetch -q --depth 1 https://github.com/networkupstools/nut "$(head -n1 nut_repo.commit | cut -d' ' -f1)"
+          git -C nut_repo checkout -q FETCH_HEAD
       - run: make test
+      - name: Arduino Nano ESP32 board profile tests
+        run: pio test -e native-arduino-nano-esp32 -c .pio/native.ini
 
   e2e:
     name: E2E tests
@@ -74,7 +100,7 @@ jobs:
     # always(): a required check that is skipped after a failure counts as passing.
     name: CI result
     if: always()
-    needs: [firmware, tests, e2e]
+    needs: [firmware, release-metadata, tests, e2e]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

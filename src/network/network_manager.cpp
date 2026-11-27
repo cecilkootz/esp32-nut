@@ -1,168 +1,244 @@
 #include "network/network_manager.h"
+#include "network/wifi_links.h"
+#include "network/eth_link.h"
 #include "core/app_logger.h"
+#include "NetHostname.h"
+#include <esp_task_wdt.h>
+#include <esp_mac.h>
 
-static const uint32_t RECONNECT_NUDGE_MS = 60000;
+AppNetworkManager::AppNetworkManager()
+    : m_sta(nullptr), m_ap(nullptr), m_eth(nullptr), m_ethCfg(), m_hasEthCfg(false), m_hasWifi(false),
+      m_ethProbe(EthProbeOutcome::WAITING), m_autoSwitch(false), m_ethStandby(false), m_linkChanges(0) {}
 
-static const char* reasonName(uint8_t reason) {
-    const char* name = WiFi.disconnectReasonName((wifi_err_reason_t)reason);
-    return *name ? name : "UNKNOWN";
+AppNetworkManager::~AppNetworkManager() {
+    m_selector.activate(nullptr);
+    if (m_ethStandby && m_eth) m_eth->end();
+    delete m_sta;
+    delete m_ap;
+    delete m_eth;
 }
 
-static const char* statusName(wl_status_t status) {
-    switch (status) {
-        case WL_IDLE_STATUS:     return "WL_IDLE_STATUS";
-        case WL_NO_SSID_AVAIL:   return "WL_NO_SSID_AVAIL";
-        case WL_SCAN_COMPLETED:  return "WL_SCAN_COMPLETED";
-        case WL_CONNECTED:       return "WL_CONNECTED";
-        case WL_CONNECT_FAILED:  return "WL_CONNECT_FAILED";
-        case WL_CONNECTION_LOST: return "WL_CONNECTION_LOST";
-        case WL_DISCONNECTED:    return "WL_DISCONNECTED";
-        case WL_STOPPED:         return "WL_STOPPED";
-        case WL_NO_SHIELD:       return "WL_NO_SHIELD";
-    }
-    return "UNKNOWN";
+String AppNetworkManager::ethHostnameSeed(bool has_wifi) const {
+    if (!has_wifi) return m_savedHostname;
+    // From eFuse, as WifiStaLink: the station need not be running
+    uint8_t mac[6];
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) return m_savedHostname;
+    return NetHostname::effective(m_savedHostname, mac);
 }
 
-AppNetworkManager::AppNetworkManager() 
-    : m_lastStatus(WL_IDLE_STATUS), 
-      m_lastConnectionAttempt(0), 
-      m_isStarted(false),
-      m_isApMode(false),
-      m_eventsRegistered(false),
-      m_disconnectCount(0),
-      m_lastDisconnectReason(0),
-      m_lastDisconnectTime(0),
-      m_linkDown(false) {}
-
-void AppNetworkManager::beginAP(const String& ap_ssid, const String& ap_password) {
-    m_isStarted = true;
-    m_isApMode = true;
-    AppLogger::log("INFO", "[NETWORK] Starting Access Point mode...");
-    // Only takes effect before the first WiFi.mode(). The AP settings are fixed
-    // in firmware, so there is nothing for the driver to keep in flash.
-    WiFi.persistent(false);
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(ap_ssid.c_str(), ap_password.c_str());
-    AppLogger::log("INFO", "[NETWORK] AP Started. IP: %s\n", WiFi.softAPIP().toString().c_str());
+EthLink* AppNetworkManager::newEthLink(const EthConfig& cfg, bool has_wifi) const {
+    EthLink* eth = new EthLink(cfg, ethHostnameSeed(has_wifi));
+    // Issue #64: on a board with Wi-Fi the W5500 takes the station MAC, so the router sees
+    // one device on both links and gives it the same address (a DHCP reservation works).
+    // Safe only because the two never hold an address together (setDhcp, switchLink)
+    uint8_t mac[6];
+    if (has_wifi && esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) eth->setMac(mac);
+    return eth;
 }
 
-void AppNetworkManager::begin(const String& ssid, const String& password, const String& hostname) {
+void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan, const String& ssid,
+                              const String& password, const String& saved_hostname) {
+    m_savedHostname = saved_hostname;
+    m_hasWifi = board.has_wifi;
+    // Kept for a station created later by the automatic switch (US-127)
     m_ssid = ssid;
     m_password = password;
-    m_isStarted = true;
-    m_isApMode = false;
-    m_lastStatus = WL_IDLE_STATUS;
-
-    AppLogger::log("INFO", "[NETWORK] Initializing Wi-Fi as %s...", hostname.c_str());
-    // Only stored here; WiFi.mode() applies it when it brings up the station interface.
-    WiFi.setHostname(hostname.c_str());
-    // Only takes effect before the first WiFi.mode(). The credentials already
-    // live in our own NVS namespace; left persistent, the driver would save its
-    // config to NVS again on every WiFi.begin() and reconnect.
-    WiFi.persistent(false);
-    // Before WiFi.mode(), which starts the event task: that task walks the
-    // handler list without a lock, so adding to it later could race.
-    if (!m_eventsRegistered) {
-        auto handler = [this](arduino_event_id_t event, const arduino_event_info_t& info) {
-            onWiFiEvent(event, info);
-        };
-        WiFi.onEvent(handler, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-        WiFi.onEvent(handler, ARDUINO_EVENT_WIFI_STA_GOT_IP);
-        m_eventsRegistered = true;
+    switch (plan.link) {
+    case BootLink::WIFI_STATION:
+        if (!m_sta) m_sta = new WifiStaLink(ssid, password, saved_hostname);
+        // A W5500 in standby (AUTO mode) is outside the selector and keeps running
+        m_selector.activate(m_sta, m_ethStandby);
+        break;
+    case BootLink::WIFI_ACCESS_POINT:
+        if (!m_ap) m_ap = new WifiApLink(board.defaults.ap_ssid, board.defaults.ap_password);
+        m_selector.activate(m_ap);
+        break;
+    case BootLink::ETHERNET: {
+        // A W5500 set by the user (US-126) or the board's own port. After probeEthernet()
+        // the link is already active and activate() leaves it as it is
+        const EthConfig& cfg = m_hasEthCfg ? m_ethCfg : board.eth;
+        if (cfg.type != EthType::NONE) {
+            if (!m_eth) m_eth = newEthLink(cfg, board.has_wifi);
+            m_selector.activate(m_eth);
+            break;
+        }
     }
-    WiFi.mode(WIFI_STA);
-    // Modem sleep can leave the node unreachable on some access points; on
-    // mains/UPS power the saving isn't worth that.
-    WiFi.setSleep(false);
-    WiFi.setAutoReconnect(true); // Consente all'ESP32 di gestire le riconnessioni a basso livello
-    // The default fast scan joins the first AP that answers for the SSID and the
-    // station never roams, so on a multi-AP network that choice would hold until
-    // the link drops. WiFi.begin() copies both settings into the station config.
-    WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
-    WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
-    
-    AppLogger::log("INFO", "[NETWORK] Connecting to SSID: %s...\n", m_ssid.c_str());
-    WiFi.begin(m_ssid.c_str(), m_password.c_str());
-    m_lastConnectionAttempt = millis();
+        // fall through: a profile with has_ethernet but no Ethernet port data
+    case BootLink::NONE:
+        AppLogger::log("WARN", "[NETWORK] No network link available on this board (%s)", board.name);
+        m_selector.activate(nullptr);
+        break;
+    }
+    // US-127: only between Ethernet and the station, with the W5500 started
+    m_autoSwitch = m_autoSwitch && m_eth && m_eth->started() &&
+                   (plan.link == BootLink::ETHERNET || plan.link == BootLink::WIFI_STATION);
+    if (m_autoSwitch) {
+        // A cable that gave no address at startup is not tried again until it is replugged
+        m_autoSwitcher.begin(millis(), plan.link == BootLink::ETHERNET ? AutoLink::ETHERNET : AutoLink::WIFI,
+                             m_ssid.length() > 0, m_ethProbe == EthProbeOutcome::NO_IP);
+    }
+    // A missing cable leads to Wi-Fi after 10 s: no "No Ethernet link" reminder before it.
+    // Without a Wi-Fi network, or in Ethernet mode, the reminder is all the log says
+    if (m_eth) m_eth->setLinkReminder(!(m_autoSwitch && m_ssid.length() > 0));
 }
 
-void AppNetworkManager::onWiFiEvent(arduino_event_id_t event, const arduino_event_info_t& info) {
-    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-        uint8_t reason = info.wifi_sta_disconnected.reason;
-        // The core retries at once, so an outage repeats the same reason every
-        // few seconds. Log it when the link drops and whenever the reason changes.
-        if (!m_linkDown || reason != m_lastDisconnectReason) {
-            AppLogger::log("WARN", "[NETWORK] Disconnected: reason %d (%s)", reason, reasonName(reason));
-        }
-        m_linkDown = true;
-        m_lastDisconnectReason = reason;
-        m_lastDisconnectTime = millis();
-        m_disconnectCount++;
-    } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-        m_linkDown = false;
-        AppLogger::log("INFO", "[NETWORK] Connection established! IP Address: %s",
-                       IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
+void AppNetworkManager::setEthernetConfig(const EthConfig& cfg) {
+    m_ethCfg = cfg;
+    m_hasEthCfg = true;
+}
+
+EthProbeOutcome AppNetworkManager::probeEthernet(const String& saved_hostname, void (*tick)(uint32_t now)) {
+    m_savedHostname = saved_hostname;
+    m_hasWifi = board().has_wifi;
+    if (!m_eth) m_eth = newEthLink(m_hasEthCfg ? m_ethCfg : EthConfig(), m_hasWifi);
+    m_selector.activate(m_eth);
+    EthBootProbe probe;
+    probe.begin(millis(), m_eth->started());
+    EthProbeOutcome outcome = probe.step(millis(), m_eth->linkUp(), m_eth->hasIP());
+    while (outcome == EthProbeOutcome::WAITING) {
+        m_selector.loop(millis());
+        if (tick) tick(millis());
+        esp_task_wdt_reset();
+        delay(50);
+        outcome = probe.step(millis(), m_eth->linkUp(), m_eth->hasIP());
     }
+    m_selector.loop(millis());  // logs the link and the address before going on
+    if (outcome != EthProbeOutcome::CONNECTED) {
+        // The caller decides whether to fall back (needsFallback(), US-127)
+        AppLogger::log("WARN", "[NETWORK] Ethernet (W5500) not available (%s)", ethProbeReason(outcome));
+    }
+    m_ethProbe = outcome;
+    return outcome;
+}
+
+void AppNetworkManager::leaveEthernet(bool standby) {
+    if (standby && m_eth && m_eth->started() && m_selector.active() == m_eth) {
+        // Issue #64: no address on the standby W5500 while the station runs (same MAC)
+        m_eth->setDhcp(false);
+        m_selector.activate(nullptr, true);
+        m_ethStandby = true;
+        AppLogger::log("INFO", "[NETWORK] W5500 kept on standby: back to Ethernet when the cable is connected");
+        return;
+    }
+    m_selector.activate(nullptr);
+}
+
+// Carries out an action of NetAutoSwitch: one link in the selector at a time, the W5500
+// stays started (standby) while the board is on Wi-Fi. Issue #64: the W5500 has the
+// station MAC, so the old link lets go of its address before the new one asks for it
+void AppNetworkManager::switchLink(AutoAction action) {
+    const uint32_t now = millis();
+    if (action == AutoAction::TO_WIFI) {
+        AppLogger::log("WARN", "[NETWORK] Ethernet lost: switching to Wi-Fi");
+        m_eth->setDhcp(false);
+        if (!m_sta) m_sta = new WifiStaLink(m_ssid, m_password, m_savedHostname);
+        m_selector.activate(m_sta, true);
+        m_ethStandby = true;
+        m_autoSwitcher.switched(now, AutoLink::WIFI);
+        if (m_autoSwitcher.waitingForReplug()) {
+            AppLogger::log("WARN", "[NETWORK] No DHCP address on the cable: Ethernet tried again once the cable is "
+                                   "replugged, or in %u min",
+                           (unsigned)(NetAutoSwitch::RETRY_MS / 60000));
+        }
+    } else if (action == AutoAction::TO_ETHERNET) {
+        AppLogger::log("INFO", "[NETWORK] Ethernet back: switching from Wi-Fi to Ethernet");
+        // Stops the station (radio off) first; the W5500 is already running, its begin()
+        // does nothing. Only then its DHCP asks for the address
+        m_selector.activate(m_eth);
+        m_eth->setDhcp(true);
+        m_ethStandby = false;
+        m_autoSwitcher.switched(now, AutoLink::ETHERNET);
+    } else {
+        return;
+    }
+    ++m_linkChanges;
 }
 
 void AppNetworkManager::loop() {
-    if (!m_isStarted || m_isApMode) {
-        return;
-    }
-    
-    wl_status_t currentStatus = WiFi.status();
-    uint32_t now = millis();
-    
-    // Rileva cambiamenti di stato
-    if (currentStatus != m_lastStatus) {
-        // Getting connected is logged by onWiFiEvent().
-        if (currentStatus == WL_DISCONNECTED && m_lastStatus == WL_CONNECTED) {
-            AppLogger::log("WARN", "[NETWORK] Wi-Fi connection lost!");
-        } else if (currentStatus == WL_NO_SSID_AVAIL) {
-            AppLogger::log("WARN", "[NETWORK] SSID network not found.");
-        } else if (currentStatus == WL_CONNECT_FAILED) {
-            AppLogger::log("ERROR", "[NETWORK] Connection failed.");
-        } else if (currentStatus == WL_CONNECTION_LOST) {
-            AppLogger::log("WARN", "[NETWORK] Connection lost (WL_CONNECTION_LOST).");
-        }
-        m_lastStatus = currentStatus;
-    }
-    
-    if (currentStatus == WL_CONNECTED) {
-        m_lastConnectionAttempt = now; // Reset attempt timer while connected
-    }
-    
-    // The core already retries every transient disconnect at once, and a quicker
-    // kick could cut off an association or DHCP still in progress. The nudge is
-    // for the reasons the core gives up on, such as a password later corrected
-    // on the AP.
-    if (currentStatus != WL_CONNECTED) {
-        if (now - m_lastConnectionAttempt >= RECONNECT_NUDGE_MS) {
-            m_lastConnectionAttempt = now;
-            AppLogger::log("WARN", "[NETWORK] Link still down (%s), asking the driver to reconnect", statusName(currentStatus));
-            if (!WiFi.reconnect()) {
-                AppLogger::log("WARN", "[NETWORK] WiFi.reconnect() failed");
-            }
-        }
+    m_selector.loop(millis());
+    if (m_autoSwitch && m_eth && m_eth->started()) {
+        switchLink(m_autoSwitcher.step(millis(), m_eth->linkUp(), m_eth->hasIP()));
     }
 }
 
 bool AppNetworkManager::isConnected() const {
-    return (WiFi.status() == WL_CONNECTED);
+    return m_selector.isConnected();
+}
+
+bool AppNetworkManager::isApMode() const {
+    const INetLink* link = m_selector.active();
+    return link && link->kind() == NetLinkKind::ACCESS_POINT;
+}
+
+String AppNetworkManager::statusText() const {
+    const INetLink* link = m_selector.active();
+    return link ? link->statusText() : String("Disconnected");
+}
+
+const char* AppNetworkManager::typeName() const {
+    const INetLink* link = m_selector.active();
+    return link ? link->typeName() : "none";
+}
+
+String AppNetworkManager::localIP() const {
+    const INetLink* link = m_selector.active();
+    return link ? link->localIP() : String("0.0.0.0");
+}
+
+void AppNetworkManager::macAddress(uint8_t mac[6]) const {
+    const INetLink* link = m_selector.active();
+    if (link) {
+        link->macAddress(mac);
+    } else {
+        memset(mac, 0, 6);
+    }
+}
+
+void AppNetworkManager::linkInfo(NetLinkInfo& out) const {
+    const INetLink* link = m_selector.active();
+    if (link) {
+        link->linkInfo(out);
+    } else {
+        out = NetLinkInfo();
+    }
+}
+
+String AppNetworkManager::hostname() const {
+    const INetLink* link = m_selector.active();
+    if (!link) return String();
+    String name = link->hostname();
+    if (name.length() > 0) return name;
+    uint8_t mac[6];
+    link->macAddress(mac);
+    return NetHostname::effective(m_savedHostname, mac);
+}
+
+String AppNetworkManager::defaultHostname() const {
+    const INetLink* link = m_selector.active();
+    if (!link) return String();
+    uint8_t mac[6];
+    // US-127: on a board with Wi-Fi the default name comes from the station MAC on every
+    // link, so cable and Wi-Fi give the board the same name
+    if (!m_hasWifi || esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) link->macAddress(mac);
+    return NetHostname::defaultFor(mac);
+}
+
+uint32_t AppNetworkManager::apStationCount() const {
+    return isApMode() ? m_ap->stationCount() : 0;
 }
 
 uint32_t AppNetworkManager::disconnectCount() const {
-    return m_disconnectCount;
+    return m_sta ? m_sta->disconnectCount() : 0;
 }
 
 uint8_t AppNetworkManager::lastDisconnectReason() const {
-    return m_lastDisconnectReason;
+    return m_sta ? m_sta->lastDisconnectReason() : 0;
 }
 
 const char* AppNetworkManager::lastDisconnectReasonName() const {
-    return reasonName(m_lastDisconnectReason);
+    return WifiStaLink::reasonName(lastDisconnectReason());
 }
 
 uint32_t AppNetworkManager::lastDisconnectMillis() const {
-    return m_lastDisconnectTime;
+    return m_sta ? m_sta->lastDisconnectMillis() : 0;
 }
