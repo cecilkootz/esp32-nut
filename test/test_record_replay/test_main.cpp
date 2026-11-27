@@ -1880,7 +1880,7 @@ static const char* const kApcSnapshotSmartups750Pid0002Issue78 =
     "battery.mfr.date=2023/01/31\n"
     "battery.runtime.low=120\n"
     "battery.runtime=240\n"
-    "battery.temperature=33.2\n"
+    "battery.temperature=33.3\n"
     "battery.voltage.nominal=24.0\n"
     "battery.voltage=27.4\n"
     "driver.name=esp32-nut\n"
@@ -2072,7 +2072,7 @@ static const char* const kOpenupsPollW150Before = "quick: 2/3 | full: 1/3 2/3 3/
 //   "%.3f" of row 303 and of openups_scale_ccharge/cdischarge_fun;
 // - input.voltage 12.3 -> 12.33, output.voltage 12.2 -> 12.24: "%.2f" of
 //   openups_scale_vin/vout_fun (HID values 123.3 and 122.4, x 0.1 for PID 0xD005);
-// - battery.temperature 29.5 -> 29.47: "%.2f" of openups_temperature_fun;
+// - battery.temperature 29.5 -> 29.57: "%.2f" of openups_temperature_fun;
 // - ups.temperature gone: UPS.PowerSummary.Temperature is the thermistor reading of row 309;
 // - ups.status.commfault, .off, .overheat: internal keys of rows 326, 327 and 329, no change
 //   in ups.status (OL; BatteryPresent = 0 still ignored, issue #26).
@@ -2088,7 +2088,7 @@ static const char* const kOpenupsSnapshotW150After =
     "battery.current=0.008\n"
     "battery.mfr.date=OPEN\n"
     "battery.runtime=12912\n"
-    "battery.temperature=29.47\n"
+    "battery.temperature=29.57\n"
     "battery.type=LiFePO4\n"
     "battery.voltage=13.60\n"
     "driver.name=esp32-nut\n"

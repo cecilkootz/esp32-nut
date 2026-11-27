@@ -1,5 +1,7 @@
 #include <unity.h>
+#include <stdio.h>
 #include <string.h>
+#include <string>
 #include <functional>
 #include "QxRequestBox.h"
 

@@ -67,6 +67,12 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install platformio
+      # test_nut_table checks NutTable.h against the NUT commit its citations are written for
+      - name: Check out NUT at nut_repo.commit
+        run: |
+          git init -q nut_repo
+          git -C nut_repo fetch -q --depth 1 https://github.com/networkupstools/nut "$(head -n1 nut_repo.commit | cut -d' ' -f1)"
+          git -C nut_repo checkout -q FETCH_HEAD
       - run: make test
       - name: Arduino Nano ESP32 board profile tests
         run: pio test -e native-arduino-nano-esp32 -c .pio/native.ini

@@ -133,7 +133,7 @@ void test_string_id_waits_for_descriptor() {
     std::vector<HIDUsageDef> usages = { mk("UPS.PowerSummary.iDeviceChemistry", 0x00850089, 3, 16) };
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
-    std::vector<Bound> b = bind(t, n, usages);
+    std::vector<Bound> b = NutTable::bind(t, n, usages);
     TEST_ASSERT_EQUAL(1, b.size());
     onValue(b, 0, 5, ctx);
     TEST_ASSERT_EQUAL(5, b[0].string_index);
@@ -352,7 +352,7 @@ void test_internal_rows_always_active() {
     };
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
-    std::vector<Bound> b = bind(t, n, usages);
+    std::vector<Bound> b = NutTable::bind(t, n, usages);
     // BOOL ACPresent, Good, device.country, battery.charge, and since US-074 outlet.1.status
     // (mge-hid.c:2282, on_off_info on ACPresent for the low end models)
     TEST_ASSERT_EQUAL(5, b.size());
@@ -390,7 +390,7 @@ void test_clear_removes_published_value() {
     };
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
-    std::vector<Bound> b = bind(t, n, usages);
+    std::vector<Bound> b = NutTable::bind(t, n, usages);
     Context ctx;
     size_t enable = 0, status = 0;
     for (size_t i = 0; i < b.size(); i++) {
@@ -424,7 +424,7 @@ void test_lookup_same_value_does_not_allocate() {
     std::vector<HIDUsageDef> usages = { mk("UPS.BatterySystem.Charger.0xFFFF006B", 0xffff006b, 3, 38) };
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
-    std::vector<Bound> b = bind(t, n, usages);
+    std::vector<Bound> b = NutTable::bind(t, n, usages);
     TEST_ASSERT_EQUAL(1, b.size());
     Context ctx;
     onValue(b, 0, 5, ctx);
@@ -441,7 +441,7 @@ void test_abm_status_same_value_does_not_allocate() {
     std::vector<HIDUsageDef> usages = { mk("UPS.BatterySystem.Charger.0xFFFF00E9", 0xffff00e9, 3, 7) };
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
-    std::vector<Bound> b = bind(t, n, usages);
+    std::vector<Bound> b = NutTable::bind(t, n, usages);
     size_t status = b.size();
     for (size_t i = 0; i < b.size(); i++) {
         if (b[i].info->conv == Conv::AbmStatus) status = i;
@@ -935,7 +935,7 @@ void test_command_rows_never_published() {
         { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", 0, Conv::Number, nullptr, 0 },
     };
     std::vector<HIDUsageDef> usages = { mk("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057, 3, 9) };
-    std::vector<Bound> b = bind(t, 2, usages);
+    std::vector<Bound> b = NutTable::bind(t, 2, usages);
     TEST_ASSERT_EQUAL(2, b.size());
     Context ctx;
     onValue(b, 0, 20, ctx);
@@ -989,13 +989,13 @@ void test_vendor_alarms_in_table_order() {
     };
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
-    std::vector<Bound> b = bind(t, n, usages);
+    std::vector<Bound> b = NutTable::bind(t, n, usages);
     TEST_ASSERT_EQUAL(2, b.size());
     for (const Bound& x : b) TEST_ASSERT_TRUE(x.role == Bound::Role::ACTIVE); // duplicates allowed
     // Rows never read give nothing
     TEST_ASSERT_EQUAL_STRING("", vendorText(b).c_str());
 
-    // bind() keeps the table order: EmergencyStop (2155) first
+    // NutTable::bind() keeps the table order: EmergencyStop (2155) first
     TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.PresentStatus.0xFFFF0068", b[0].info->hidpath);
     Context ctx;
     onValue(b, 1, 1, ctx);
@@ -1451,7 +1451,7 @@ void test_generic_rows_bind_a_standard_pdc_descriptor() {
     };
     size_t n;
     const HidInfo* t = genericHid2Nut(n);
-    std::vector<Bound> b = bind(t, n, usages);
+    std::vector<Bound> b = NutTable::bind(t, n, usages);
     std::set<std::string> names;
     for (const auto& x : b) names.insert(x.info->info_type);
     const char* const expected[] = {
@@ -1507,7 +1507,7 @@ void test_rows_never_bind_output_usages(void) {
         mk("UPS.PowerSummary.RemainingCapacity", 0x00850066, 3, 6),
         mk("UPS.PowerSummary.RemainingCapacity", 0x00850066, 1, 6),
     };
-    std::vector<Bound> b = bind(t, n, usages);
+    std::vector<Bound> b = NutTable::bind(t, n, usages);
     bool found = false;
     for (const auto& x : b) {
         if (strcmp(x.info->info_type, "battery.charge") != 0) continue;
@@ -1518,7 +1518,7 @@ void test_rows_never_bind_output_usages(void) {
     TEST_ASSERT_TRUE(found);
 
     std::vector<HIDUsageDef> output_only = { mk("UPS.PowerSummary.RemainingCapacity", 0x00850066, 2, 5) };
-    for (const auto& x : bind(t, n, output_only)) {
+    for (const auto& x : NutTable::bind(t, n, output_only)) {
         TEST_ASSERT_TRUE(strcmp(x.info->info_type, "battery.charge") != 0);
     }
 }

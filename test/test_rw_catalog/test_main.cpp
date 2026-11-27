@@ -82,7 +82,7 @@ void test_bind_any_report_type_first_in_descriptor_order() {
         { "battery.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
     };
     std::vector<HIDUsageDef> only_input = { mk("UPS.PowerSummary.RemainingCapacityLimit", 0x00850029, 1, 7) };
-    std::vector<Bound> b = bind(t, 1, only_input);
+    std::vector<Bound> b = NutTable::bind(t, 1, only_input);
     TEST_ASSERT_EQUAL(1, b.size());
     TEST_ASSERT_EQUAL(0, b[0].idx);
     TEST_ASSERT_EQUAL(-1, b[0].twin_idx);
@@ -91,7 +91,7 @@ void test_bind_any_report_type_first_in_descriptor_order() {
         mk("UPS.PowerSummary.RemainingCapacityLimit", 0x00850029, 1, 7),
         mk("UPS.PowerSummary.RemainingCapacityLimit", 0x00850029, 3, 7),
     };
-    b = bind(t, 1, both);
+    b = NutTable::bind(t, 1, both);
     TEST_ASSERT_EQUAL(0, b[0].idx);
     TEST_ASSERT_EQUAL(1, b[0].twin_idx);
 }
@@ -100,7 +100,7 @@ void test_bind_skips_rows_without_path() {
     size_t n;
     const HidInfo* t = apcHid2Nut(n);
     std::vector<HIDUsageDef> none;
-    TEST_ASSERT_EQUAL(0, bind(t, n, none).size());
+    TEST_ASSERT_EQUAL(0, NutTable::bind(t, n, none).size());
 }
 
 void test_mge_first_row_wins_battery_charge_low() {
@@ -111,7 +111,7 @@ void test_mge_first_row_wins_battery_charge_low() {
         mk("UPS.PowerSummary.RemainingCapacityLimit", 0x00850029, 3, 2),
         mk("UPS.PowerSummary.0xFFFF004D", 0xffff004d, 3, 3),
     };
-    std::vector<Bound> b = bind(t, n, usages);
+    std::vector<Bound> b = NutTable::bind(t, n, usages);
     // Both rows are in the table since US-073: the RW one (2013) first, then the read-only one
     TEST_ASSERT_EQUAL(2, b.size());
     TEST_ASSERT_EQUAL_STRING("battery.charge.low", b[0].info->info_type);
@@ -133,7 +133,7 @@ static const HidInfo kTwoCandidates[] = {
 
 void test_failed_first_value_hands_over_to_next_row() {
     std::vector<HIDUsageDef> usages = { mk("UPS.A", 1, 3), mk("UPS.B", 2, 3) };
-    std::vector<Bound> b = bind(kTwoCandidates, 2, usages);
+    std::vector<Bound> b = NutTable::bind(kTwoCandidates, 2, usages);
     Context ctx;
     // The later row converts first, but waits for the earlier one (table order)
     onValue(b, 1, 1, ctx);
@@ -151,7 +151,7 @@ void test_failed_first_value_hands_over_to_next_row() {
 
 void test_first_good_value_wins_and_later_failure_keeps_value() {
     std::vector<HIDUsageDef> usages = { mk("UPS.A", 1, 3), mk("UPS.B", 2, 3) };
-    std::vector<Bound> b = bind(kTwoCandidates, 2, usages);
+    std::vector<Bound> b = NutTable::bind(kTwoCandidates, 2, usages);
     Context ctx;
     onValue(b, 0, 2, ctx);
     TEST_ASSERT_TRUE(b[0].role == Bound::Role::ACTIVE);
@@ -165,7 +165,7 @@ void test_first_good_value_wins_and_later_failure_keeps_value() {
 
 void test_finish_init_fails_unread_rows() {
     std::vector<HIDUsageDef> usages = { mk("UPS.A", 1, 3), mk("UPS.B", 2, 3) };
-    std::vector<Bound> b = bind(kTwoCandidates, 2, usages);
+    std::vector<Bound> b = NutTable::bind(kTwoCandidates, 2, usages);
     Context ctx;
     onValue(b, 1, 0, ctx);
     TEST_ASSERT_TRUE(b[1].role == Bound::Role::PENDING); // blocked by the unread row A
@@ -179,7 +179,7 @@ void test_absent_rows_take_default() {
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
     std::vector<HIDUsageDef> usages = { mk("UPS.OutletSystem.Outlet.OutletID", 0x00840021, 3, 11, { 0, 0, 2 }) };
-    std::vector<Bound> b = bind(t, n, usages);
+    std::vector<Bound> b = NutTable::bind(t, n, usages);
     // Since US-074 outlet.id (mge-hid.c:2260) reads the same OutletID, before outlet.desc
     TEST_ASSERT_EQUAL(2, b.size());
     TEST_ASSERT_EQUAL_STRING("outlet.id", b[0].info->info_type);
@@ -195,7 +195,7 @@ void test_read_only_row_is_bound_but_not_rw() {
         { "battery.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.RW", "%.0f", 0, Conv::Number, nullptr, 0 },
     };
     std::vector<HIDUsageDef> usages = { mk("UPS.RO", 1, 3), mk("UPS.RW", 2, 3) };
-    std::vector<Bound> b = bind(t, 2, usages);
+    std::vector<Bound> b = NutTable::bind(t, 2, usages);
     Context ctx;
     onValue(b, 1, 20, ctx);
     onValue(b, 0, 10, ctx);
@@ -1096,7 +1096,7 @@ void test_ecoflow_table() {
     size_t n;
     const HidInfo* t = ecoflowHid2Nut(n);
     std::vector<HIDUsageDef> usages = { mk("UPS.PowerSummary.RemainingCapacityLimit", 0x00850029, 3) };
-    std::vector<Bound> b = bind(t, n, usages);
+    std::vector<Bound> b = NutTable::bind(t, n, usages);
     TEST_ASSERT_EQUAL(1, b.size());
     TEST_ASSERT_EQUAL_STRING("battery.charge.low", b[0].info->info_type);
     TEST_ASSERT_EQUAL(5, b[0].info->info_len);
