@@ -26,8 +26,10 @@ help: ## Show this help
 		&& echo "Builds include the settings in config.json." \
 		|| echo "To build settings into the firmware, copy config.example.json to config.json."
 
-build: ## Build the firmware (OTA image: .pio/build/<ENV>/firmware.bin)
+build: ## Build the firmware; the OTA .bin and the release .zip land in this directory
 	PLATFORMIO_BUILD_FLAGS='-DFIRMWARE_VERSION=\"$(VERSION)\"' pio run -e $(ENV)
+	python3 scripts/release_package.py package --env $(ENV) --version "$(VERSION)" \
+		--build-dir $(BUILD_DIR) --out $(BUILD_DIR)/package --zip-dir "$(CURDIR)"
 
 # platformio.ini pulls in MinGW for Windows hosts; elsewhere the system compiler builds the tests.
 test: ## Run the unit tests on this computer

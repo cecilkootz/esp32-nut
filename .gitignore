@@ -10,6 +10,8 @@ data/config.json.pwd
 docs/no-commit/
 docs/issues/
 firmware-to-test/
+/esp32-nut-*.zip
+/esp32-nut-*-ota.bin
 node_modules/
 nut_repo/
 playwright-report/
