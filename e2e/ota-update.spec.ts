@@ -1,6 +1,7 @@
-import { test, expect } from './fixtures';
+import { test, expect } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';
+import { serveIndex, serveUpdatePage } from './support/webui';
 
 test.describe('OTA Update Flow', () => {
   let dummyBinPath: string;
@@ -21,8 +22,15 @@ test.describe('OTA Update Flow', () => {
     } catch(e) {}
   });
 
+  test.beforeEach(async ({ page }) => {
+    await serveIndex(page);
+    await serveUpdatePage(page);
+  });
+
   test('should navigate to OTA page from index', async ({ page }) => {
-    await page.goto('/');
+    // We can't really navigate to OTA from index without mocking the HTML first 
+    // unless we use http://esp32.local and intercept it. But let's just use absolute URL
+    await page.goto('http://esp32.local/');
     
     // Clicca sul tab OTA
     await page.click('button[data-target="ota"]');
@@ -32,7 +40,7 @@ test.describe('OTA Update Flow', () => {
   });
 
   test('should load OTA page and have upload elements', async ({ page }) => {
-    await page.goto('/update');
+    await page.goto('http://esp32.local/update');
     
     await expect(page.locator('h2')).toContainText('OTA');
     await expect(page.locator('#fileInput')).toBeAttached();
@@ -40,7 +48,7 @@ test.describe('OTA Update Flow', () => {
   });
 
   test('demo__user-uploads-firmware', async ({ page }) => {
-    await page.goto('/update');
+    await page.goto('http://esp32.local/update');
 
     // Assicura che la richiesta OTA venga intercettata per non fallire sul backend inesistente o restituire OK fittizio
     await page.route('**/update', route => {

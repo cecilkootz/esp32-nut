@@ -1,5 +1,21 @@
 !function(f){typeof module!='undefined'&&typeof exports=='object'?module.exports=f():typeof define!='undefined'&&define.amd?define(f):(typeof self!='undefined'?self:this).fflate=f()}(function(){var _e={};"use strict";_e.deflate=zt,_e.deflateSync=kt,_e.inflate=At,_e.inflateSync=Tt,_e.gzip=It,_e.compress=It,_e.gzipSync=Ut,_e.compressSync=Ut,_e.gunzip=Zt,_e.gunzipSync=qt,_e.zlib=Lt,_e.zlibSync=Bt,_e.unzlib=Nt,_e.unzlibSync=Pt,_e.gzip=It,_e.compress=It,_e.decompress=Jt,_e.decompressSync=Kt,_e.strToU8=nn,_e.strFromU8=rn,_e.zip=dn,_e.zipSync=gn,_e.unzip=zn,_e.unzipSync=kn;var t=(typeof module!='undefined'&&typeof exports=='object'?function(_f){"use strict";var e,r,t,n=";var __w=require('worker_threads');__w.parentPort.on('message',function(m){onmessage({data:m})}),postMessage=function(m,t){__w.parentPort.postMessage(m,t)},close=process.exit;self=global";try{e=require("worker_threads"),r=e.Worker,t=e.isMarkedAsUntransferable}catch(e){}exports.default=r?function(e,o,a,s,u){var i=!1,l=new r(e+n,{eval:!0}).on("error",function(e){return u(e,null)}).on("message",function(e){return u(null,e)}).on("exit",function(e){e&&!i&&u(Error("exited with code "+e),null)});return t&&(s=s.filter(function(e){return!t(e)})),l.postMessage(a,s),l.terminate=function(){return i=!0,r.prototype.terminate.call(l)},l}:function(e,r,t,n,o){setImmediate(function(){return o(Error("async operations unsupported - update to Node 12+ (or Node 10-11 with the --experimental-worker CLI flag)"),null)});var a=function(){};return{terminate:a,postMessage:a}};return _f}:function(_f){"use strict";var e={};_f.default=function(r,t,s,a,n){var o=new Worker(e[t]||(e[t]=URL.createObjectURL(new Blob([r+';addEventListener("error",function(e){e=e.error;postMessage({$e$:[e.message,e.code,e.stack]})})'],{type:"text/javascript"}))));return o.onmessage=function(e){var r=e.data,t=r.$e$;if(t){var s=Error(t[0]);s.code=t[1],s.stack=t[2],n(s,null)}else n(null,r)},o.postMessage(s,a),o};return _f})({}),n=Uint8Array,r=Uint16Array,i=Int32Array,e=new n([0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0,0,0,0]),o=new n([0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13,0,0]),s=new n([16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15]),a=function(t,n){for(var e=new r(31),o=0;o<31;++o)e[o]=n+=1<<t[o-1];var s=new i(e[30]);for(o=1;o<30;++o)for(var a=e[o];a<e[o+1];++a)s[a]=a-e[o]<<5|o;return{b:e,r:s}},u=a(e,2),h=u.b,f=u.r;h[28]=258,f[258]=28;for(var c=a(o,0),l=c.b,p=c.r,v=new r(32768),d=0;d<32768;++d){var g=(43690&d)>>1|(21845&d)<<1;v[d]=((65280&(g=(61680&(g=(52428&g)>>2|(13107&g)<<2))>>4|(3855&g)<<4))>>8|(255&g)<<8)>>1}var y=function(t,n,i){for(var e=t.length,o=0,s=new r(n);o<e;++o)t[o]&&++s[t[o]-1];var a,u=new r(n);for(o=1;o<n;++o)u[o]=u[o-1]+s[o-1]<<1;if(i){a=new r(1<<n);var h=15-n;for(o=0;o<e;++o)if(t[o])for(var f=o<<4|t[o],c=n-t[o],l=u[t[o]-1]++<<c,p=l|(1<<c)-1;l<=p;++l)a[v[l]>>h]=f}else for(a=new r(e),o=0;o<e;++o)t[o]&&(a[o]=v[u[t[o]-1]++]>>15-t[o]);return a},m=new n(288);for(d=0;d<144;++d)m[d]=8;for(d=144;d<256;++d)m[d]=9;for(d=256;d<280;++d)m[d]=7;for(d=280;d<288;++d)m[d]=8;var b=new n(32);for(d=0;d<32;++d)b[d]=5;var w=y(m,9,0),x=y(m,9,1),z=y(b,5,0),k=y(b,5,1),M=function(t){for(var n=t[0],r=1;r<t.length;++r)t[r]>n&&(n=t[r]);return n},S=function(t,n,r){var i=n/8|0;return(t[i]|t[i+1]<<8)>>(7&n)&r},A=function(t,n){var r=n/8|0;return(t[r]|t[r+1]<<8|t[r+2]<<16)>>(7&n)},T=function(t){return(t+7)/8|0},D=function(t,r,i){return(null==r||r<0)&&(r=0),(null==i||i>t.length)&&(i=t.length),new n(t.subarray(r,i))};_e.FlateErrorCode={UnexpectedEOF:0,InvalidBlockType:1,InvalidLengthLiteral:2,InvalidDistance:3,StreamFinished:4,NoStreamHandler:5,InvalidHeader:6,NoCallback:7,InvalidUTF8:8,ExtraFieldTooLong:9,InvalidDate:10,FilenameTooLong:11,StreamFinishing:12,InvalidZipData:13,UnknownCompressionMethod:14};var C=["unexpected EOF","invalid block type","invalid length/literal","invalid distance","stream finished","no stream handler",,"no callback","invalid UTF-8 data","extra field too long","date not in range 1980-2099","filename too long","stream finishing","invalid zip data"],I=function(t,n,r){var i=Error(n||C[t]);if(i.code=t,Error.captureStackTrace&&Error.captureStackTrace(i,I),!r)throw i;return i},U=function(t,r,i,a){var u=t.length,f=a?a.length:0;if(!u||r.f&&!r.l)return i||new n(0);var c=!i,p=c||2!=r.i,v=r.i;c&&(i=new n(3*u));var d=function(t){var r=i.length;if(t>r){var e=new n(Math.max(2*r,t));e.set(i),i=e}},g=r.f||0,m=r.p||0,b=r.b||0,w=r.l,z=r.d,C=r.m,U=r.n,F=8*u;do{if(!w){g=S(t,m,1);var E=S(t,m+1,3);if(m+=3,!E){var Z=t[(Y=T(m)+4)-4]|t[Y-3]<<8,q=Y+Z;if(q>u){v&&I(0);break}p&&d(b+Z),i.set(t.subarray(Y,q),b),r.b=b+=Z,r.p=m=8*q,r.f=g;continue}if(1==E)w=x,z=k,C=9,U=5;else if(2==E){var O=S(t,m,31)+257,G=S(t,m+10,15)+4,L=O+S(t,m+5,31)+1;m+=14;for(var B=new n(L),H=new n(19),j=0;j<G;++j)H[s[j]]=S(t,m+3*j,7);m+=3*G;var N=M(H),P=(1<<N)-1,V=y(H,N,1);for(j=0;j<L;){var Y,J=V[S(t,m,P)];if(m+=15&J,(Y=J>>4)<16)B[j++]=Y;else{var K=0,Q=0;for(16==Y?(Q=3+S(t,m,3),m+=2,K=B[j-1]):17==Y?(Q=3+S(t,m,7),m+=3):18==Y&&(Q=11+S(t,m,127),m+=7);Q--;)B[j++]=K}}var R=B.subarray(0,O),W=B.subarray(O);C=M(R),U=M(W),w=y(R,C,1),z=y(W,U,1)}else I(1);if(m>F){v&&I(0);break}}p&&d(b+131072);for(var X=(1<<C)-1,$=(1<<U)-1,_=m;;_=m){var tt=(K=w[A(t,m)&X])>>4;if((m+=15&K)>F){v&&I(0);break}if(K||I(2),tt<256)i[b++]=tt;else{if(256==tt){_=m,w=null;break}var nt=tt-254;tt>264&&(nt=S(t,m,(1<<(et=e[j=tt-257]))-1)+h[j],m+=et);var rt=z[A(t,m)&$],it=rt>>4;if(rt||I(3),m+=15&rt,W=l[it],it>3){var et=o[it];W+=A(t,m)&(1<<et)-1,m+=et}if(m>F){v&&I(0);break}p&&d(b+131072);var ot=b+nt;if(b<W){var st=f-W,at=Math.min(W,ot);for(st+b<0&&I(3);b<at;++b)i[b]=a[st+b]}for(;b<ot;++b)i[b]=i[b-W]}}r.l=w,r.p=_,r.b=b,r.f=g,w&&(g=1,r.m=C,r.d=z,r.n=U)}while(!g);return b!=i.length&&c?D(i,0,b):i.subarray(0,b)},F=function(t,n,r){var i=n/8|0;t[i]|=r<<=7&n,t[i+1]|=r>>8},E=function(t,n,r){var i=n/8|0;t[i]|=r<<=7&n,t[i+1]|=r>>8,t[i+2]|=r>>16},Z=function(t,i){for(var e=[],o=0;o<t.length;++o)t[o]&&e.push({s:o,f:t[o]});var s=e.length,a=e.slice();if(!s)return{t:j,l:0};if(1==s){var u=new n(e[0].s+1);return u[e[0].s]=1,{t:u,l:1}}e.sort(function(t,n){return t.f-n.f}),e.push({s:-1,f:25001});var h=e[0],f=e[1],c=0,l=1,p=2;for(e[0]={s:-1,f:h.f+f.f,l:h,r:f};l!=s-1;)h=e[e[c].f<e[p].f?c++:p++],f=e[c!=l&&e[c].f<e[p].f?c++:p++],e[l++]={s:-1,f:h.f+f.f,l:h,r:f};var v=a[0].s;for(o=1;o<s;++o)a[o].s>v&&(v=a[o].s);var d=new r(v+1),g=q(e[l-1],d,0);if(g>i){o=0;var y=0,m=g-i,b=1<<m;for(a.sort(function(t,n){return d[n.s]-d[t.s]||t.f-n.f});o<s;++o){var w=a[o].s;if(!(d[w]>i))break;y+=b-(1<<g-d[w]),d[w]=i}for(y>>=m;y>0;){var x=a[o].s;d[x]<i?y-=1<<i-d[x]++-1:++o}for(;o>=0&&y;--o){var z=a[o].s;d[z]==i&&(--d[z],++y)}g=i}return{t:new n(d),l:g}},q=function(t,n,r){return-1==t.s?Math.max(q(t.l,n,r+1),q(t.r,n,r+1)):n[t.s]=r},O=function(t){for(var n=t.length;n&&!t[--n];);for(var i=new r(++n),e=0,o=t[0],s=1,a=function(t){i[e++]=t},u=1;u<=n;++u)if(t[u]==o&&u!=n)++s;else{if(!o&&s>2){for(;s>138;s-=138)a(32754);s>2&&(a(s>10?s-11<<5|28690:s-3<<5|12305),s=0)}else if(s>3){for(a(o),--s;s>6;s-=6)a(8304);s>2&&(a(s-3<<5|8208),s=0)}for(;s--;)a(o);s=1,o=t[u]}return{c:i.subarray(0,e),n:n}},G=function(t,n){for(var r=0,i=0;i<n.length;++i)r+=t[i]*n[i];return r},L=function(t,n,r){var i=r.length,e=T(n+2);t[e]=255&i,t[e+1]=i>>8,t[e+2]=255^t[e],t[e+3]=255^t[e+1];for(var o=0;o<i;++o)t[e+o+4]=r[o];return 8*(e+4+i)},B=function(t,n,i,a,u,h,f,c,l,p,v){F(n,v++,i),++u[256];for(var d=Z(u,15),g=d.t,x=d.l,k=Z(h,15),M=k.t,S=k.l,A=O(g),T=A.c,D=A.n,C=O(M),I=C.c,U=C.n,q=new r(19),B=0;B<T.length;++B)++q[31&T[B]];for(B=0;B<I.length;++B)++q[31&I[B]];for(var H=Z(q,7),j=H.t,N=H.l,P=19;P>4&&!j[s[P-1]];--P);var V,Y,J,K,Q=p+5<<3,R=G(u,m)+G(h,b)+f,W=G(u,g)+G(h,M)+f+14+3*P+G(q,j)+2*q[16]+3*q[17]+7*q[18];if(l>=0&&Q<=R&&Q<=W)return L(n,v,t.subarray(l,l+p));if(F(n,v,1+(W<R)),v+=2,W<R){V=y(g,x,0),Y=g,J=y(M,S,0),K=M;var X=y(j,N,0);for(F(n,v,D-257),F(n,v+5,U-1),F(n,v+10,P-4),v+=14,B=0;B<P;++B)F(n,v+3*B,j[s[B]]);v+=3*P;for(var $=[T,I],_=0;_<2;++_){var tt=$[_];for(B=0;B<tt.length;++B)F(n,v,X[rt=31&tt[B]]),v+=j[rt],rt>15&&(F(n,v,tt[B]>>5&127),v+=tt[B]>>12)}}else V=w,Y=m,J=z,K=b;for(B=0;B<c;++B){var nt=a[B];if(nt>255){var rt;E(n,v,V[257+(rt=nt>>18&31)]),v+=Y[rt+257],rt>7&&(F(n,v,nt>>23&31),v+=e[rt]);var it=31&nt;E(n,v,J[it]),v+=K[it],it>3&&(E(n,v,nt>>5&8191),v+=o[it])}else E(n,v,V[nt]),v+=Y[nt]}return E(n,v,V[256]),v+Y[256]},H=new i([65540,131080,131088,131104,262176,1048704,1048832,2114560,2117632]),j=new n(0),N=function(t,s,a,u,h,c){var l=c.z||t.length,v=new n(u+l+5*(1+Math.ceil(l/7e3))+h),d=v.subarray(u,v.length-h),g=c.l,y=7&(c.r||0);if(s){y&&(d[0]=c.r>>3);for(var m=H[s-1],b=m>>13,w=8191&m,x=(1<<a)-1,z=c.p||new r(32768),k=c.h||new r(x+1),M=Math.ceil(a/3),S=2*M,A=function(n){return(t[n]^t[n+1]<<M^t[n+2]<<S)&x},C=new i(25e3),I=new r(288),U=new r(32),F=0,E=0,Z=c.i||0,q=0,O=c.w||0,G=0;Z+2<l;++Z){var j=A(Z),N=32767&Z,P=k[j];if(z[N]=P,k[j]=N,O<=Z){var V=l-Z;if((F>7e3||q>24576)&&(V>423||!g)){y=B(t,d,0,C,I,U,E,q,G,Z-G,y),q=F=E=0,G=Z;for(var Y=0;Y<286;++Y)I[Y]=0;for(Y=0;Y<30;++Y)U[Y]=0}var J=2,K=0,Q=w,R=N-P&32767;if(V>2&&j==A(Z-R))for(var W=Math.min(b,V)-1,X=Math.min(32767,Z),$=Math.min(258,V);R<=X&&--Q&&N!=P;){if(t[Z+J]==t[Z+J-R]){for(var _=0;_<$&&t[Z+_]==t[Z+_-R];++_);if(_>J){if(J=_,K=R,_>W)break;var tt=Math.min(R,_-2),nt=0;for(Y=0;Y<tt;++Y){var rt=Z-R+Y&32767,it=rt-z[rt]&32767;it>nt&&(nt=it,P=rt)}}}R+=(N=P)-(P=z[N])&32767}if(K){C[q++]=268435456|f[J]<<18|p[K];var et=31&f[J],ot=31&p[K];E+=e[et]+o[ot],++I[257+et],++U[ot],O=Z+J,++F}else C[q++]=t[Z],++I[t[Z]]}}for(Z=Math.max(Z,O);Z<l;++Z)C[q++]=t[Z],++I[t[Z]];y=B(t,d,g,C,I,U,E,q,G,Z-G,y),g||(c.r=7&y|d[y/8|0]<<3,y-=7,c.h=k,c.p=z,c.i=Z,c.w=O)}else{for(Z=c.w||0;Z<l+g;Z+=65535){var st=Z+65535;st>=l&&(d[y/8|0]=g,st=l),y=L(d,y+1,t.subarray(Z,st))}c.i=l}return D(v,0,u+T(y)+h)},P=function(){for(var t=new Int32Array(256),n=0;n<256;++n){for(var r=n,i=9;--i;)r=(1&r&&-306674912)^r>>>1;t[n]=r}return t}(),V=function(){var t=-1;return{p:function(n){for(var r=t,i=0;i<n.length;++i)r=P[255&r^n[i]]^r>>>8;t=r},d:function(){return~t}}},Y=function(){var t=1,n=0;return{p:function(r){for(var i=t,e=n,o=0|r.length,s=0;s!=o;){for(var a=Math.min(s+2655,o);s<a;++s)e+=i+=r[s];i=(65535&i)+15*(i>>16),e=(65535&e)+15*(e>>16)}t=i,n=e},d:function(){return(255&(t%=65521))<<24|(65280&t)<<8|(255&(n%=65521))<<8|n>>8}}},J=function(t,r,i,e,o){if(!o&&(o={l:1},r.dictionary)){var s=r.dictionary.subarray(-32768),a=new n(s.length+t.length);a.set(s),a.set(t,s.length),t=a,o.w=s.length}return N(t,null==r.level?6:r.level,null==r.mem?o.l?Math.ceil(1.5*Math.max(8,Math.min(13,Math.log(t.length)))):20:12+r.mem,i,e,o)},K=function(t,n){var r={};for(var i in t)r[i]=t[i];for(var i in n)r[i]=n[i];return r},Q=function(t,n,r){for(var i=t(),e=""+t,o=e.slice(e.indexOf("[")+1,e.lastIndexOf("]")).replace(/\s+/g,"").split(","),s=0;s<i.length;++s){var a=i[s],u=o[s];if("function"==typeof a){n+=";"+u+"=";var h=""+a;if(a.prototype)if(-1!=h.indexOf("[native code]")){var f=h.indexOf(" ",8)+1;n+=h.slice(f,h.indexOf("(",f))}else for(var c in n+=h,a.prototype)n+=";"+u+".prototype."+c+"="+a.prototype[c];else n+=h}else r[u]=a}return n},R=[],W=function(t){var n=[];for(var r in t)t[r].buffer&&n.push((t[r]=new t[r].constructor(t[r])).buffer);return n},X=function(n,r,i,e){if(!R[i]){for(var o="",s={},a=n.length-1,u=0;u<a;++u)o=Q(n[u],o,s);R[i]={c:Q(n[a],o,s),e:s}}var h=K({},R[i].e);return(0,t.default)(R[i].c+";onmessage=function(e){for(var k in e.data)self[k]=e.data[k];onmessage="+r+"}",i,h,W(h),e)},$=function(){return[n,r,i,e,o,s,h,l,x,k,v,C,y,M,S,A,T,D,I,U,Tt,et,ot]},_=function(){return[n,r,i,e,o,s,f,p,w,m,z,b,v,H,j,y,F,E,Z,q,O,G,L,B,T,D,N,J,kt,et]},tt=function(){return[pt,gt,lt,V,P]},nt=function(){return[vt,dt]},rt=function(){return[yt,lt,Y]},it=function(){return[mt]},et=function(t){return postMessage(t,[t.buffer])},ot=function(t){return t&&{out:t.size&&new n(t.size),dictionary:t.dictionary}},st=function(t,n,r,i,e,o){var s=X(r,i,e,function(t,n){s.terminate(),o(t,n)});return s.postMessage([t,n],n.consume?[t.buffer]:[]),function(){s.terminate()}},at=function(t){return t.ondata=function(t,n){return postMessage([t,n],[t.buffer])},function(n){n.data[0]?(t.push(n.data[0],n.data[1]),postMessage([n.data[0].length])):t.flush(n.data[1])}},ut=function(t,n,r,i,e,o,s){var a,u=X(t,i,e,function(t,r){t?(u.terminate(),n.ondata.call(n,t)):Array.isArray(r)?1==r.length?(n.queuedSize-=r[0],n.ondrain&&n.ondrain(r[0])):(r[1]&&u.terminate(),n.ondata.call(n,t,r[0],r[1])):s(r)});u.postMessage(r),n.queuedSize=0,n.push=function(t,r){n.ondata||I(5),a&&n.ondata(I(4,0,1),null,!!r),n.queuedSize+=t.length,u.postMessage([t,a=r],t.buffer instanceof ArrayBuffer?[t.buffer]:[])},n.terminate=function(){u.terminate()},o&&(n.flush=function(t){u.postMessage([0,t])})},ht=function(t,n){return t[n]|t[n+1]<<8},ft=function(t,n){return(t[n]|t[n+1]<<8|t[n+2]<<16|t[n+3]<<24)>>>0},ct=function(t,n){return ft(t,n)+4294967296*ft(t,n+4)},lt=function(t,n,r){for(;r;++n)t[n]=r,r>>>=8},pt=function(t,n){var r=n.filename;if(t[0]=31,t[1]=139,t[2]=8,t[8]=n.level<2?4:9==n.level?2:0,t[9]=3,0!=n.mtime&&lt(t,4,Math.floor(new Date(n.mtime||Date.now())/1e3)),r){t[3]=8;for(var i=0;i<=r.length;++i)t[i+10]=r.charCodeAt(i)}},vt=function(t){31==t[0]&&139==t[1]&&8==t[2]||I(6,"invalid gzip data");var n=t[3],r=10;4&n&&(r+=2+(t[10]|t[11]<<8));for(var i=(n>>3&1)+(n>>4&1);i>0;i-=!t[r++]);return r+(2&n)},dt=function(t){var n=t.length;return(t[n-4]|t[n-3]<<8|t[n-2]<<16|t[n-1]<<24)>>>0},gt=function(t){return 10+(t.filename?t.filename.length+1:0)},yt=function(t,n){var r=n.level,i=0==r?0:r<6?1:9==r?3:2;if(t[0]=120,t[1]=i<<6|(n.dictionary&&32),t[1]|=31-(t[0]<<8|t[1])%31,n.dictionary){var e=Y();e.p(n.dictionary),lt(t,2,e.d())}},mt=function(t,n){return(8!=(15&t[0])||t[0]>>4>7||(t[0]<<8|t[1])%31)&&I(6,"invalid zlib data"),(t[1]>>5&1)==+!n&&I(6,"invalid zlib data: "+(32&t[1]?"need":"unexpected")+" dictionary"),2+(t[1]>>3&4)};function bt(t,n){return"function"==typeof t&&(n=t,t={}),this.ondata=n,t}var wt=function(){function t(t,r){if("function"==typeof t&&(r=t,t={}),this.ondata=r,this.o=t||{},this.s={l:0,i:32768,w:32768,z:32768},this.b=new n(98304),this.o.dictionary){var i=this.o.dictionary.subarray(-32768);this.b.set(i,32768-i.length),this.s.i=32768-i.length}}return t.prototype.p=function(t,n){this.ondata(J(t,this.o,0,0,this.s),n)},t.prototype.push=function(t,r){this.ondata||I(5),this.s.l&&I(4);var i=t.length+this.s.z;if(i>this.b.length){if(i>2*this.b.length-32768){var e=new n(-32768&i);e.set(this.b.subarray(0,this.s.z)),this.b=e}var o=this.b.length-this.s.z;this.b.set(t.subarray(0,o),this.s.z),this.s.z=this.b.length,this.p(this.b,!1),this.b.set(this.b.subarray(-32768)),this.b.set(t.subarray(o),32768),this.s.z=t.length-o+32768,this.s.i=32766,this.s.w=32768}else this.b.set(t,this.s.z),this.s.z+=t.length;this.s.l=1&r,(this.s.z>this.s.w+8191||r)&&(this.p(this.b,r||!1),this.s.w=this.s.i,this.s.i-=2),r&&(this.s=this.o={},this.b=j)},t.prototype.flush=function(t){if(this.ondata||I(5),this.s.l&&I(4),this.p(this.b,!1),this.s.w=this.s.i,this.s.i-=2,t){var r=new n(6);r[0]=this.s.r>>3;var i=L(r,this.s.r,j);this.s.r=0,this.ondata(r.subarray(0,i>>3),!1)}},t}();_e.Deflate=wt;var xt=function(){return function(t,n){ut([_,function(){return[at,wt]}],this,bt.call(this,t,n),function(t){var n=new wt(t.data);onmessage=at(n)},6,1)}}();function zt(t,n,r){return r||(r=n,n={}),"function"!=typeof r&&I(7),st(t,n,[_],function(t){return et(kt(t.data[0],t.data[1]))},0,r)}function kt(t,n){return J(t,n||{},0,0)}_e.AsyncDeflate=xt;var Mt=function(){function t(t,r){"function"==typeof t&&(r=t,t={}),this.ondata=r;var i=t&&t.dictionary&&t.dictionary.subarray(-32768);this.s={i:0,b:i?i.length:0},this.o=new n(32768),this.p=new n(0),i&&this.o.set(i)}return t.prototype.e=function(t){if(this.ondata||I(5),this.d&&I(4),this.p.length){if(t.length){var r=new n(this.p.length+t.length);r.set(this.p),r.set(t,this.p.length),this.p=r}}else this.p=t},t.prototype.c=function(t){this.s.i=+(this.d=t||!1);var n=this.s.b,r=U(this.p,this.s,this.o);this.ondata(D(r,n,this.s.b),this.d),this.o=D(r,this.s.b-32768),this.s.b=this.o.length,this.p=D(this.p,this.s.p/8|0),this.s.p&=7},t.prototype.push=function(t,n){this.e(t),this.c(n)},t}();_e.Inflate=Mt;var St=function(){return function(t,n){ut([$,function(){return[at,Mt]}],this,bt.call(this,t,n),function(t){var n=new Mt(t.data);onmessage=at(n)},7,0)}}();function At(t,n,r){return r||(r=n,n={}),"function"!=typeof r&&I(7),st(t,n,[$],function(t){return et(Tt(t.data[0],ot(t.data[1])))},1,r)}function Tt(t,n){return U(t,{i:2},n&&n.out,n&&n.dictionary)}_e.AsyncInflate=St;var Dt=function(){function t(t,n){this.c=V(),this.l=0,this.v=1,wt.call(this,t,n)}return t.prototype.push=function(t,n){this.c.p(t),this.l+=t.length,wt.prototype.push.call(this,t,n)},t.prototype.p=function(t,n){var r=J(t,this.o,this.v&&gt(this.o),n&&8,this.s);this.v&&(pt(r,this.o),this.v=0),n&&(lt(r,r.length-8,this.c.d()),lt(r,r.length-4,this.l)),this.ondata(r,n)},t.prototype.flush=function(t){wt.prototype.flush.call(this,t)},t}();_e.Gzip=Dt,_e.Compress=Dt;var Ct=function(){return function(t,n){ut([_,tt,function(){return[at,wt,Dt]}],this,bt.call(this,t,n),function(t){var n=new Dt(t.data);onmessage=at(n)},8,1)}}();function It(t,n,r){return r||(r=n,n={}),"function"!=typeof r&&I(7),st(t,n,[_,tt,function(){return[Ut]}],function(t){return et(Ut(t.data[0],t.data[1]))},2,r)}function Ut(t,n){n||(n={});var r=V(),i=t.length;r.p(t);var e=J(t,n,gt(n),8),o=e.length;return pt(e,n),lt(e,o-8,r.d()),lt(e,o-4,i),e}_e.AsyncGzip=Ct,_e.AsyncCompress=Ct;var Ft=function(){function t(t,n){this.v=1,this.r=0,Mt.call(this,t,n)}return t.prototype.push=function(t,r){if(Mt.prototype.e.call(this,t),this.r+=t.length,this.v){var i=this.p.subarray(this.v-1),e=i.length>3?vt(i):4;if(e>i.length){if(!r)return}else this.v>1&&this.onmember&&this.onmember(this.r-i.length);this.p=i.subarray(e),this.v=0}Mt.prototype.c.call(this,0),this.s.f&&!this.s.l?(this.v=T(this.s.p)+9,this.s={i:0},this.o=new n(0),this.push(new n(0),r)):r&&Mt.prototype.c.call(this,r)},t}();_e.Gunzip=Ft;var Et=function(){return function(t,n){var r=this;ut([$,nt,function(){return[at,Mt,Ft]}],this,bt.call(this,t,n),function(t){var n=new Ft(t.data);n.onmember=function(t){return postMessage(t)},onmessage=at(n)},9,0,function(t){return r.onmember&&r.onmember(t)})}}();function Zt(t,n,r){return r||(r=n,n={}),"function"!=typeof r&&I(7),st(t,n,[$,nt,function(){return[qt]}],function(t){return et(qt(t.data[0],t.data[1]))},3,r)}function qt(t,r){var i=vt(t);return i+8>t.length&&I(6,"invalid gzip data"),U(t.subarray(i,-8),{i:2},r&&r.out||new n(dt(t)),r&&r.dictionary)}_e.AsyncGunzip=Et;var Ot=function(){function t(t,n){this.c=Y(),this.v=1,wt.call(this,t,n)}return t.prototype.push=function(t,n){this.c.p(t),wt.prototype.push.call(this,t,n)},t.prototype.p=function(t,n){var r=J(t,this.o,this.v&&(this.o.dictionary?6:2),n&&4,this.s);this.v&&(yt(r,this.o),this.v=0),n&&lt(r,r.length-4,this.c.d()),this.ondata(r,n)},t.prototype.flush=function(t){wt.prototype.flush.call(this,t)},t}();_e.Zlib=Ot;var Gt=function(){return function(t,n){ut([_,rt,function(){return[at,wt,Ot]}],this,bt.call(this,t,n),function(t){var n=new Ot(t.data);onmessage=at(n)},10,1)}}();function Lt(t,n,r){return r||(r=n,n={}),"function"!=typeof r&&I(7),st(t,n,[_,rt,function(){return[Bt]}],function(t){return et(Bt(t.data[0],t.data[1]))},4,r)}function Bt(t,n){n||(n={});var r=Y();r.p(t);var i=J(t,n,n.dictionary?6:2,4);return yt(i,n),lt(i,i.length-4,r.d()),i}_e.AsyncZlib=Gt;var Ht=function(){function t(t,n){Mt.call(this,t,n),this.v=t&&t.dictionary?2:1}return t.prototype.push=function(t,n){if(Mt.prototype.e.call(this,t),this.v){if(this.p.length<6&&!n)return;this.p=this.p.subarray(mt(this.p,this.v-1)),this.v=0}n&&(this.p.length<4&&I(6,"invalid zlib data"),this.p=this.p.subarray(0,-4)),Mt.prototype.c.call(this,n)},t}();_e.Unzlib=Ht;var jt=function(){return function(t,n){ut([$,it,function(){return[at,Mt,Ht]}],this,bt.call(this,t,n),function(t){var n=new Ht(t.data);onmessage=at(n)},11,0)}}();function Nt(t,n,r){return r||(r=n,n={}),"function"!=typeof r&&I(7),st(t,n,[$,it,function(){return[Pt]}],function(t){return et(Pt(t.data[0],ot(t.data[1])))},5,r)}function Pt(t,n){return U(t.subarray(mt(t,n&&n.dictionary),-4),{i:2},n&&n.out,n&&n.dictionary)}_e.AsyncUnzlib=jt;var Vt=function(){function t(t,n){this.o=bt.call(this,t,n)||{},this.G=Ft,this.I=Mt,this.Z=Ht}return t.prototype.i=function(){var t=this;this.s.ondata=function(n,r){t.ondata(n,r)}},t.prototype.push=function(t,r){if(this.ondata||I(5),this.s)this.s.push(t,r);else{if(this.p&&this.p.length){var i=new n(this.p.length+t.length);i.set(this.p),i.set(t,this.p.length)}else this.p=t;this.p.length>2&&(this.s=31==this.p[0]&&139==this.p[1]&&8==this.p[2]?new this.G(this.o):8!=(15&this.p[0])||this.p[0]>>4>7||(this.p[0]<<8|this.p[1])%31?new this.I(this.o):new this.Z(this.o),this.i(),this.s.push(this.p,r),this.p=null)}},t}();_e.Decompress=Vt;var Yt=function(){function t(t,n){Vt.call(this,t,n),this.queuedSize=0,this.G=Et,this.I=St,this.Z=jt}return t.prototype.i=function(){var t=this;this.s.ondata=function(n,r,i){t.ondata(n,r,i)},this.s.ondrain=function(n){t.queuedSize-=n,t.ondrain&&t.ondrain(n)}},t.prototype.push=function(t,n){this.queuedSize+=t.length,Vt.prototype.push.call(this,t,n)},t}();function Jt(t,n,r){return r||(r=n,n={}),"function"!=typeof r&&I(7),31==t[0]&&139==t[1]&&8==t[2]?Zt(t,n,r):8!=(15&t[0])||t[0]>>4>7||(t[0]<<8|t[1])%31?At(t,n,r):Nt(t,n,r)}function Kt(t,n){return 31==t[0]&&139==t[1]&&8==t[2]?qt(t,n):8!=(15&t[0])||t[0]>>4>7||(t[0]<<8|t[1])%31?Tt(t,n):Pt(t,n)}_e.AsyncDecompress=Yt;var Qt=function(t,r,i,e){for(var o in t){var s=t[o],a=r+o,u=e;Array.isArray(s)&&(u=K(e,s[1]),s=s[0]),ArrayBuffer.isView(s)?i[a]=[s,u]:(i[a+="/"]=[new n(0),u],Qt(s,a,i,e))}},Rt="undefined"!=typeof TextEncoder&&new TextEncoder,Wt="undefined"!=typeof TextDecoder&&new TextDecoder,Xt=0;try{Wt.decode(j,{stream:!0}),Xt=1}catch(t){}var $t=function(t){for(var n="",r=0;;){var i=t[r++],e=(i>127)+(i>223)+(i>239);if(r+e>t.length)return{s:n,r:D(t,r-1)};e?3==e?(i=((15&i)<<18|(63&t[r++])<<12|(63&t[r++])<<6|63&t[r++])-65536,n+=String.fromCharCode(55296|i>>10,56320|1023&i)):n+=String.fromCharCode(1&e?(31&i)<<6|63&t[r++]:(15&i)<<12|(63&t[r++])<<6|63&t[r++]):n+=String.fromCharCode(i)}},_t=function(){function t(t){this.ondata=t,Xt?this.t=new TextDecoder:this.p=j}return t.prototype.push=function(t,r){if(this.ondata||I(5),r=!!r,this.t)return this.ondata(this.t.decode(t,{stream:!0}),r),void(r&&(this.t.decode().length&&I(8),this.t=null));this.p||I(4);var i=new n(this.p.length+t.length);i.set(this.p),i.set(t,this.p.length);var e=$t(i),o=e.s,s=e.r;r?(s.length&&I(8),this.p=null):this.p=s,this.ondata(o,r)},t}();_e.DecodeUTF8=_t;var tn=function(){function t(t){this.ondata=t}return t.prototype.push=function(t,n){this.ondata||I(5),this.d&&I(4),this.ondata(nn(t),this.d=n||!1)},t}();function nn(t,r){if(r){for(var i=new n(t.length),e=0;e<t.length;++e)i[e]=t.charCodeAt(e);return i}if(Rt)return Rt.encode(t);var o=t.length,s=new n(t.length+(t.length>>1)),a=0,u=function(t){s[a++]=t};for(e=0;e<o;++e){if(a+5>s.length){var h=new n(a+8+(o-e<<1));h.set(s),s=h}var f=t.charCodeAt(e);f<128||r?u(f):f<2048?(u(192|f>>6),u(128|63&f)):f>55295&&f<57344?(u(240|(f=65536+(1047552&f)|1023&t.charCodeAt(++e))>>18),u(128|f>>12&63),u(128|f>>6&63),u(128|63&f)):(u(224|f>>12),u(128|f>>6&63),u(128|63&f))}return D(s,0,a)}function rn(t,n){if(n){for(var r="",i=0;i<t.length;i+=16384)r+=String.fromCharCode.apply(null,t.subarray(i,i+16384));return r}if(Wt)return Wt.decode(t);var e=$t(t),o=e.s;return(r=e.r).length&&I(8),o}_e.EncodeUTF8=tn;var en=function(t){return 1==t?3:t<6?2:9==t?1:0},on=function(t,n){return n+30+ht(t,n+26)+ht(t,n+28)},sn=function(t,n,r){var i=ht(t,n+28),e=ht(t,n+30),o=rn(t.subarray(n+46,n+46+i),!(2048&ht(t,n+8))),s=n+46+i,a=an(t,s,e,r,ft(t,n+20),ft(t,n+24),ft(t,n+42)),u=a[0],h=a[1],f=a[2];return[ht(t,n+10),u,h,o,s+e+ht(t,n+32),f]},an=function(t,n,r,i,e,o,s){var a=4294967295==e,u=4294967295==o,h=4294967295==s,f=n+r;if(i&&a+u+h){for(;n+4<f;n+=4+ht(t,n+2))if(1==ht(t,n))return[a?ct(t,n+4+8*u):e,u?ct(t,n+4):o,h?ct(t,n+4+8*(u+a)):s,1];i<2&&I(13)}return[e,o,s,0]},un=function(t){var n=0;if(t)for(var r in t){var i=t[r].length;i>65535&&I(9),n+=i+4}return n},hn=function(t,n,r,i,e,o,s,a){var u=i.length,h=r.extra,f=a&&a.length,c=un(h);lt(t,n,null!=s?33639248:67324752),n+=4,null!=s&&(t[n++]=20,t[n++]=r.os),t[n]=20,n+=2,t[n++]=r.flag<<1|(o<0&&8),t[n++]=e&&8,t[n++]=255&r.compression,t[n++]=r.compression>>8;var l=new Date(null==r.mtime?Date.now():r.mtime),p=l.getFullYear()-1980;if((p<0||p>119)&&I(10),lt(t,n,p<<25|l.getMonth()+1<<21|l.getDate()<<16|l.getHours()<<11|l.getMinutes()<<5|l.getSeconds()>>1),n+=4,-1!=o&&(lt(t,n,r.crc),lt(t,n+4,o<0?-o-2:o),lt(t,n+8,r.size)),lt(t,n+12,u),lt(t,n+14,c),n+=16,null!=s&&(lt(t,n,f),lt(t,n+6,r.attrs),lt(t,n+10,s),n+=14),t.set(i,n),n+=u,c)for(var v in h){var d=h[v],g=d.length;lt(t,n,+v),lt(t,n+2,g),t.set(d,n+4),n+=4+g}return f&&(t.set(a,n),n+=f),n},fn=function(t,n,r,i,e){lt(t,n,101010256),lt(t,n+8,r),lt(t,n+10,r),lt(t,n+12,i),lt(t,n+16,e)},cn=function(){function t(t){this.filename=t,this.c=V(),this.size=0,this.compression=0}return t.prototype.process=function(t,n){this.ondata(null,t,n)},t.prototype.push=function(t,n){this.ondata||I(5),this.c.p(t),this.size+=t.length,n&&(this.crc=this.c.d()),this.process(t,n||!1)},t}();_e.ZipPassThrough=cn;var ln=function(){function t(t,n){var r=this;n||(n={}),cn.call(this,t),this.d=new wt(n,function(t,n){r.ondata(null,t,n)}),this.compression=8,this.flag=en(n.level)}return t.prototype.process=function(t,n){try{this.d.push(t,n)}catch(t){this.ondata(t,null,n)}},t.prototype.push=function(t,n){cn.prototype.push.call(this,t,n)},t}();_e.ZipDeflate=ln;var pn=function(){function t(t,n){var r=this;n||(n={}),cn.call(this,t),this.d=new xt(n,function(t,n,i){r.ondata(t,n,i)}),this.compression=8,this.flag=en(n.level),this.terminate=this.d.terminate}return t.prototype.process=function(t,n){this.d.push(t,n)},t.prototype.push=function(t,n){cn.prototype.push.call(this,t,n)},t}();_e.AsyncZipDeflate=pn;var vn=function(){function t(t){this.ondata=t,this.u=[],this.d=1}return t.prototype.add=function(t){var r=this;if(this.ondata||I(5),2&this.d)this.ondata(I(4+8*(1&this.d),0,1),null,!1);else{var i=nn(t.filename),e=i.length,o=t.comment,s=o&&nn(o),a=e!=t.filename.length||s&&o.length!=s.length,u=e+un(t.extra)+30;e>65535&&this.ondata(I(11,0,1),null,!1);var h=new n(u);hn(h,0,t,i,a,-1);var f=[h],c=function(){for(var t=0,n=f;t<n.length;t++)r.ondata(null,n[t],!1);f=[]},l=this.d;this.d=0;var p=this.u.length,v=K(t,{f:i,u:a,o:s,t:function(){t.terminate&&t.terminate()},r:function(){if(c(),l){var t=r.u[p+1];t?t.r():r.d=1}l=1}}),d=0;t.ondata=function(i,e,o){if(i)r.ondata(i,e,o),r.terminate();else if(d+=e.length,f.push(e),o){var s=new n(16);lt(s,0,134695760),lt(s,4,t.crc),lt(s,8,d),lt(s,12,t.size),f.push(s),v.c=d,v.b=u+d+16,v.crc=t.crc,v.size=t.size,l&&v.r(),l=1}else l&&c()},this.u.push(v)}},t.prototype.end=function(){var t=this;2&this.d?this.ondata(I(4+8*(1&this.d),0,1),null,!0):(this.d?this.e():this.u.push({r:function(){1&t.d&&(t.u.splice(-1,1),t.e())},t:function(){}}),this.d=3)},t.prototype.e=function(){for(var t=0,r=0,i=0,e=0,o=this.u;e<o.length;e++)i+=46+(h=o[e]).f.length+un(h.extra)+(h.o?h.o.length:0);for(var s=new n(i+22),a=0,u=this.u;a<u.length;a++){var h;hn(s,t,h=u[a],h.f,h.u,-h.c-2,r,h.o),t+=46+h.f.length+un(h.extra)+(h.o?h.o.length:0),r+=h.b}fn(s,t,this.u.length,i,r),this.ondata(null,s,!0),this.d=2},t.prototype.terminate=function(){for(var t=0,n=this.u;t<n.length;t++)n[t].t();this.d=2},t}();function dn(t,r,i){i||(i=r,r={}),"function"!=typeof i&&I(7);var e={};Qt(t,"",e,r);var o=Object.keys(e),s=o.length,a=0,u=0,h=s,f=Array(s),c=[],l=function(){for(var t=0;t<c.length;++t)c[t]()},p=function(t,n){xn(function(){i(t,n)})};xn(function(){p=i});var v=function(){var t=new n(u+22),r=a,i=u-a;u=0;for(var e=0;e<h;++e){var o=f[e];try{var s=o.c.length;hn(t,u,o,o.f,o.u,s);var c=30+o.f.length+un(o.extra),l=u+c;t.set(o.c,l),hn(t,a,o,o.f,o.u,s,u,o.m),a+=16+c+(o.m?o.m.length:0),u=l+s}catch(t){return p(t,null)}}fn(t,a,f.length,i,r),p(null,t)};s||v();for(var d=function(t){var n=o[t],r=e[n],i=r[0],h=r[1],d=V(),g=i.length;d.p(i);var y=nn(n),m=y.length,b=h.comment,w=b&&nn(b),x=w&&w.length,z=un(h.extra),k=0==h.level?0:8,M=function(r,i){if(r)l(),p(r,null);else{var e=i.length;f[t]=K(h,{size:g,crc:d.d(),c:i,f:y,m:w,u:m!=n.length||w&&b.length!=x,compression:k}),a+=30+m+z+e,u+=76+2*(m+z)+(x||0)+e,--s||v()}};if(m>65535&&M(I(11,0,1),null),k)if(g<16e4)try{M(null,kt(i,h))}catch(t){M(t,null)}else c.push(zt(i,h,M));else M(null,i)},g=0;g<h;++g)d(g);return l}function gn(t,r){r||(r={});var i={},e=[];Qt(t,"",i,r);var o=0,s=0;for(var a in i){var u=i[a],h=u[0],f=u[1],c=0==f.level?0:8,l=(M=nn(a)).length,p=f.comment,v=p&&nn(p),d=v&&v.length,g=un(f.extra);l>65535&&I(11);var y=c?kt(h,f):h,m=y.length,b=V();b.p(h),e.push(K(f,{size:h.length,crc:b.d(),c:y,f:M,m:v,u:l!=a.length||v&&p.length!=d,o:o,compression:c})),o+=30+l+g+m,s+=76+2*(l+g)+(d||0)+m}for(var w=new n(s+22),x=o,z=s-o,k=0;k<e.length;++k){var M;hn(w,(M=e[k]).o,M,M.f,M.u,M.c.length);var S=30+M.f.length+un(M.extra);w.set(M.c,M.o+S),hn(w,o,M,M.f,M.u,M.c.length,M.o,M.m),o+=16+S+(M.m?M.m.length:0)}return fn(w,o,e.length,z,x),w}_e.Zip=vn;var yn=function(){function t(){}return t.prototype.push=function(t,n){this.ondata(null,t,n)},t.compression=0,t}();_e.UnzipPassThrough=yn;var mn=function(){function t(){var t=this;this.i=new Mt(function(n,r){t.ondata(null,n,r)})}return t.prototype.push=function(t,n){try{this.i.push(t,n)}catch(t){this.ondata(t,null,n)}},t.compression=8,t}();_e.UnzipInflate=mn;var bn=function(){function t(t,n){var r=this;n<32e4?this.i=new Mt(function(t,n){r.ondata(null,t,n)}):(this.i=new St(function(t,n,i){r.ondata(t,n,i)}),this.terminate=this.i.terminate)}return t.prototype.push=function(t,n){this.i.terminate&&(t=D(t,0)),this.i.push(t,n)},t.compression=8,t}();_e.AsyncUnzipInflate=bn;var wn=function(){function t(t){this.onfile=t,this.k=[],this.o={0:yn},this.p=j}return t.prototype.push=function(t,r){var i=this;if(this.onfile||I(5),this.p||I(4),this.c>0){var e=Math.min(this.c,t.length),o=t.subarray(0,e);if(this.c-=e,this.d?this.d.push(o,!this.c):this.k[0].push(o),(t=t.subarray(e)).length)return this.push(t,r)}else{var s=0,a=0,u=void 0,h=void 0;this.p.length?t.length?((h=new n(this.p.length+t.length)).set(this.p),h.set(t,this.p.length)):h=this.p:h=t;for(var f=h.length,c=this.c,l=c&&this.d,p=function(){var t=ft(h,a);if(67324752==t){s=1,u=a,v.d=null,v.c=0;var n=ht(h,a+6),r=ht(h,a+8),e=2048&n,o=8&n,l=ht(h,a+26),p=ht(h,a+28);if(f>a+30+l+p){var d=[];v.k.unshift(d),s=2;var g,y=ft(h,a+18),m=ft(h,a+22),b=rn(h.subarray(a+30,a+=30+l),!e),w=an(h,a,p,2,y,m,0),x=w[0],z=w[1];o&&(x=-1-w[3]),a+=p,v.c=x;var k={name:b,compression:r,start:function(){if(k.ondata||I(5),x){var t=i.o[r];t||k.ondata(I(14,"unknown compression type "+r,1),null,!1),(g=x<0?new t(b):new t(b,x,z)).ondata=function(t,n,r){k.ondata(t,n,r)};for(var n=0,e=d;n<e.length;n++)g.push(e[n],!1);i.k[0]==d&&i.c?i.d=g:g.push(j,!0)}else k.ondata(null,j,!0)},terminate:function(){g&&g.terminate&&g.terminate()}};x>=0&&(k.size=x,k.originalSize=z),v.onfile(k)}return"break"}if(c){if(134695760==t)return u=a+=12+(-2==c&&8),s=3,v.c=0,"break";if(33639248==t)return u=a-=4,s=3,v.c=0,"break"}},v=this;a<f-4&&"break"!==p();++a);if(this.p=j,c<0){var d=h.subarray(0,s?u-12-(-2==c&&8)-(134695760==ft(h,u-16)&&4):a);l?l.push(d,!!s):this.k[+(2==s)].push(d)}if(2&s)return this.push(h.subarray(a),r);this.p=h.subarray(a)}r&&(this.c&&I(13),this.p=null)},t.prototype.register=function(t){this.o[t.compression]=t},t}();_e.Unzip=wn;var xn="function"==typeof queueMicrotask?queueMicrotask:"function"==typeof setTimeout?setTimeout:function(t){t()};function zn(t,r,i){i||(i=r,r={}),"function"!=typeof i&&I(7);var e=[],o=function(){for(var t=0;t<e.length;++t)e[t]()},s={},a=function(t,n){xn(function(){i(t,n)})};xn(function(){a=i});for(var u=t.length-22;101010256!=ft(t,u);--u)if(!u||t.length-u>65558)return a(I(13,0,1),null),o;var h=ht(t,u+8);if(h){var f=h,c=ft(t,u+16),l=117853008==ft(t,u-20);if(l){var p=ft(t,u-12);(l=101075792==ft(t,p))&&(f=h=ft(t,p+32),c=ft(t,p+48))}for(var v=r&&r.filter,d=function(r){var i=sn(t,c,l),u=i[0],f=i[1],p=i[2],d=i[3],g=i[4],y=on(t,i[5]);c=g;var m=function(t,n){t?(o(),a(t,null)):(n&&(s[d]=n),--h||a(null,s))};if(!v||v({name:d,size:f,originalSize:p,compression:u}))if(u)if(8==u){var b=t.subarray(y,y+f);if(p<524288||f>.8*p)try{m(null,Tt(b,{out:new n(p)}))}catch(t){m(t,null)}else e.push(At(b,{size:p},m))}else m(I(14,"unknown compression type "+u,1),null);else m(null,D(t,y,y+f));else m(null,null)},g=0;g<f;++g)d()}else a(null,{});return o}function kn(t,r){for(var i={},e=t.length-22;101010256!=ft(t,e);--e)(!e||t.length-e>65558)&&I(13);var o=ht(t,e+8);if(!o)return{};var s=ft(t,e+16),a=117853008==ft(t,e-20);if(a){var u=ft(t,e-12);(a=101075792==ft(t,u))&&(o=ft(t,u+32),s=ft(t,u+48))}for(var h=r&&r.filter,f=0;f<o;++f){var c=sn(t,s,a),l=c[0],p=c[1],v=c[2],d=c[3],g=c[4],y=on(t,c[5]);s=g,h&&!h({name:d,size:p,originalSize:v,compression:l})||(l?8==l?i[d]=Tt(t.subarray(y,y+p),{out:new n(v)}):I(14,"unknown compression type "+l):i[d]=D(t,y,y+p))}return i}return _e});
 document.addEventListener('DOMContentLoaded', () => {
+    // US-061: set once a protected API answers 401 (session expired or closed).
+    // The page is leaving for /login: the polling loops must not run any more.
+    let sessionExpired = false;
+
+    // Every /api/* call goes through here so that a 401 sends the user to /login
+    async function apiFetch(url, options) {
+        const response = await fetch(url, options);
+        if (response.status === 401 && !sessionExpired) redirectExpired();
+        return response;
+    }
+    function redirectExpired() {
+        sessionExpired = true;
+        window.location.replace('/login?expired=1');
+    }
+    // Descriptions from Network UPS Tools data/cmdvartab (https://networkupstools.org/),
+    // GPL-2.0-or-later. esp32-nut is licensed GPL-3.0-or-later: see NOTICE
     const NUT_DESCRIPTIONS = {
     'ups.alarm': 'UPS alarms',
     'ups.status': 'UPS status',
@@ -103,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
     'output.frequency.nominal': 'Nominal output frequency (Hz)',
     'output.current': 'Output current (A)',
     'output.current.nominal': 'Nominal output current (A)',
+    'output.powerfactor': 'Power Factor (dimensionless value between 0.00 and 1.00)',
     'battery.charge': 'Battery charge (percent of full)',
     'battery.charge.approx': 'Rough approximation of battery charge',
     'battery.charge.low': 'Remaining battery level when UPS switches to LB (percent)',
@@ -197,6 +214,10 @@ document.addEventListener('DOMContentLoaded', () => {
     'device.macaddr': 'Physical network address of the device',
     'device.uptime': 'Device uptime in seconds',
     'device.count': 'Total number of daisychained devices',
+    'experimental.ups.powersummary.ioeminformation': 'OEM information string (EcoFlow, experimental)',
+    'experimental.ups.powersummary.presentstatus.shutdownrequested': 'Shutdown requested flag (EcoFlow, experimental)',
+    'experimental.ups.powersummary.presentstatus.voltagenotregulated': 'Voltage not regulated flag (EcoFlow, experimental)',
+    'experimental.ups.powersummary.rechargeable': 'Rechargeable battery flag (EcoFlow, experimental)',
     'device.usb.version': 'Device USB version',
     'server.info': 'Server information',
     'server.version': 'Server version',
@@ -214,6 +235,37 @@ document.addEventListener('DOMContentLoaded', () => {
     const tabs = document.querySelectorAll('.tab');
     const contents = document.querySelectorAll('.tab-content');
     const pageTitle = document.querySelector('.page-title');
+
+    // US-147: the address names the open tab (#nut, #board, ...). OTA is the
+    // separate /update page, not a tab of this one. No '#', or a name that is
+    // not a tab, means UPS Telemetry, the default tab (US-049). The name is
+    // compared with the data-target of the buttons, never put in a selector.
+    const DEFAULT_TAB = 'ups';
+    function findTab(target) {
+        return Array.from(tabs).find(t => t.getAttribute('data-target') === target) || null;
+    }
+    function tabFromHash() {
+        const name = window.location.hash.slice(1);
+        if (name && name !== 'ota' && findTab(name) && document.getElementById(`content-${name}`)) {
+            return name;
+        }
+        return DEFAULT_TAB;
+    }
+    // US-147: true while a back/forward click runs, so it adds no history entry
+    let restoringFromHistory = false;
+
+    // US-147: open the tab of the address before anything reads the active tab.
+    // Only the classes move, with no click: the start-up checks of each tab
+    // (activeTab below, document.querySelector('.tab.active') further down) then
+    // load that tab, and the telemetry poll starts only on its own tabs. The
+    // history is left alone: without '#' the address stays '/'.
+    const initialTab = tabFromHash();
+    if (initialTab !== DEFAULT_TAB) {
+        tabs.forEach(t => t.classList.remove('active'));
+        contents.forEach(c => c.classList.remove('active'));
+        findTab(initialTab).classList.add('active');
+        document.getElementById(`content-${initialTab}`).classList.add('active');
+    }
 
     // Imposta il titolo iniziale
     const activeTab = document.querySelector('.tab.active');
@@ -240,10 +292,31 @@ document.addEventListener('DOMContentLoaded', () => {
                 pageTitle.textContent = tab.textContent.trim();
             }
 
+            // US-147: one history entry per tab change. Comparing with the tab
+            // of the address skips clicks on the tab already open, including
+            // UPS Telemetry on '/' with no '#'. Back/forward clicks write nothing.
+            if (!restoringFromHistory && tabFromHash() !== target) {
+                history.pushState({ tab: target }, '', '#' + target);
+            }
+
             if (target === 'logs') {
                 fetchLogs();
             }
         });
+    });
+
+    // US-147: back/forward (and a '#' typed in the address bar) open the tab of
+    // the entry through the same click, so the title, the loads and the
+    // telemetry poll follow as after a click, without writing to the history.
+    window.addEventListener('popstate', () => {
+        const tab = findTab(tabFromHash());
+        if (!tab || tab.classList.contains('active')) return;
+        restoringFromHistory = true;
+        try {
+            tab.click();
+        } finally {
+            restoringFromHistory = false;
+        }
     });
 
     const ssidInput = document.getElementById('ssid');
@@ -270,7 +343,7 @@ document.addEventListener('DOMContentLoaded', () => {
         pwdInput.disabled = true;
         
         try {
-            const response = await fetch('/api/wifi/connect', {
+            const response = await apiFetch('/api/wifi/connect', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -323,25 +396,133 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // US-124: the reply says whether the NUT server took the settings and how many NUT
+    // clients it disconnected; the board never restarts for this page
+    const nutStatus = document.getElementById('nut-status');
+    function nutStatusText(data) {
+        if (data.applied === false) return 'Saved. The NUT server uses these settings at the next start.';
+        if (!data.changed) return 'No changes: NUT clients stay connected.';
+        const n = Number(data.sessions_closed) || 0;
+        if (n === 0) return 'Applied now, no restart.';
+        return `Applied now, no restart. ${n} NUT ${n === 1 ? 'client' : 'clients'} disconnected: ` +
+            `${n === 1 ? 'it reconnects' : 'they reconnect'} with the new settings.`;
+    }
+    function showNutStatus(data) {
+        if (!nutStatus || typeof data.applied !== 'boolean') return;
+        nutStatus.classList.toggle('success', data.applied !== false);
+        nutStatus.classList.toggle('info', data.applied === false);
+        document.getElementById('nut-status-text').textContent = nutStatusText(data);
+        nutStatus.hidden = false;
+    }
+
+    // US-125: NUT credentials are optional, both set or both empty. The saved password is
+    // never sent to the page: has_password says whether there is one, and an empty field
+    // keeps it. The API is the authority; the page runs the same check first
+    const NUT_BOTH_OR_NEITHER = 'Set both the NUT username and password, or remove the NUT credentials';
+    const nutState = { username: '', hasPassword: false };
+    const nutError = document.getElementById('nut-error');
+    const btnRemoveNut = document.getElementById('btn-remove-nut-creds');
+
+    function renderNutCredentials() {
+        const hasCredentials = nutState.username !== '' && nutState.hasPassword;
+        const state = document.getElementById('nut-password-state');
+        if (state) {
+            state.textContent = nutState.hasPassword
+                ? 'A password is set: leave the field empty to keep it.'
+                : 'No password set.';
+        }
+        if (nutPwdInput) {
+            nutPwdInput.placeholder = nutState.hasPassword ? 'Leave empty to keep the current password' : 'Password';
+        }
+        const warning = document.getElementById('nut-no-credentials');
+        if (warning) warning.hidden = hasCredentials;
+        if (btnRemoveNut) btnRemoveNut.hidden = !hasCredentials;
+    }
+    function showNutError(message) {
+        if (!nutError) return;
+        document.getElementById('nut-error-text').textContent = message;
+        nutError.hidden = false;
+    }
+    function hideNutMessages() {
+        if (nutStatus) nutStatus.hidden = true;
+        if (nutError) nutError.hidden = true;
+    }
+    // The message of a refused request: {"error"} of the API, or a generic one
+    async function nutErrorOf(response) {
+        try {
+            const body = await response.json();
+            if (body && body.error) return body.error;
+        } catch (_) { /* no JSON body */ }
+        return 'Failed to save NUT configuration.';
+    }
+    // POST /api/nut/config; resolves to the reply, or null after showing the error
+    async function postNutConfig(body) {
+        try {
+            const response = await apiFetch('/api/nut/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (!response.ok) {
+                showNutError(await nutErrorOf(response));
+                return null;
+            }
+            let data = {};
+            try { data = await response.json(); } catch (_) { /* older reply without a body */ }
+            return data;
+        } catch (_) {
+            showNutError('Failed to save NUT configuration.');
+            return null;
+        }
+    }
+
+    if (btnRemoveNut) {
+        btnRemoveNut.addEventListener('click', async () => {
+            hideNutMessages();
+            if (!window.confirm('Remove the NUT credentials?\n\nNUT clients will only be able to read the data, ' +
+                'and the connected NUT clients are disconnected.')) return;
+            btnRemoveNut.disabled = true;
+            const data = await postNutConfig({ remove_credentials: true });
+            btnRemoveNut.disabled = false;
+            if (!data) return;
+            nutState.username = '';
+            nutState.hasPassword = false;
+            nutUsernameInput.value = '';
+            nutPwdInput.value = '';
+            renderNutCredentials();
+            showNutStatus(data);
+        });
+    }
+
     if(document.getElementById('nut-form')) {
+        renderNutCredentials();
         document.getElementById('nut-form').addEventListener('submit', async (e) => {
             e.preventDefault();
+            hideNutMessages();
+            const username = nutUsernameInput.value;
+            const password = nutPwdInput.value;
+            // As the API: an empty field keeps the saved password
+            const passwordAfter = password !== '' || nutState.hasPassword;
+            if ((username !== '') !== passwordAfter) {
+                showNutError(NUT_BOTH_OR_NEITHER);
+                return;
+            }
             btnSaveNut.innerHTML = `<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...`;
             btnSaveNut.disabled = true;
-            
+
             try {
-                const response = await fetch('/api/nut/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        ups_name: nutUpsNameInput.value,
-                        username: nutUsernameInput.value,
-                        password: nutPwdInput.value
-                    })
+                const data = await postNutConfig({
+                    ups_name: nutUpsNameInput.value,
+                    username: username,
+                    password: password
                 });
-                
-                if (!response.ok) throw new Error('Save failed');
-                
+                if (!data) throw new Error('Save failed');
+                nutState.username = username;
+                nutState.hasPassword = passwordAfter;
+                nutPwdInput.value = '';
+                renderNutCredentials();
+                showNutStatus(data);
+
                 btnSaveNut.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved!`;
                 btnSaveNut.style.background = 'var(--success)';
                 btnSaveNut.style.borderColor = 'var(--success)';
@@ -354,11 +535,348 @@ document.addEventListener('DOMContentLoaded', () => {
                     btnSaveNut.disabled = false;
                 }, 2000);
             } catch (error) {
-                btnSaveNut.innerHTML = `<span>Error</span>`;
+                // The message is already in #nut-error
+                btnSaveNut.innerHTML = `<span class="glow"></span> Save Credentials`;
                 btnSaveNut.disabled = false;
-                alert('Failed to save NUT configuration.');
             }
         });
+    }
+
+    // US-115: custom variables of the NUT Server tab (override.<var> of ups.conf). The API
+    // is the authority; the page runs the same checks first, with the same messages
+    const CV_ICON_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
+    const CV_ICON_DEL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>';
+    const CV_ICON_LAYERS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
+    const CV_ICON_PLUS = '<path d="M12 5v14M5 12h14"/>';
+    const CV_ICON_PEN = '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>';
+    const CV_KEY_RE = /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$/;
+    const CV_ASCII_RE = /^[\x20-\x7E]*$/;
+    const cvState = { list: [], max: 16, maxValue: 64, maxDesc: 64, editing: -1, busy: false, highlight: null };
+
+    function cvProtected(key) {
+        const k = key.toLowerCase();
+        return k === 'ups.status' || k.startsWith('ups.status.') || k === 'device.type' || k.startsWith('driver.parameter.');
+    }
+
+    // Same rules and texts as NutOverrides::checkEntry / errorMessage in the firmware
+    function cvCheck(entry, others) {
+        const key = entry.key;
+        if (!key || key.length > 63 || !CV_KEY_RE.test(key)) {
+            return { field: 'cv-key', msg: `Invalid key "${key}": use dot-separated parts of letters, digits, '_' and '-' (e.g. battery.date)` };
+        }
+        if (cvProtected(key)) return { field: 'cv-key', msg: `${key} cannot be overridden` };
+        if (entry.value.length > cvState.maxValue || !CV_ASCII_RE.test(entry.value)) {
+            return { field: 'cv-value', msg: `Invalid value for ${key}: printable ASCII only, at most ${cvState.maxValue} characters` };
+        }
+        if (entry.description.length > cvState.maxDesc || !CV_ASCII_RE.test(entry.description)) {
+            return { field: 'cv-desc', msg: `Invalid description for ${key}: printable ASCII only, at most ${cvState.maxDesc} characters` };
+        }
+        if (others.some(o => o.key.toLowerCase() === key.toLowerCase())) {
+            return { field: 'cv-key', msg: `Duplicate key: ${key}` };
+        }
+        return null;
+    }
+
+    function cvShowError(msg, field) {
+        document.getElementById('cv-ok').hidden = true;
+        document.getElementById('cv-error-text').textContent = msg;
+        document.getElementById('cv-error').hidden = false;
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => {
+            const input = document.getElementById(id);
+            if (input) input.classList.toggle('invalid', id === field);
+        });
+    }
+
+    function cvHideError() {
+        document.getElementById('cv-error').hidden = true;
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => document.getElementById(id).classList.remove('invalid'));
+    }
+
+    function cvShowOk(msg) {
+        const ok = document.getElementById('cv-ok');
+        document.getElementById('cv-ok-text').textContent = msg;
+        ok.hidden = false;
+        clearTimeout(cvShowOk.timer);
+        cvShowOk.timer = setTimeout(() => { ok.hidden = true; }, 5000);
+    }
+
+    function cvRefreshForm() {
+        const editing = cvState.editing >= 0;
+        const full = !editing && cvState.list.length >= cvState.max;
+        const form = document.getElementById('cv-form');
+        form.classList.toggle('is-edit', editing);
+        form.classList.toggle('is-full', full);
+        document.getElementById('cv-form-title').querySelector('svg').innerHTML = editing ? CV_ICON_PEN : CV_ICON_PLUS;
+        const title = document.getElementById('cv-form-title-text');
+        if (editing) {
+            title.textContent = 'Edit ';
+            const code = document.createElement('code');
+            code.textContent = cvState.list[cvState.editing].key;
+            title.appendChild(code);
+        } else {
+            title.textContent = 'Add a variable';
+        }
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => { document.getElementById(id).disabled = full || cvState.busy; });
+        document.getElementById('cv-submit').disabled = full || cvState.busy;
+        document.getElementById('cv-submit-text').textContent =
+            cvState.busy ? 'Saving...' : (editing ? 'Save changes' : 'Add variable');
+        document.getElementById('cv-cancel').hidden = !editing;
+        document.getElementById('cv-limit').hidden = !full;
+        document.getElementById('cv-value-count').textContent = `${document.getElementById('cv-value').value.length}/${cvState.maxValue}`;
+        document.getElementById('cv-desc-count').textContent = `${document.getElementById('cv-desc').value.length}/${cvState.maxDesc}`;
+    }
+
+    function cvBuildRow(entry, index) {
+        const row = document.createElement('div');
+        row.className = 'cmd-row cv-row' + (index === cvState.editing ? ' editing' : '');
+        row.dataset.key = entry.key;
+
+        const id = document.createElement('div');
+        id.className = 'cv-id';
+        const name = document.createElement('div');
+        name.className = 'cmd-name';
+        name.textContent = entry.key;
+        const tags = document.createElement('div');
+        tags.className = 'set-tags';
+        const tag = document.createElement('span');
+        if (entry.ups_value === null) {
+            tag.className = 'set-tag cv-tag add';
+            tag.title = 'The UPS does not report this variable';
+            tag.textContent = 'Added';
+        } else {
+            tag.className = 'set-tag cv-tag ovr';
+            tag.title = 'Replaces the value reported by the UPS';
+            tag.innerHTML = CV_ICON_LAYERS;
+            tag.appendChild(document.createTextNode('Overrides UPS'));
+        }
+        tags.appendChild(tag);
+        id.append(name, tags);
+
+        const val = document.createElement('div');
+        val.className = 'cv-val';
+        const value = document.createElement('span');
+        value.className = 'set-current-value';
+        value.textContent = entry.value;
+        val.appendChild(value);
+        if (entry.ups_value !== null) {
+            const ups = document.createElement('span');
+            ups.className = 'cv-ups';
+            ups.appendChild(document.createTextNode('UPS: '));
+            const s = document.createElement('s');
+            s.textContent = entry.ups_value;
+            ups.appendChild(s);
+            val.appendChild(ups);
+        }
+
+        const desc = document.createElement('div');
+        desc.className = 'cmd-desc';
+        desc.textContent = entry.description;
+
+        const acts = document.createElement('div');
+        acts.className = 'cv-acts';
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'cv-act edit';
+        edit.title = `Edit ${entry.key}`;
+        edit.setAttribute('aria-label', `Edit ${entry.key}`);
+        edit.innerHTML = CV_ICON_EDIT;
+        // While a record is in the form the other rows are dimmed and locked: a save would
+        // clear the form and lose what was typed
+        const locked = cvState.busy || (cvState.editing >= 0 && cvState.editing !== index);
+        edit.disabled = locked;
+        edit.addEventListener('click', () => cvStartEdit(index));
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'cv-act del';
+        del.title = `Delete ${entry.key}`;
+        del.setAttribute('aria-label', `Delete ${entry.key}`);
+        del.innerHTML = CV_ICON_DEL;
+        del.disabled = locked;
+        del.addEventListener('click', () => cvDelete(index));
+        acts.append(edit, del);
+
+        row.append(id, val, desc, acts);
+        return row;
+    }
+
+    function cvRender(savedKey) {
+        const list = document.getElementById('cv-list');
+        if (!list) return;
+        list.replaceChildren(...cvState.list.map((e, i) => cvBuildRow(e, i)));
+        const group = document.getElementById('cv-group');
+        group.hidden = cvState.list.length === 0;
+        group.classList.toggle('is-editing', cvState.editing >= 0);
+        document.getElementById('cv-empty').hidden = cvState.list.length > 0;
+        document.getElementById('cv-count-n').textContent = String(cvState.list.length);
+        document.getElementById('cv-count-max').textContent = String(cvState.max);
+        document.getElementById('cv-limit-max').textContent = String(cvState.max);
+        document.getElementById('cv-count').classList.toggle('full', cvState.list.length >= cvState.max);
+        if (savedKey) {
+            const row = list.querySelector(`.cv-row[data-key="${CSS.escape(savedKey)}"]`);
+            if (row) row.classList.add('saved');
+        }
+        if (cvState.highlight) {
+            // Ignoring the case, as upsd: UPS Settings asks for the canonical name
+            // (battery.charge.low) of a record that may be saved as Battery.Charge.Low
+            const wanted = cvState.highlight.toLowerCase();
+            const row = [...list.querySelectorAll('.cv-row')].find(r => (r.dataset.key || '').toLowerCase() === wanted);
+            cvState.highlight = null;
+            if (row) {
+                row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                // US-144: cyan for a variable the UPS does not report, amber for an override
+                const entry = cvState.list.find(e => e.key === row.dataset.key);
+                row.classList.add(entry && entry.ups_value === null ? 'pulse-add' : 'pulse');
+            }
+        }
+        cvRefreshForm();
+    }
+
+    function cvApply(json) {
+        if (!json || !Array.isArray(json.overrides)) return false;
+        if (Number.isFinite(json.max)) cvState.max = json.max;
+        if (Number.isFinite(json.max_value_length)) cvState.maxValue = json.max_value_length;
+        if (Number.isFinite(json.max_description_length)) cvState.maxDesc = json.max_description_length;
+        cvState.list = json.overrides
+            .filter(o => o && typeof o.key === 'string')
+            .map(o => ({
+                key: o.key,
+                value: typeof o.value === 'string' ? o.value : '',
+                description: typeof o.description === 'string' ? o.description : '',
+                ups_value: typeof o.ups_value === 'string' ? o.ups_value : null
+            }));
+        return true;
+    }
+
+    async function loadOverrides() {
+        if (sessionExpired || cvState.busy || !document.getElementById('cv-list')) return;
+        const loadError = document.getElementById('cv-load-error');
+        try {
+            const res = await apiFetch('/api/nut/overrides');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            if (!cvApply(await res.json())) throw new Error('Invalid answer');
+            loadError.hidden = true;
+        } catch (err) {
+            console.error('Failed to fetch the custom variables:', err);
+            loadError.hidden = false;
+        }
+        if (cvState.editing >= cvState.list.length) cvState.editing = -1;
+        cvRender();
+    }
+
+    // Sends the whole list; on success the page shows what the firmware saved
+    async function cvSave(next, okMessage, savedKey) {
+        cvState.busy = true;
+        cvRender();
+        let error = null;
+        try {
+            const res = await apiFetch('/api/nut/overrides', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ overrides: next.map(o => ({ key: o.key, value: o.value, description: o.description })) })
+            });
+            let json = null;
+            try { json = await res.json(); } catch (e) { json = null; }
+            if (!res.ok) {
+                error = (json && typeof json.error === 'string') ? json.error : 'Failed to save the custom variables';
+            } else if (!cvApply(json)) {
+                error = 'Failed to save the custom variables';
+            }
+        } catch (err) {
+            error = 'Failed to save the custom variables';
+        }
+        cvState.busy = false;
+        if (error) {
+            cvRender();
+            cvShowError(error, null);
+            return false;
+        }
+        cvState.editing = -1;
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => { document.getElementById(id).value = ''; });
+        cvHideError();
+        cvRender(savedKey);
+        cvShowOk(okMessage);
+        return true;
+    }
+
+    function cvStartEdit(index) {
+        const entry = cvState.list[index];
+        if (!entry || cvState.busy) return;
+        cvState.editing = index;
+        document.getElementById('cv-key').value = entry.key;
+        document.getElementById('cv-value').value = entry.value;
+        document.getElementById('cv-desc').value = entry.description;
+        cvHideError();
+        document.getElementById('cv-ok').hidden = true;
+        cvRender();
+        const value = document.getElementById('cv-value');
+        value.focus();
+        value.select();
+    }
+
+    function cvCancelEdit() {
+        cvState.editing = -1;
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => { document.getElementById(id).value = ''; });
+        cvHideError();
+        cvRender();
+    }
+
+    function cvDelete(index) {
+        const entry = cvState.list[index];
+        if (!entry || cvState.busy) return;
+        const after = entry.ups_value === null
+            ? 'NUT clients will no longer see it.'
+            : `NUT clients will see the UPS value again (${entry.ups_value}).`;
+        if (!window.confirm(`Delete the custom variable "${entry.key}"?\n\n${after}`)) return;
+        const next = cvState.list.filter((_, i) => i !== index);
+        if (cvState.editing === index) cvCancelEdit();
+        cvSave(next, `${entry.key} deleted. ${after}`, null);
+    }
+
+    function cvSubmit() {
+        if (cvState.busy) return;
+        const entry = {
+            key: document.getElementById('cv-key').value.trim(),
+            value: document.getElementById('cv-value').value,
+            description: document.getElementById('cv-desc').value.trim()
+        };
+        const editing = cvState.editing;
+        const others = cvState.list.filter((_, i) => i !== editing);
+        if (editing < 0 && cvState.list.length >= cvState.max) {
+            cvShowError(`At most ${cvState.max} custom variables`, null);
+            return;
+        }
+        const err = cvCheck(entry, others);
+        if (err) {
+            cvShowError(err.msg, err.field);
+            document.getElementById(err.field).focus();
+            return;
+        }
+        const next = cvState.list.slice();
+        if (editing >= 0) next[editing] = entry;
+        else next.push(entry);
+        cvSave(next, editing >= 0
+            ? `${entry.key} saved. NUT clients see "${entry.value}" now.`
+            : `${entry.key} added. NUT clients see "${entry.value}" now, no restart needed.`, entry.key);
+    }
+
+    if (document.getElementById('cv-form')) {
+        document.getElementById('cv-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            cvSubmit();
+        });
+        document.getElementById('cv-form').addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && cvState.editing >= 0) cvCancelEdit();
+        });
+        document.getElementById('cv-cancel').addEventListener('click', cvCancelEdit);
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => document.getElementById(id).addEventListener('input', () => {
+            if (!document.getElementById('cv-error').hidden) cvHideError();
+            cvRefreshForm();
+        }));
+        // One read per opening of the tab, as UPS Settings
+        document.querySelectorAll('.tab[data-target="nut"]').forEach(tab => tab.addEventListener('click', loadOverrides));
+        const current = document.querySelector('.tab.active');
+        if (current && current.getAttribute('data-target') === 'nut') loadOverrides();
+        cvRefreshForm();
     }
 
     // MQTT form functionality
@@ -385,7 +903,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
-                const response = await fetch('/api/mqtt/config', {
+                const response = await apiFetch('/api/mqtt/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
@@ -445,18 +963,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const linkExportUsb = document.getElementById('link-export-usb');
-    if(linkExportUsb) {
-        linkExportUsb.addEventListener('click', () => {
-            addLogEntry('INFO', 'Downloading USB diagnostics...');
-        });
-    }
+    // The terminal lines of "Export USB Diagnostics" come from its handler below (US-119)
 
 
-    function addLogEntry(level, msg) {
+    // when: time of the entry on the device, converted to the browser clock (issue #60).
+    // timeText: "hh:mm:ss" of the board time (US-118), shown as it is; it wins over when
+    function addLogEntry(level, msg, when, timeText) {
         if(!terminalOutput) return;
-        const now = new Date();
-        const timeStr = `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}]`;
+        const now = when || new Date();
+        const timeStr = timeText ? `[${timeText}]` :
+            `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}]`;
         
         let levelClass = 'terminal-level-info';
         if(level === 'WARN') levelClass = 'terminal-level-warn';
@@ -479,22 +995,53 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let lastLogId = 0;
-    let isFetchingLogs = false;
+    let lastUptimeMs = null;
+
+    // US-118: "hh:mm:ss" of the field board_time ("2026-11-05T09:12:03.007+01:00", time zone
+    // of Board Settings), taken as text: a Date would bring it back to the browser zone
+    function boardTimeText(entry) {
+        if (typeof entry.board_time !== 'string') return null;
+        const m = /T(\d{2}):(\d{2}):(\d{2})/.exec(entry.board_time);
+        return m ? `${m[1]}:${m[2]}:${m[3]}` : null;
+    }
+
+    // US-065: one in-flight flag per poll loop, so a slow request delays only its own
+    // loop (a shared flag skipped the first system-status poll behind /api/ups-vars)
+    let logsInFlight = false;
 
     async function fetchLogs() {
+        if (sessionExpired) return;
         if (!document.getElementById('content-logs').classList.contains('active')) return;
-        if (isFetchingLogs) return;
-
-        isFetchingLogs = true;
+        if (logsInFlight) return;
+        
+        logsInFlight = true;
         try {
-            const response = await fetch('/api/logs');
+            const response = await apiFetch('/api/logs');
             if (response.ok) {
                 const logs = await response.json();
-                
+                const receivedAt = Date.now();
+                // Device uptime when the list was built: entry time (millis) -> wall clock
+                const uptimeHeader = response.headers.get('X-Uptime-Ms');
+                const uptimeMs = uptimeHeader !== null ? Number(uptimeHeader) : NaN;
+
+                // After a device restart the IDs start again from 1 (issue #60)
+                const restarted = (Number.isFinite(uptimeMs) && lastUptimeMs !== null && uptimeMs < lastUptimeMs) ||
+                    (logs.length > 0 && logs[logs.length - 1].id < lastLogId);
+                if (Number.isFinite(uptimeMs)) lastUptimeMs = uptimeMs;
+                if (restarted) {
+                    addLogEntry('WARN', 'Device restarted');
+                    lastLogId = 0;
+                }
+
                 let maxId = lastLogId;
                 for (let i = 0; i < logs.length; i++) {
                     if (logs[i].id > lastLogId) {
-                        addLogEntry(logs[i].level, logs[i].msg);
+                        // Board time when the board has it (US-118), else the browser clock
+                        const timeText = boardTimeText(logs[i]);
+                        const when = !timeText && Number.isFinite(uptimeMs) && typeof logs[i].time === 'number'
+                            ? new Date(receivedAt - Math.max(0, uptimeMs - logs[i].time))
+                            : undefined;
+                        addLogEntry(logs[i].level, logs[i].msg, when, timeText);
                         if (logs[i].id > maxId) {
                             maxId = logs[i].id;
                         }
@@ -505,7 +1052,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('Error fetching logs:', error);
         } finally {
-            isFetchingLogs = false;
+            logsInFlight = false;
         }
     }
 
@@ -529,33 +1076,1001 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const toggleBeeper = document.getElementById('toggle-beeper');
-    if (toggleBeeper) {
-        toggleBeeper.addEventListener('change', async (e) => {
-            const isEnabled = e.target.checked;
-            toggleBeeper.disabled = true;
+    // --- US-116: Remote logging panel and syslog indicator of the System Logs page (ADR 0012).
+    // GET /api/logging when the tab opens, after Save and with Refresh; while the tab is open
+    // and Auto-refresh is on, again every 10 s for the state only. The form is never
+    // overwritten while the user is editing it. Selects are filled from "options". ---
+    const remoteLog = document.getElementById('remote-log');
+    if (remoteLog) {
+        const R = (id) => document.getElementById(id);
+        const RLOG_POLL_MS = 10000;
+        const RLOG_RESULT_MS = 4000;
+        // The firmware applies new settings within a second: state read again after it
+        const RLOG_APPLY_MS = 1500;
+        const RLOG_LOOK = {
+            disabled: { badge: 'idle', dot: 'off', text: 'Off' },
+            waiting: { badge: 'connecting', dot: 'warning', text: 'Waiting' },
+            ready: { badge: 'ap', dot: 'info', text: 'Ready' },
+            active: { badge: 'connected', dot: 'success', text: 'Active' },
+            error: { badge: 'down', dot: 'danger', text: 'Error' }
+        };
+        const RLOG_PROTOCOLS = { rfc3164: 'RFC 3164 (BSD)', rfc5424: 'RFC 5424' };
+        const RLOG_FIELDS = ['f-host', 'f-port', 'f-rate'];
+        // Field of a 400 {"error"} of the API
+        const RLOG_ERROR_FIELD = {
+            'Invalid server': 'f-host',
+            'Server required to enable syslog': 'f-host',
+            'Invalid port': 'f-port',
+            'Invalid rate': 'f-rate'
+        };
+        const RLOG_SPINNER = '<span class="cmd-spinner"></span>';
+        const btnSave = R('btn-save-syslog');
+        const result = R('syslog-result');
+
+        let rlog = null;            // last GET /api/logging
+        let rlogDirty = false;      // the form was edited since it was filled
+        let rlogSaving = false;
+        let rlogLoadSeq = 0;
+        let rlogOptionsKey = '';
+        let rlogTimers = [];
+
+        function rlogRates() {
+            const o = rlog && rlog.options ? rlog.options : {};
+            const min = Number.isInteger(o.rate_min) ? o.rate_min : 1;
+            const max = Number.isInteger(o.rate_max) ? o.rate_max : 100;
+            return { min, max };
+        }
+
+        // Same rule as validSyslogHost() of the firmware
+        function validHost(h) {
+            return /^[A-Za-z0-9.-]{1,63}$/.test(h) && !/^[.-]/.test(h) && !h.endsWith('.');
+        }
+
+        function fillSelect(sel, values, label) {
+            const keep = sel.value;
+            sel.textContent = '';
+            values.forEach((v, i) => {
+                const opt = document.createElement('option');
+                opt.value = v;
+                opt.textContent = label(v, i, values.length);
+                sel.appendChild(opt);
+            });
+            if (values.includes(keep)) sel.value = keep;
+        }
+
+        function renderOptions() {
+            const o = rlog.options || {};
+            const key = JSON.stringify([o.protocols, o.facilities, o.levels]);
+            if (key === rlogOptionsKey) return;
+            rlogOptionsKey = key;
+            fillSelect(R('syslog-format'), Array.isArray(o.protocols) ? o.protocols : [],
+                (v) => RLOG_PROTOCOLS[v] || v);
+            fillSelect(R('syslog-facility'), Array.isArray(o.facilities) ? o.facilities : [], (v) => v);
+            fillSelect(R('syslog-level'), Array.isArray(o.levels) ? o.levels : [],
+                (v, i, n) => (i === n - 1 ? `${v} only` : `${v} and above`));
+            const rates = rlogRates();
+            R('syslog-rate').title = `${rates.min} to ${rates.max}`;
+        }
+
+        function setSwitch(on) {
+            R('syslog-on').checked = on;
+            R('syslog-on-state').textContent = on ? 'On' : 'Off';
+            R('syslog-on-state').classList.toggle('on', on);
+        }
+
+        function updateCount() {
+            const n = R('syslog-host').value.length;
+            R('syslog-host-count').textContent = `${n}/63`;
+            R('syslog-host-count').classList.toggle('full', n >= 63);
+        }
+
+        function hideError() {
+            R('syslog-error').hidden = true;
+            RLOG_FIELDS.forEach(id => {
+                R(id).classList.remove('invalid');
+                R(id).querySelector('input').removeAttribute('aria-invalid');
+            });
+        }
+
+        function showError(fieldId, text) {
+            hideError();
+            R('syslog-error-text').textContent = text;
+            R('syslog-error').hidden = false;
+            if (fieldId) {
+                R(fieldId).classList.add('invalid');
+                R(fieldId).querySelector('input').setAttribute('aria-invalid', 'true');
+            }
+        }
+
+        function renderForm() {
+            const s = rlog.syslog || {};
+            setSwitch(s.enabled === true);
+            R('syslog-host').value = typeof s.host === 'string' ? s.host : '';
+            R('syslog-port').value = Number.isInteger(s.port) ? String(s.port) : '514';
+            R('syslog-format').value = s.protocol;
+            R('syslog-facility').value = s.facility;
+            R('syslog-level').value = s.min_level;
+            R('syslog-rate').value = Number.isInteger(s.rate) ? String(s.rate) : '10';
+            updateCount();
+            hideError();
+        }
+
+        function renderStatus() {
+            const st = (rlog.status && rlog.status.syslog) || {};
+            const s = rlog.syslog || {};
+            const state = RLOG_LOOK[st.state] ? st.state : 'disabled';
+            const look = RLOG_LOOK[state];
+            const off = state === 'disabled';
+            const target = typeof st.target === 'string' && st.target !== '' ? st.target
+                : (s.host ? `${s.host}:${s.port}` : '');
+            const problem = !off && typeof st.error === 'string' ? st.error : '';
+
+            // Indicator of the actions bar: "Syslog: Active → 192.168.1.10:514"
+            R('syslog-chip-dot').className = 'status-indicator ' + look.dot;
+            const text = R('syslog-chip-text');
+            text.textContent = '';
+            const b = document.createElement('b');
+            b.textContent = look.text;
+            text.appendChild(b);
+            if (!off && target) text.appendChild(document.createTextNode(` → ${target}`));
+            R('syslog-chip').title = problem || (off ? 'Remote logging is off' : 'Remote logging settings');
+
+            const badge = R('syslog-badge');
+            badge.className = 'link-badge ' + look.badge;
+            badge.querySelector('.status-indicator').className = 'status-indicator ' + look.dot;
+            badge.querySelector('.badge-text').textContent = look.text;
+
+            const tgt = R('syslog-target');
+            tgt.className = off || !target ? 'na' : '';
+            tgt.textContent = '';
+            if (off || !target) {
+                tgt.textContent = '—';
+            } else {
+                const main = document.createElement('span');
+                main.className = 'main';
+                main.textContent = target;
+                tgt.appendChild(main);
+            }
+
+            [['syslog-sent', 'sent'], ['syslog-failed', 'failed'], ['syslog-limited', 'rate_limited'],
+                ['syslog-dropped', 'not_ready']].forEach(([id, k]) => {
+                const dd = R(id);
+                const n = Number(st[k]);
+                dd.className = off ? 'na' : '';
+                dd.textContent = off || !Number.isFinite(n) ? '—' : n.toLocaleString('en-US');
+            });
+
+            R('syslog-problem').hidden = !problem;
+            R('syslog-problem').className = 'auth-alert' + (state === 'waiting' ? ' warn' : '');
+            R('syslog-problem-text').textContent = problem;
+        }
+
+        // statusOnly: the 10 s refresh, which shows no load error (the form follows the same
+        // rule as any load: filled again only when it is not being edited)
+        async function loadRemoteLog(statusOnly) {
+            if (sessionExpired) return;
+            const seq = ++rlogLoadSeq;
+            let data = null;
             try {
-                const res = await fetch('/api/beeper', {
+                const res = await apiFetch('/api/logging', { cache: 'no-store' });
+                if (res.status === 401) return;
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                data = await res.json();
+            } catch (err) {
+                console.error('Failed to fetch remote logging settings:', err);
+            }
+            if (seq !== rlogLoadSeq) return;
+            if (!data || typeof data !== 'object' || !data.syslog) {
+                if (!statusOnly) {
+                    R('rlog-load-error-text').textContent =
+                        'Could not read the remote logging settings. Press Refresh to retry.';
+                    R('rlog-load-error').hidden = false;
+                }
+                return;
+            }
+            R('rlog-load-error').hidden = true;
+            rlog = data;
+            renderOptions();
+            if (!rlogDirty && !rlogSaving) renderForm();
+            renderStatus();
+        }
+
+        function clearResult() {
+            rlogTimers.forEach(clearTimeout);
+            rlogTimers = [];
+            result.textContent = '';
+            result.className = 'cmd-result';
+        }
+
+        function setSaveButton(spinner) {
+            btnSave.innerHTML = '<span class="glow"></span>' + (spinner ? RLOG_SPINNER : '');
+            btnSave.appendChild(document.createTextNode(spinner ? ' Saving...' : ' Save'));
+        }
+
+        function formValues() {
+            const host = R('syslog-host').value.trim();
+            R('syslog-host').value = host;
+            updateCount();
+            return {
+                enabled: R('syslog-on').checked,
+                host,
+                portRaw: R('syslog-port').value.trim(),
+                rateRaw: R('syslog-rate').value.trim(),
+                protocol: R('syslog-format').value,
+                facility: R('syslog-facility').value,
+                min_level: R('syslog-level').value
+            };
+        }
+
+        // Same checks as checkRemoteLogBody() of the firmware
+        function validate(v) {
+            const rates = rlogRates();
+            const port = Number(v.portRaw);
+            const rate = Number(v.rateRaw);
+            if (v.host && !validHost(v.host)) {
+                return ['f-host', 'Invalid server: use an IP address or a host name (letters, digits, dots, hyphens)'];
+            }
+            if (v.enabled && !v.host) return ['f-host', 'Server required to enable syslog'];
+            if (!/^\d+$/.test(v.portRaw) || port < 1 || port > 65535) return ['f-port', 'Invalid port: use 1 to 65535'];
+            if (!/^\d+$/.test(v.rateRaw) || rate < rates.min || rate > rates.max) {
+                return ['f-rate', `Invalid lines per second: use ${rates.min} to ${rates.max}`];
+            }
+            return null;
+        }
+
+        async function saveRemoteLog(e) {
+            e.preventDefault();
+            if (rlogSaving || !rlog) return;
+            clearResult();
+            const v = formValues();
+            const err = validate(v);
+            if (err) {
+                showError(err[0], err[1]);
+                R(err[0]).querySelector('input').focus();
+                return;
+            }
+            hideError();
+            const payload = {
+                syslog: {
+                    enabled: v.enabled, host: v.host, port: Number(v.portRaw), protocol: v.protocol,
+                    facility: v.facility, min_level: v.min_level, rate: Number(v.rateRaw)
+                }
+            };
+            rlogSaving = true;
+            btnSave.disabled = true;
+            setSaveButton(true);
+            let ok = false;
+            let message = null;
+            try {
+                const res = await apiFetch('/api/logging', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enable: isEnabled })
+                    body: JSON.stringify(payload)
                 });
-                if (!res.ok) {
-                    toggleBeeper.checked = !isEnabled;
+                let json = null;
+                try { json = await res.json(); } catch (x) { json = null; }
+                ok = res.status === 200 && !!json && json.success === true;
+                if (!ok) {
+                    message = json && typeof json.error === 'string' && json.error !== ''
+                        ? json.error : `Failed (HTTP ${res.status})`;
                 }
-            } catch (err) {
-                console.error('Beeper API error:', err);
-                toggleBeeper.checked = !isEnabled;
+            } catch (x) {
+                console.error('Remote logging save error:', x);
+                message = 'Network error';
             }
-            toggleBeeper.disabled = false;
-            fetchUpsVars();
+            rlogSaving = false;
+            btnSave.disabled = false;
+            setSaveButton(false);
+            if (sessionExpired) return;
+            if (!ok) {
+                // The message of the server, as it is
+                showError(RLOG_ERROR_FIELD[message] || null, message);
+                return;
+            }
+            rlogDirty = false;
+            result.className = 'cmd-result success';
+            result.textContent = v.enabled ? `✓ Saved, sending to ${v.host}:${v.portRaw}` : '✓ Saved, syslog off';
+            rlogTimers.push(setTimeout(() => result.classList.add('fade'), RLOG_RESULT_MS));
+            loadRemoteLog(false);
+            rlogTimers.push(setTimeout(() => loadRemoteLog(true), RLOG_APPLY_MS));
+        }
+
+        function edited() {
+            rlogDirty = true;
+            hideError();
+            clearResult();
+        }
+
+        R('syslog-on').addEventListener('change', (e) => { setSwitch(e.target.checked); edited(); });
+        R('syslog-host').addEventListener('input', () => { updateCount(); edited(); });
+        ['syslog-port', 'syslog-rate'].forEach(id => R(id).addEventListener('input', edited));
+        ['syslog-format', 'syslog-facility', 'syslog-level'].forEach(id => R(id).addEventListener('change', edited));
+        R('syslog-form').addEventListener('submit', saveRemoteLog);
+
+        R('btn-rlog-refresh').addEventListener('click', () => {
+            const icon = R('btn-rlog-refresh').querySelector('svg');
+            icon.style.animation = 'spin 1s linear infinite';
+            loadRemoteLog(false).finally(() => setTimeout(() => { icon.style.animation = 'none'; }, 500));
+        });
+
+        // "Board Settings → Time" link in the hint (US-117): same as clicking the tab
+        R('syslog-section').addEventListener('click', (e) => {
+            const link = e.target.closest('[data-goto]');
+            if (!link) return;
+            const tab = document.querySelector(`.tab[data-target="${link.dataset.goto}"]`);
+            if (tab) tab.click();
+        });
+
+        R('syslog-chip').addEventListener('click', () => {
+            remoteLog.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            remoteLog.focus({ preventScroll: true });
+        });
+
+        // Every opening of the tab; then the state every 10 s with Auto-refresh on
+        tabs.forEach(tab => tab.addEventListener('click', () => {
+            if (tab.getAttribute('data-target') === 'logs') loadRemoteLog(false);
+        }));
+        if (activeTab && activeTab.getAttribute('data-target') === 'logs') loadRemoteLog(false);
+        setInterval(() => {
+            if (sessionExpired || !rlog) return;
+            if (!document.getElementById('content-logs').classList.contains('active')) return;
+            if (toggleAutoRefresh && !toggleAutoRefresh.checked) return;
+            loadRemoteLog(true);
+        }, RLOG_POLL_MS);
+    }
+
+    // --- Network page (US-112): one section per link of the board, status from /api/system-status ---
+    const netSections = document.querySelectorAll('#content-network .net-section[data-link]');
+    const NET_BADGE = {
+        connected: { cls: 'connected', ind: 'success', text: 'Connected' },
+        connecting: { cls: 'connecting', ind: 'warning', text: 'Connecting' },
+        disconnected: { cls: 'down', ind: 'danger', text: 'Disconnected' },
+        ap: { cls: 'ap', ind: 'info', text: 'Access point mode' },
+        inactive: { cls: 'idle', ind: '', text: 'Not active' }
+    };
+    let netLast = null;          // last "network" object received
+    const netLastUp = {};        // last connected "network" per link type: kept, greyed, when the link drops
+    let netLastOkAt = 0;         // Date.now() of the last answer
+    let netOffline = false;      // the last /api/system-status request failed
+
+    // Sections from /api/config: network.links, else network.type, else Wi-Fi (as before US-112)
+    function showNetworkSections(network) {
+        let links = network && Array.isArray(network.links) ? network.links : null;
+        if (!links) links = [network && network.type === 'ethernet' ? 'ethernet' : 'wifi'];
+        netSections.forEach(sec => { sec.hidden = !links.includes(sec.dataset.link); });
+    }
+
+    const NET_NONE = '—';
+    const netText = (x) => (x === undefined || x === null || x === '') ? NET_NONE : String(x);
+
+    function netField(sec, name, text, kind) {
+        const el = sec.querySelector(`[data-net-field="${name}"]`);
+        if (!el) return null;
+        el.textContent = text;
+        el.className = kind || '';
+        return el;
+    }
+
+    // Value + a smaller note ("100 Mbps" "full duplex"); the value in its own span so it never wraps
+    function netSub(el, text) {
+        const main = document.createElement('span');
+        main.className = 'main';
+        main.textContent = el.textContent;
+        const sub = document.createElement('span');
+        sub.className = 'sub';
+        sub.textContent = text;
+        el.textContent = '';
+        el.append(main, ' ', sub);
+    }
+
+    // 4 bars + dBm + word (docs/mockups/US-112)
+    function netSignal(el, rssi) {
+        const s = rssi >= -55 ? [4, 'Excellent', 'sig-excellent'] : rssi >= -67 ? [3, 'Good', 'sig-good']
+            : rssi >= -75 ? [2, 'Fair', 'sig-fair'] : [1, 'Weak', 'sig-weak'];
+        el.textContent = '';
+        el.className = '';
+        const bars = document.createElement('span');
+        bars.className = 'signal ' + s[2];
+        bars.dataset.level = s[0];
+        bars.setAttribute('aria-hidden', 'true');
+        for (let i = 0; i < 4; i++) bars.appendChild(document.createElement('i'));
+        const value = document.createElement('span');
+        value.textContent = rssi + ' dBm';
+        const word = document.createElement('span');
+        word.className = 'signal-word ' + s[2];
+        word.textContent = s[1];
+        el.append(bars, value, word);
+    }
+
+    function netBadge(sec, key) {
+        const b = NET_BADGE[key];
+        const el = sec.querySelector('[data-net-badge]');
+        el.className = 'link-badge ' + b.cls;
+        el.querySelector('.status-indicator').className = 'status-indicator ' + b.ind;
+        el.querySelector('.badge-text').textContent = b.text;
+    }
+
+    // parts: strings and {b: text} for bold, built as text nodes (SSIDs are not markup)
+    function netNotice(sec, kind, parts) {
+        const n = sec.querySelector('[data-net-notice]');
+        if (!kind) { n.hidden = true; return; }
+        n.hidden = false;
+        n.className = 'auth-alert' + (kind === 'danger' ? '' : ' ' + kind);
+        n.querySelector('path').setAttribute('d', kind === 'info' ? 'M12 16v-4M12 8h.01' : 'M12 8v4M12 16h.01');
+        const t = n.querySelector('[data-net-notice-text]');
+        t.textContent = '';
+        parts.forEach(p => {
+            if (typeof p === 'string') { t.append(p); return; }
+            const b = document.createElement('strong');
+            b.textContent = p.b;
+            t.append(b);
         });
     }
 
+    // IP address, Gateway, MAC address, DHCP: the same cells on every link
+    function netCommon(sec, n, kind) {
+        netField(sec, 'ip', netText(n.ip), kind);
+        netField(sec, 'gateway', netText(n.gateway), kind || (n.gateway ? '' : 'na'));
+        netField(sec, 'mac', netText(n.mac), kind);
+        netField(sec, 'dhcp', n.dhcp === undefined ? NET_NONE : (n.dhcp ? 'On' : 'Off'), kind);
+    }
+
+    function renderWifiSection(sec, n) {
+        const label = sec.querySelector('[data-net-ssid-label]');
+        if (label) label.textContent = n.state === 'ap' ? 'Network (SSID) · this board' : 'Network (SSID)';
+        netBadge(sec, n.state);
+        if (n.state === 'connected') {
+            netField(sec, 'ssid', netText(n.ssid));
+            const sig = netField(sec, 'signal', NET_NONE);
+            if (sig && typeof n.rssi === 'number') netSignal(sig, n.rssi);
+            netCommon(sec, n, '');
+            netNotice(sec, null);
+        } else if (n.state === 'ap') {
+            netField(sec, 'ssid', netText(n.ssid));
+            netField(sec, 'signal', 'Not applicable in AP mode', 'na');
+            netField(sec, 'ip', netText(n.ip));
+            netField(sec, 'gateway', NET_NONE, 'na');
+            netField(sec, 'mac', netText(n.mac));
+            const dhcp = netField(sec, 'dhcp', 'Server');
+            if (dhcp) netSub(dhcp, 'for joining devices');
+            netNotice(sec, 'info', [{ b: 'The board is not on your home network yet.' }, ' It runs its own Wi-Fi network ',
+                { b: netText(n.ssid) }, ' and you are connected to it at ', { b: netText(n.ip) },
+                '. Enter your home network below and press Initialize Connection.']);
+        } else if (n.state === 'connecting') {
+            netField(sec, 'ssid', netText(n.ssid));
+            netField(sec, 'signal', 'Waiting…', 'wait');
+            netField(sec, 'ip', 'Waiting for address…', 'wait');
+            netField(sec, 'gateway', NET_NONE, 'na');
+            netField(sec, 'mac', netText(n.mac));
+            netField(sec, 'dhcp', n.dhcp ? 'On' : NET_NONE);
+            netNotice(sec, 'warn', [{ b: 'Connecting to ' + netText(n.ssid) + '…' },
+                ' This usually takes a few seconds. If it does not connect, check the network name and security key below.']);
+        } else {
+            netField(sec, 'ssid', netText(n.ssid), 'na');
+            netField(sec, 'signal', 'No signal', 'na');
+            netCommon(sec, n, 'na');
+            netNotice(sec, 'danger', [{ b: 'Wi-Fi disconnected.' }, ' The board is not answering on ' + netText(n.ssid) +
+                ': router off, board out of range or the network changed. It keeps retrying and this page updates' +
+                ' by itself when it is back. Values below are the last known ones.']);
+        }
+    }
+
+    function renderEthernetSection(sec, n) {
+        netBadge(sec, n.state === 'ap' ? 'disconnected' : n.state);
+        if (n.state === 'connected' || n.state === 'connecting') {
+            const speed = netField(sec, 'speed', n.link_speed ? n.link_speed + ' Mbps' : NET_NONE);
+            if (speed && n.link_speed) netSub(speed, n.full_duplex ? 'full duplex' : 'half duplex');
+            netField(sec, 'cable', 'Plugged in');
+            if (n.state === 'connected') {
+                netCommon(sec, n, '');
+                netNotice(sec, null);
+            } else {
+                netField(sec, 'ip', 'Waiting for address…', 'wait');
+                netField(sec, 'gateway', NET_NONE, 'na');
+                netField(sec, 'mac', netText(n.mac));
+                netField(sec, 'dhcp', n.dhcp ? 'On' : NET_NONE);
+                netNotice(sec, 'warn', [{ b: 'Waiting for an address…' },
+                    ' The cable is plugged in and the board is asking your router for an address (DHCP).']);
+            }
+        } else {
+            netField(sec, 'speed', 'No link', 'na');
+            netField(sec, 'cable', 'Unplugged', 'na');
+            netCommon(sec, n, 'na');
+            netNotice(sec, 'danger', [{ b: 'No Ethernet link.' }, ' Check that the cable is plugged in at both ends and' +
+                ' that the switch or router port is on. This page updates by itself when the link is back.' +
+                ' Values below are the last known ones.']);
+        }
+    }
+
+    // A link of the board that is not the one in use (boards with both links)
+    function renderInactiveSection(sec) {
+        netBadge(sec, 'inactive');
+        sec.querySelectorAll('[data-net-field]').forEach(el => { el.textContent = NET_NONE; el.className = 'na'; });
+        netNotice(sec, 'info', [{ b: 'Not the active link.' }, ' The board is connected through another link.']);
+    }
+
+    function renderNetworkSections(n) {
+        netSections.forEach(sec => {
+            if (sec.hidden) return;
+            const active = n.type === sec.dataset.link || n.type === 'none';
+            if (!active) { renderInactiveSection(sec); return; }
+            // A link that dropped keeps its last known values, greyed
+            const shown = n.state === 'disconnected'
+                ? Object.assign({}, netLastUp[sec.dataset.link] || {}, n, { state: 'disconnected' }) : n;
+            if (sec.dataset.link === 'wifi') renderWifiSection(sec, shown);
+            else renderEthernetSection(sec, shown);
+        });
+    }
+
+    // Shown only while the board does not answer: how old the greyed values are. While the
+    // answers arrive every 3 s the badge is enough, a "N s ago" counter would only flicker
+    function updateNetworkLive() {
+        const show = netOffline && netLastOkAt > 0;
+        const secs = show ? Math.max(0, Math.round((Date.now() - netLastOkAt) / 1000)) : 0;
+        document.querySelectorAll('#content-network [data-net-live]').forEach(el => {
+            el.hidden = !show;
+            el.textContent = show ? `No answer for ${secs} s` : '';
+        });
+    }
+
+    // Called by fetchSystemStatus() with data.network, at the pace of the status bar
+    function renderNetworkStatus(network) {
+        if (!network || !network.state) return; // firmware before US-112: no status data
+        netLast = network;
+        netOffline = false;
+        netLastOkAt = Date.now();
+        if (network.state === 'connected' && network.type) netLastUp[network.type] = network;
+        renderNetworkSections(network);
+        updateNetworkLive();
+    }
+
+    // The board does not answer: on a board with one link this is how a dropped link shows,
+    // the same moment the status bar says "Offline"
+    function renderNetworkOffline() {
+        netOffline = true;
+        if (netLast) {
+            renderNetworkSections(Object.assign({}, netLast, { state: 'disconnected' }));
+        } else {
+            netSections.forEach(sec => { if (!sec.hidden) netBadge(sec, 'disconnected'); });
+        }
+        updateNetworkLive();
+    }
+
+    setInterval(updateNetworkLive, 1000);
+
+    // --- Hostname section of the Network page (US-113, docs/mockups/US-113) ---
+    // Same rule as NetHostname::isValid() in the firmware; "" goes back to the default name
+    const HOSTNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,30}[A-Za-z0-9])?$/;
+    const HOSTNAME_ERROR = 'Invalid hostname: use only letters, digits and hyphens, no hyphen at the start or end, at most 32 characters';
+    const HOSTNAME_RESTART_S = 15;   // as Board Settings > USB port
+    const HOSTNAME_NO_CHANGE_MS = 2000;
+    const hostnameInput = document.getElementById('hostname');
+    const btnHostname = document.getElementById('btn-hostname');
+    const HOSTNAME_BTN_IDLE = btnHostname ? btnHostname.innerHTML : '';
+    let hostnameSaved = { name: '', custom: '', default: '' };   // network.hostname of /api/config
+    let hostnameNoChangeTimer = null;
+    // While the board restarts the status bar keeps "Restarting...", not "Offline"
+    let netRestarting = false;
+
+    const validateHostname = (v) => v === '' || HOSTNAME_RE.test(v);
+
+    function renderHostname(h) {
+        if (!hostnameInput || !h) return;
+        hostnameSaved = {
+            name: typeof h.name === 'string' ? h.name : '',
+            custom: typeof h.custom === 'string' ? h.custom : '',
+            default: typeof h.default === 'string' ? h.default : ''
+        };
+        document.getElementById('hostname-current').textContent = hostnameSaved.name || '—';
+        const origin = document.getElementById('hostname-origin');
+        origin.textContent = hostnameSaved.custom ? 'Custom' : 'Default';
+        origin.classList.toggle('custom', !!hostnameSaved.custom);
+        if (hostnameSaved.default) {
+            hostnameInput.placeholder = hostnameSaved.default;
+            document.getElementById('hostname-default').textContent = hostnameSaved.default;
+        }
+        if (!hostnameInput.value) hostnameInput.value = hostnameSaved.custom;
+    }
+
+    function showHostnameError(text) {
+        document.getElementById('hostname-error-text').textContent = text;
+        document.getElementById('hostname-error').hidden = false;
+        hostnameInput.classList.add('invalid');
+        hostnameInput.setAttribute('aria-invalid', 'true');
+    }
+
+    function hideHostnameError() {
+        document.getElementById('hostname-error').hidden = true;
+        hostnameInput.classList.remove('invalid');
+        hostnameInput.removeAttribute('aria-invalid');
+    }
+
+    function showHostnameNoChanges() {
+        btnHostname.disabled = false;
+        hostnameInput.disabled = false;
+        btnHostname.innerHTML = 'No changes';
+        clearTimeout(hostnameNoChangeTimer);
+        hostnameNoChangeTimer = setTimeout(() => { btnHostname.innerHTML = HOSTNAME_BTN_IDLE; }, HOSTNAME_NO_CHANGE_MS);
+    }
+
+    function startHostnameRestart(custom) {
+        netRestarting = true;
+        btnHostname.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved';
+        btnHostname.classList.add('is-saved');
+        btnHostname.disabled = true;
+        hostnameInput.disabled = true;
+        document.getElementById('hostname-new').textContent = custom || hostnameSaved.default;
+        document.getElementById('hostname-success').hidden = false;
+        const indWifi = document.getElementById('ind-wifi');
+        const lblWifi = document.getElementById('lbl-wifi');
+        if (indWifi) indWifi.className = 'status-indicator warning';
+        if (lblWifi) lblWifi.textContent = networkLabel + ': Restarting...';
+        const countdown = document.getElementById('hostname-countdown');
+        let left = HOSTNAME_RESTART_S;
+        countdown.textContent = left;
+        const timer = setInterval(() => {
+            left -= 1;
+            countdown.textContent = Math.max(0, left);
+            if (left <= 0) {
+                clearInterval(timer);
+                window.location.reload();
+            }
+        }, 1000);
+    }
+
+    if (hostnameInput && btnHostname) {
+        hostnameInput.addEventListener('input', () => {
+            hideHostnameError();
+            if (!btnHostname.disabled) {
+                clearTimeout(hostnameNoChangeTimer);
+                btnHostname.innerHTML = HOSTNAME_BTN_IDLE;
+            }
+        });
+
+        document.getElementById('hostname-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (btnHostname.disabled) return;
+            const v = hostnameInput.value.trim();
+            hostnameInput.value = v;
+            if (!validateHostname(v)) {
+                showHostnameError(HOSTNAME_ERROR);
+                hostnameInput.focus();
+                return;
+            }
+            hideHostnameError();
+            if (v === hostnameSaved.custom) {
+                showHostnameNoChanges();
+                return;
+            }
+            btnHostname.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...';
+            btnHostname.disabled = true;
+            hostnameInput.disabled = true;
+            let data = null;
+            let ok = false;
+            try {
+                const res = await apiFetch('/api/network/hostname', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ hostname: v })
+                });
+                ok = res.ok;
+                data = await res.json().catch(() => null);
+            } catch (err) {
+                console.error('Hostname save error:', err);
+            }
+            if (!ok || !data || !data.success) {
+                btnHostname.innerHTML = HOSTNAME_BTN_IDLE;
+                btnHostname.disabled = false;
+                hostnameInput.disabled = false;
+                showHostnameError(data && typeof data.error === 'string' ? data.error : 'Could not save the hostname.');
+                return;
+            }
+            if (data.restart) {
+                startHostnameRestart(v);
+            } else {
+                hostnameSaved.custom = v;
+                showHostnameNoChanges();
+            }
+        });
+    }
+
+    // --- W5500 section of the Network page (US-126, docs/mockups/US-126) ---
+    // GET /api/network/eth when the page loads: the section appears only with a 200 answer
+    // and available:true (404 on the P4). POST {enabled, pins} saves; the board restarts.
+    const W5500_PINS = ['sck', 'mosi', 'miso', 'cs', 'irq', 'rst'];
+    const W5500_LABEL = { sck: 'SCK', mosi: 'MOSI', miso: 'MISO', cs: 'CS', irq: 'INT', rst: 'RST' };
+    const W5500_RESTART_S = 15;      // as the Hostname section
+    const W5500_FALLBACK = {
+        no_chip: [{ b: 'The W5500 did not answer at startup.' }, ' Check the wiring and the pins below. The board is using Wi-Fi.'],
+        no_link: [{ b: 'No Ethernet cable link at startup.' }, ' Check the cable and the switch port. The board is using Wi-Fi.'],
+        no_ip: [{ b: 'The router gave no address over Ethernet (DHCP).' }, ' The board is using Wi-Fi.'],
+        '': [{ b: 'The board is not using the W5500 now.' }, ' It started on Wi-Fi or in access point mode.']
+    };
+    const w5500Section = document.getElementById('sec-w5500');
+    const w5500Form = document.getElementById('w5500-form');
+    const w5500Toggle = document.getElementById('w5500-enabled');
+    const btnW5500 = document.getElementById('btn-w5500');
+    const W5500_BTN_IDLE = btnW5500 ? btnW5500.innerHTML : '';
+    let w5500Strapping = [];
+    let w5500NoChangeTimer = null;
+    const w5500Input = (f) => document.getElementById('w5500-' + f);
+    const w5500Cell = (f) => w5500Input(f).closest('.pin-cell');
+
+    // parts: strings and {b: text} for bold, built as text nodes
+    function w5500Text(el, parts) {
+        el.textContent = '';
+        parts.forEach(p => {
+            if (typeof p === 'string') { el.appendChild(document.createTextNode(p)); return; }
+            const s = document.createElement('strong');
+            s.textContent = p.b;
+            el.appendChild(s);
+        });
+    }
+
+    // Link to use (US-127): informative texts of the states that are not a problem
+    const W5500_INFO = {
+        standby: [{ b: 'No Ethernet connection:' }, ' the board is on Wi-Fi and goes back to Ethernet when the cable is connected.'],
+        unused: [{ b: 'Wi-Fi mode:' }, ' the W5500 is not used.']
+    };
+    const W5500_BADGES = {
+        active: { cls: 'connected', ind: 'success', text: 'Active' },
+        fallback: { cls: 'connecting', ind: 'warning', text: 'Fallback' },
+        standby: { cls: 'connecting', ind: 'info', text: 'Standby' },
+        unused: { cls: 'idle', ind: '', text: 'Not used' },
+        offline: { cls: 'connecting', ind: 'warning', text: 'No connection' }  // active with a reason
+    };
+    // state active with a reason: the board is on Ethernet without a connection. In Ethernet
+    // mode it stays so; in Automatic it moves to Wi-Fi if the cable does not come back
+    const W5500_OFFLINE = {
+        ethernet: {
+            no_link: [{ b: 'No Ethernet cable link.' }, ' Ethernet mode: the board stays offline until the cable is connected. Double reset for the access point.'],
+            no_ip: [{ b: 'The router gives no address over Ethernet (DHCP).' }, ' Ethernet mode: the board keeps waiting on the cable. Double reset for the access point.']
+        },
+        auto: {
+            no_link: [{ b: 'No Ethernet cable link.' }, ' If the cable does not come back, the board moves to Wi-Fi (when configured).'],
+            no_ip: [{ b: 'The router gives no address over Ethernet (DHCP).' }, ' If it does not arrive, the board moves to Wi-Fi (when configured).']
+        }
+    };
+    const W5500_MODES = ['auto', 'ethernet', 'wifi'];
+    let w5500SavedMode = 'auto';
+    const w5500ModeRadios = () => Array.from(document.querySelectorAll('input[name="w5500-mode"]'));
+
+    function setW5500Mode(mode) {
+        const m = W5500_MODES.includes(mode) ? mode : 'auto';
+        w5500ModeRadios().forEach(r => { r.checked = r.value === m; });
+    }
+
+    function readW5500Mode() {
+        const r = w5500ModeRadios().find(i => i.checked);
+        return r ? r.value : 'auto';
+    }
+
+    function w5500Badge(state) {
+        const el = document.getElementById('w5500-badge');
+        const b = W5500_BADGES[state] || { cls: 'idle', ind: '', text: 'Off' };
+        el.className = 'link-badge w5500-badge ' + b.cls;
+        el.querySelector('.status-indicator').className = 'status-indicator ' + b.ind;
+        el.querySelector('.badge-text').textContent = b.text;
+    }
+
+    function setW5500Toggle(on) {
+        w5500Toggle.checked = on;
+        const st = document.getElementById('w5500-state');
+        st.textContent = on ? 'On' : 'Off';
+        st.classList.toggle('on', on);
+        w5500Form.classList.toggle('is-off', !on);
+        // The choice of the link exists only with the module on (US-127)
+        document.getElementById('w5500-mode-row').hidden = !on;
+    }
+
+    function readW5500Pins() {
+        const out = {};
+        W5500_PINS.forEach(f => {
+            const v = w5500Input(f).value.trim();
+            out[f] = v === '' ? null : Number(v);
+        });
+        return out;
+    }
+
+    // Wire glow and strapping note, live while typing (strapping[] of the GET)
+    function refreshW5500Pins() {
+        const pins = readW5500Pins();
+        const straps = [];
+        W5500_PINS.forEach(f => {
+            w5500Cell(f).classList.toggle('is-set', pins[f] !== null);
+            const isStrap = pins[f] !== null && w5500Strapping.includes(pins[f]);
+            w5500Cell(f).classList.toggle('strap', isStrap);
+            if (isStrap) straps.push(`GPIO ${pins[f]} (${W5500_LABEL[f]})`);
+        });
+        const box = document.getElementById('w5500-strapping');
+        if (straps.length) {
+            w5500Text(document.getElementById('w5500-strapping-text'), [
+                { b: `${straps.join(', ')} ${straps.length > 1 ? 'are strapping pins' : 'is a strapping pin'}.` },
+                ' The board may not start if the module pulls it high or low at power-on. It works with most modules; you can still save.'
+            ]);
+            box.hidden = false;
+        } else {
+            box.hidden = true;
+        }
+    }
+
+    // The field a 400 message names: "... for SCK: ...", "... both SCK and CS", "MISO is required ..."
+    function w5500FieldOf(message) {
+        const m = /for (\w+):/.exec(message) || /and (\w+)$/.exec(message) || /^(\w+) is required/.exec(message);
+        if (!m) return null;
+        return W5500_PINS.find(f => W5500_LABEL[f] === m[1]) || null;
+    }
+
+    function showW5500Error(text) {
+        document.getElementById('w5500-error-text').textContent = text;
+        document.getElementById('w5500-error').hidden = false;
+        const f = w5500FieldOf(text);
+        if (f) {
+            w5500Cell(f).classList.add('invalid');
+            w5500Input(f).setAttribute('aria-invalid', 'true');
+        }
+    }
+
+    function hideW5500Error() {
+        document.getElementById('w5500-error').hidden = true;
+        W5500_PINS.forEach(f => {
+            w5500Cell(f).classList.remove('invalid');
+            w5500Input(f).removeAttribute('aria-invalid');
+        });
+    }
+
+    function setW5500Disabled(disabled) {
+        btnW5500.disabled = disabled;
+        w5500Toggle.disabled = disabled;
+        W5500_PINS.forEach(f => { w5500Input(f).disabled = disabled; });
+        w5500ModeRadios().forEach(r => { r.disabled = disabled; });
+    }
+
+    function renderW5500(data) {
+        w5500Strapping = Array.isArray(data.strapping) ? data.strapping : [];
+        const status = data.status || {};
+        const st = document.getElementById('w5500-status');
+        const stText = document.getElementById('w5500-status-text');
+        const offline = status.state === 'active' && status.reason
+            ? (W5500_OFFLINE[data.mode === 'ethernet' ? 'ethernet' : 'auto'][status.reason] || null) : null;
+        if (offline) {
+            w5500Badge('offline');
+            w5500Text(stText, offline);
+            st.className = 'auth-alert warning w5500-status';
+            st.hidden = false;
+        } else if (status.state === 'fallback') {
+            w5500Badge(status.state);
+            w5500Text(stText, W5500_FALLBACK[status.reason || ''] || W5500_FALLBACK['']);
+            st.className = 'auth-alert warning w5500-status';
+            st.hidden = false;
+        } else if (W5500_INFO[status.state]) {
+            w5500Badge(status.state);
+            w5500Text(stText, W5500_INFO[status.state]);
+            st.className = 'auth-alert info w5500-status';
+            st.hidden = false;
+        } else {
+            w5500Badge(status.state);
+            st.hidden = true;
+        }
+        // Missing mode (firmware before US-127): Automatic, the default
+        w5500SavedMode = W5500_MODES.includes(data.mode) ? data.mode : 'auto';
+        setW5500Mode(w5500SavedMode);
+        setW5500Toggle(!!data.enabled);
+        const pins = data.pins || {};
+        W5500_PINS.forEach(f => {
+            const v = pins[f];
+            w5500Input(f).value = v === null || v === undefined ? '' : v;
+        });
+        refreshW5500Pins();
+        w5500Section.hidden = false;
+    }
+
+    function showW5500NoChanges() {
+        setW5500Disabled(false);
+        btnW5500.innerHTML = 'No changes';
+        clearTimeout(w5500NoChangeTimer);
+        w5500NoChangeTimer = setTimeout(() => { btnW5500.innerHTML = W5500_BTN_IDLE; }, HOSTNAME_NO_CHANGE_MS);
+    }
+
+    function startW5500Restart() {
+        netRestarting = true;
+        btnW5500.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved';
+        btnW5500.classList.add('is-saved');
+        setW5500Disabled(true);
+        document.getElementById('w5500-success').hidden = false;
+        const indWifi = document.getElementById('ind-wifi');
+        const lblWifi = document.getElementById('lbl-wifi');
+        if (indWifi) indWifi.className = 'status-indicator warning';
+        if (lblWifi) lblWifi.textContent = networkLabel + ': Restarting...';
+        const countdown = document.getElementById('w5500-countdown');
+        let left = W5500_RESTART_S;
+        countdown.textContent = left;
+        const timer = setInterval(() => {
+            left -= 1;
+            countdown.textContent = Math.max(0, left);
+            if (left <= 0) {
+                clearInterval(timer);
+                window.location.reload();
+            }
+        }, 1000);
+    }
+
+    if (w5500Section && w5500Form && btnW5500) {
+        W5500_PINS.forEach(f => w5500Input(f).addEventListener('input', () => {
+            hideW5500Error();
+            refreshW5500Pins();
+            if (!btnW5500.disabled) {
+                clearTimeout(w5500NoChangeTimer);
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+            }
+        }));
+        w5500Toggle.addEventListener('change', () => {
+            // Turning the module on shows the saved choice (Automatic the first time)
+            if (w5500Toggle.checked) setW5500Mode(w5500SavedMode);
+            setW5500Toggle(w5500Toggle.checked);
+            hideW5500Error();
+            if (!btnW5500.disabled) {
+                clearTimeout(w5500NoChangeTimer);
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+            }
+        });
+        document.getElementById('w5500-mode').addEventListener('change', () => {
+            hideW5500Error();
+            if (!btnW5500.disabled) {
+                clearTimeout(w5500NoChangeTimer);
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+            }
+        });
+
+        w5500Form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (btnW5500.disabled) return;
+            hideW5500Error();
+            const next = { enabled: w5500Toggle.checked, pins: readW5500Pins() };
+            // The link to use only with the module on; the server keeps the saved one otherwise
+            if (next.enabled) next.mode = readW5500Mode();
+            btnW5500.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...';
+            setW5500Disabled(true);
+            let data = null;
+            let ok = false;
+            try {
+                const res = await apiFetch('/api/network/eth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(next)
+                });
+                ok = res.ok;
+                data = await res.json().catch(() => null);
+            } catch (err) {
+                console.error('W5500 save error:', err);
+            }
+            if (!ok || !data || !data.success) {
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+                setW5500Disabled(false);
+                showW5500Error(data && typeof data.error === 'string' ? data.error : 'Could not save the W5500 settings.');
+                const f = data && typeof data.error === 'string' ? w5500FieldOf(data.error) : null;
+                if (f) w5500Input(f).focus();
+                return;
+            }
+            // restart:false: the same values were already saved
+            if (data.restart) startW5500Restart();
+            else showW5500NoChanges();
+        });
+
+        apiFetch('/api/network/eth', { cache: 'no-store' })
+            .then(res => (res.ok ? res.json() : null))
+            .then(data => { if (data && data.available === true) renderW5500(data); })
+            .catch(err => console.error('Failed to fetch the W5500 settings:', err));
+    }
+
     // Pre-populate fields
-    fetch('/api/config')
+    apiFetch('/api/config')
         .then(res => res.json())
         .then(data => {
+            // Sections of the Network page from the links of the board (US-112)
+            showNetworkSections(data.network);
+            // Hostname in use, saved and default (US-113)
+            if (data.network && data.network.hostname) renderHostname(data.network.hostname);
             if (data.wifi && data.wifi.mode === 'STA' && data.wifi.ssid) {
                 if (!ssidInput.value) {
                     ssidInput.value = data.wifi.ssid;
@@ -568,6 +2083,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.nut.ups_name && nutUpsNameInput && !nutUpsNameInput.value) {
                     nutUpsNameInput.value = data.nut.ups_name;
                 }
+                // US-125: saved credentials, never the password
+                nutState.username = data.nut.username || '';
+                nutState.hasPassword = data.nut.has_password === true;
+                renderNutCredentials();
             }
             if (data.mqtt && mqttHostInput) {
                 if (!mqttHostInput.value) mqttHostInput.value = data.mqtt.host || '';
@@ -576,27 +2095,291 @@ document.addEventListener('DOMContentLoaded', () => {
                 mqttPwdInput.placeholder = data.mqtt.password_set ? 'Keep saved password' : '';
             }
         })
-        .catch(err => console.error('Failed to fetch config:', err));
+        .catch(err => {
+            console.error('Failed to fetch config:', err);
+            showNetworkSections(null);
+        });
 
     // UPS Parameters Logic
     const upsTableBody = document.getElementById('ups-table-body');
-    const elCharge = document.getElementById('ups-charge');
-    const barCharge = document.getElementById('bar-charge');
-    const elLoad = document.getElementById('ups-load');
-    const barLoad = document.getElementById('bar-load');
-    const elStatus = document.getElementById('ups-status');
-    const elRealPower = document.getElementById('ups-realpower');
+
+    // The 4 metric cards of the telemetry page (US-086 removed the copy on the commands page)
+    const TELEMETRY_METRIC_IDS = {
+        status: 'ups-status', charge: 'ups-charge', barCharge: 'bar-charge',
+        load: 'ups-load', barLoad: 'bar-load', realPower: 'ups-realpower'
+    };
+
+    function renderMetrics(data, ids) {
+        const elStatus = document.getElementById(ids.status);
+        const elCharge = document.getElementById(ids.charge);
+        const barCharge = document.getElementById(ids.barCharge);
+        const elLoad = document.getElementById(ids.load);
+        const barLoad = document.getElementById(ids.barLoad);
+        const elRealPower = document.getElementById(ids.realPower);
+
+        if (elStatus) elStatus.innerText = data['ups.status'] || '--';
+
+        if (elCharge) {
+            const charge = data['battery.charge'] || 0;
+            elCharge.innerText = charge;
+            if (barCharge) barCharge.style.width = `${charge}%`;
+        }
+
+        if (elLoad) {
+            // undefined and not ||: a missing ups.load is not 0 % (US-109, #100)
+            const load = data['ups.load'];
+            elLoad.innerText = load === undefined ? '--' : load;
+            if (barLoad) {
+                barLoad.style.width = `${load === undefined ? 0 : load}%`;
+                if (parseInt(load) > 80) {
+                    barLoad.style.background = 'var(--danger)';
+                    barLoad.style.boxShadow = '0 0 10px var(--danger)';
+                } else {
+                    barLoad.style.background = 'var(--accent)';
+                    barLoad.style.boxShadow = '0 0 10px var(--accent)';
+                }
+            }
+        }
+
+        if (elRealPower) {
+            // ?? and not ||: a real power of 0 W is a value, not a missing one
+            const realPower = data['ups.realpower'] ?? '--';
+            elRealPower.innerText = realPower;
+        }
+    }
+
+    // US-059: "Last test result" box, hidden when ups.test.result is absent
+    function renderTestResult(data) {
+        const box = document.getElementById('cmd-test-result');
+        const dot = document.getElementById('cmd-test-result-dot');
+        const value = document.getElementById('cmd-test-result-value');
+        if (!box) return;
+        const result = data['ups.test.result'];
+        if (result === undefined || result === null || result === '') {
+            box.hidden = true;
+            return;
+        }
+        const text = String(result);
+        const running = text === 'In progress';
+        const failed = text === 'Done and error' || text === 'Aborted';
+        box.className = 'test-result' + (running ? ' running' : (failed ? ' failed' : ''));
+        if (dot) dot.className = 'status-indicator ' + (running ? 'info' : (failed ? 'danger' : 'success'));
+        if (value) value.textContent = text;
+        box.hidden = false;
+    }
+
+    // US-144: custom variables of the NUT Server tab on the telemetry page. _overrides of
+    // /api/ups-vars says, per row, what NUT clients see: {key (as saved), value, description,
+    // added}. Built with textContent only: values and descriptions are free text.
+    const TM_ICON_LAYERS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
+    const TM_ICON_PLUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+    // The cards that can carry a marker (ups.status cannot be overridden)
+    const TM_CARD_MARKS = [
+        { key: 'battery.charge', id: 'card-mark-charge', unit: '%' },
+        { key: 'ups.load', id: 'card-mark-load', unit: '%' },
+        { key: 'ups.realpower', id: 'card-mark-realpower', unit: 'W' }
+    ];
+
+    // Same path as "Open NUT Server" of UPS Settings: cvRender scrolls to the row and pulses it
+    function openNutServerFor(key) {
+        cvState.highlight = key || null;
+        const tab = document.querySelector('.tab[data-target="nut"]');
+        if (tab) tab.click();
+    }
+
+    function tmTextEl(tag, cls, text) {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text !== undefined) e.textContent = text;
+        return e;
+    }
+
+    function tmChip(key, ovr) {
+        const added = ovr.added === true;
+        const b = tmTextEl('button', 'tm-nut ' + (added ? 'add' : 'ovr'));
+        b.type = 'button';
+        b.dataset.key = ovr.key;
+        b.title = added
+            ? `The UPS does not report ${key}: NUT clients get it from the NUT Server tab`
+            : `NUT clients see ${ovr.value} in place of the UPS value (NUT Server tab)`;
+        b.innerHTML = added ? TM_ICON_PLUS : TM_ICON_LAYERS;
+        b.appendChild(tmTextEl('span', 'k', added ? 'Added' : 'NUT clients'));
+        if (!added) b.appendChild(tmTextEl('span', 'v', String(ovr.value)));
+        b.addEventListener('click', () => openNutServerFor(ovr.key));
+        return b;
+    }
+
+    // US-146: ups.realpower estimated by the board. _realpower_estimate of /api/ups-vars is
+    // {source: custom|ups, key, nominal, unit: W|VA, factor: 1|0.6}; absent when the UPS
+    // measures the power or the driver computes it. Built with textContent only.
+    function tmEstNumber(v) {
+        const n = Number(v);
+        return Number.isFinite(n) ? String(+n.toPrecision(6)) : String(v);
+    }
+
+    // "10.4 % × 980 W · ups.realpower.nominal": the custom variable is a link to NUT Server
+    function tmEstFormula(est, load) {
+        const f = document.createDocumentFragment();
+        f.appendChild(document.createTextNode(`${load} %`));
+        f.appendChild(tmTextEl('span', 'op', '×'));
+        f.appendChild(document.createTextNode(`${tmEstNumber(est.nominal)} ${est.unit}`));
+        if (Number(est.factor) !== 1) {
+            f.appendChild(tmTextEl('span', 'op', '×'));
+            f.appendChild(document.createTextNode(tmEstNumber(est.factor)));
+        }
+        f.appendChild(document.createTextNode(' · '));
+        if (est.source === 'custom') {
+            const a = tmTextEl('a', '', String(est.key));
+            a.href = '#';
+            a.title = 'Open NUT Server on this variable';
+            a.addEventListener('click', e => { e.preventDefault(); openNutServerFor(String(est.key)); });
+            f.appendChild(a);
+        } else {
+            f.appendChild(tmTextEl('span', 'ups', `UPS ${est.key}`));
+        }
+        return f;
+    }
+
+    // Text of the tooltip: what was computed and where the nominal power comes from
+    function tmEstTip(tip, est, load, inTable) {
+        const factor = Number(est.factor) !== 1 ? ` × ${tmEstNumber(est.factor)}` : '';
+        tip.replaceChildren(tmTextEl('b', '', 'Estimated by the board'));
+        tip.appendChild(document.createTextNode((inTable ? ': ' : ': the UPS does not report ups.realpower. ') +
+            `${load} % load × ${tmEstNumber(est.nominal)} ${est.unit}${factor}.`));
+        if (est.source === 'custom') {
+            const src = tmTextEl('span', 'src custom', 'From the custom variable ');
+            src.appendChild(tmTextEl('em', '', String(est.key)));
+            src.appendChild(document.createTextNode(inTable ? '.' : ' (NUT Server tab).'));
+            tip.appendChild(src);
+        } else {
+            tip.appendChild(tmTextEl('span', 'src', `From ${est.key} of the UPS.` +
+                (est.unit === 'VA' && !inTable ? ' Set ups.realpower.nominal in NUT Server for a better estimate.' : '')));
+        }
+        if (est.unit === 'W' && !inTable) {
+            tip.appendChild(tmTextEl('span', 'warn', 'Right only if the UPS reports the load as a percentage of the watts.'));
+        }
+    }
+
+    function tmEstBadge(est, load) {
+        const b = tmTextEl('button', 'tm-est in-table');
+        b.type = 'button';
+        b.appendChild(tmTextEl('span', 'approx', '≈'));
+        b.appendChild(document.createTextNode('Estimated'));
+        const tip = tmTextEl('span', 'tip');
+        tip.setAttribute('role', 'tooltip');
+        tmEstTip(tip, est, load, true);
+        b.appendChild(tip);
+        b.addEventListener('click', () => b.classList.toggle('open'));
+        return b;
+    }
+
+    function renderRealPowerEstimate(est, data) {
+        const badge = document.getElementById('card-est-realpower');
+        const src = document.getElementById('card-est-src');
+        const label = document.getElementById('realpower-label');
+        const mark = document.getElementById('card-mark-realpower');
+        // Room on the right of the label only for the NUT marker of US-144
+        if (label) label.classList.toggle('no-mark', !mark || mark.hidden);
+        if (!badge || !src) return;
+        badge.hidden = !est;
+        src.hidden = !est;
+        if (!est) {
+            badge.classList.remove('open');
+            src.replaceChildren();
+            return;
+        }
+        const load = String(data['ups.load'] ?? '--');
+        tmEstTip(badge.querySelector('.tip'), est, load, false);
+        src.replaceChildren(tmEstFormula(est, load));
+    }
+
+    const cardEstBadge = document.getElementById('card-est-realpower');
+    if (cardEstBadge) cardEstBadge.addEventListener('click', () => cardEstBadge.classList.toggle('open'));
+
+    function fillUpsRow(tr, key, value, ovr, est, load) {
+        tr.className = [ovr ? (ovr.added === true ? 'tm-add' : 'tm-ovr') : '', est ? 'tm-estd' : '']
+            .filter(Boolean).join(' ');
+        const tdKey = tmTextEl('td', '', key);
+        const tdVal = document.createElement('td');
+        const val = tmTextEl('div', 'tm-val');
+        val.appendChild(tmTextEl('span', 'ups-val', String(value)));
+        if (est) val.appendChild(tmEstBadge(est, load));
+        if (ovr) val.appendChild(tmChip(key, ovr));
+        tdVal.appendChild(val);
+        const tdDesc = tmTextEl('td', '', NUT_DESCRIPTIONS[key] || NUT_DESCRIPTIONS[key.toLowerCase()] || '--');
+        if (est) {
+            const why = tmTextEl('span', 'tm-est-why', '≈ ');
+            why.appendChild(tmEstFormula(est, load));
+            tdDesc.appendChild(why);
+        }
+        if (ovr && ovr.description) tdDesc.appendChild(tmTextEl('span', 'tm-why', String(ovr.description)));
+        tr.replaceChildren(tdKey, tdVal, tdDesc);
+    }
+
+    // "N overridden · M added for NUT clients": one count per saved variable (an override of
+    // ups.model can also mark the device.model row)
+    function renderOverrideSummary(overrides) {
+        const btn = document.getElementById('tm-summary');
+        const text = document.getElementById('tm-summary-text');
+        if (!btn || !text) return;
+        const kinds = new Map();
+        for (const e of Object.values(overrides)) {
+            if (!e || typeof e.key !== 'string') continue;
+            kinds.set(e.key, kinds.get(e.key) === true || e.added === true);
+        }
+        const added = [...kinds.values()].filter(Boolean).length;
+        const overridden = kinds.size - added;
+        text.replaceChildren();
+        if (overridden) text.appendChild(tmTextEl('b', 'o', `${overridden} overridden`));
+        if (overridden && added) text.appendChild(document.createTextNode(' · '));
+        if (added) text.appendChild(tmTextEl('b', 'a', `${added} added`));
+        text.appendChild(document.createTextNode(' for NUT clients'));
+        btn.hidden = kinds.size === 0;
+    }
+
+    function renderCardMarkers(overrides) {
+        for (const m of TM_CARD_MARKS) {
+            const el = document.getElementById(m.id);
+            if (!el) continue;
+            const ovr = overrides[m.key];
+            el.hidden = !ovr;
+            if (!ovr) continue;
+            const added = ovr.added === true;
+            el.className = 'tm-nut tm-card-mark ' + (added ? 'add' : 'ovr');
+            el.dataset.key = ovr.key;
+            el.querySelector('.v').textContent = `${ovr.value} ${m.unit}`;
+            el.title = added
+                ? `The UPS does not report ${m.key}: NUT clients see ${ovr.value} ${m.unit} (custom variable)`
+                : `NUT clients see ${ovr.value} ${m.unit} in place of the UPS value (custom variable)`;
+        }
+    }
+
+    TM_CARD_MARKS.forEach(m => {
+        const el = document.getElementById(m.id);
+        if (el) el.addEventListener('click', () => openNutServerFor(el.dataset.key));
+    });
+    const tmSummary = document.getElementById('tm-summary');
+    if (tmSummary) tmSummary.addEventListener('click', () => openNutServerFor(null));
+
+    // Tabs that show data from /api/ups-vars: one shared poll serves both
+    const UPS_POLL_TABS = ['ups', 'commands'];
+    const isUpsPollTabActive = () => UPS_POLL_TABS.some(t => {
+        const el = document.getElementById(`content-${t}`);
+        return el && el.classList.contains('active');
+    });
 
     let upsPollInterval = null;
-    let isFetchingUpsVars = false;
+    let upsVarsInFlight = false;
+    let lastCatalogKey = null; // connection + beeper state seen at the previous poll
 
     async function fetchUpsVars() {
-        if (!document.getElementById('content-ups').classList.contains('active')) return;
-        if (isFetchingUpsVars) return;
-
-        isFetchingUpsVars = true;
+        if (sessionExpired) return;
+        if (!isUpsPollTabActive()) return;
+        if (upsVarsInFlight) return;
+        
+        upsVarsInFlight = true;
         try {
-            const response = await fetch('/api/ups-vars');
+            const response = await apiFetch('/api/ups-vars');
             if (!response.ok) throw new Error('Network response was not ok');
             const data = await response.json();
             
@@ -614,65 +2397,76 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-
-            // Update primary metrics
-            if (elStatus) elStatus.innerText = data['ups.status'] || '--';
-            
-            if (elCharge) {
-                const charge = data['battery.charge'] || 0;
-                elCharge.innerText = charge;
-                if (barCharge) barCharge.style.width = `${charge}%`;
-            }
-            
-            if (elLoad) {
-                const load = data['ups.load'] || 0;
-                elLoad.innerText = load;
-                if (barLoad) {
-                    barLoad.style.width = `${load}%`;
-                    if (parseInt(load) > 80) {
-                        barLoad.style.background = 'var(--danger)';
-                        barLoad.style.boxShadow = '0 0 10px var(--danger)';
-                    } else {
-                        barLoad.style.background = 'var(--accent)';
-                        barLoad.style.boxShadow = '0 0 10px var(--accent)';
-                    }
+            // Q* UPS whose USB transport is not ported yet (issues #91 and #28): _unsupported is
+            // "Q* UPS (USB transport: sgs)", shown as "Q* UPS recognized (USB transport: ...)".
+            // krauler, fabula, hunnox and cypress are ported: those UPS units never get here.
+            const unsupportedBanner = document.getElementById('unsupported-ups-banner');
+            if (unsupportedBanner) {
+                if (data._unsupported) {
+                    const device = String(data._unsupported).replace(/^(.*?) \(/, '$1 recognized (');
+                    document.getElementById('unsupported-ups-text').textContent = device +
+                        ': not supported yet. So far only the krauler, fabula, hunnox and cypress USB transports work.' +
+                        'Please open an issue on GitHub and attach the USB Diagnostics export (System Logs tab).';
+                    unsupportedBanner.style.display = 'block';
+                } else {
+                    unsupportedBanner.style.display = 'none';
                 }
             }
 
-            if (elRealPower) {
-                // ?? and not ||: a real power of 0 W is a value, not a missing one
-                const realPower = data['ups.realpower'] ?? '--';
-                elRealPower.innerText = realPower;
+
+            // Update primary metrics (telemetry and commands pages)
+            renderMetrics(data, TELEMETRY_METRIC_IDS);
+            renderTestResult(data);
+
+            // Reload the command catalog when the UPS connects or disconnects, or when
+            // ups.beeper.status appears/disappears (the beeper.* commands depend on it)
+            const catalogKey = (!!data._disconnected) + '|' + (data['ups.beeper.status'] !== undefined);
+            if (lastCatalogKey !== null && catalogKey !== lastCatalogKey) {
+                loadCommands();
             }
+            lastCatalogKey = catalogKey;
+
+            // US-144: custom variables of the NUT Server tab, never with the UPS disconnected
+            const overrides = (!data._disconnected && data._overrides && typeof data._overrides === 'object')
+                ? data._overrides : {};
+            renderOverrideSummary(overrides);
+            renderCardMarkers(overrides);
+
+            // US-146: ups.realpower estimated by the board, never with the UPS disconnected
+            const est = (!data._disconnected && data._realpower_estimate && typeof data._realpower_estimate === 'object')
+                ? data._realpower_estimate : null;
+            const estLoad = String(data['ups.load'] ?? '--');
+            renderRealPowerEstimate(est, data);
 
             // Update table
             if (upsTableBody) {
-                const sortedKeys = Object.keys(data)
-                    .filter(k => k !== 'ups.beeper.switchable' && (!data._disconnected || k !== 'ups.status') && !k.startsWith('_'))
-                    .sort();
+                const upsKeys = Object.keys(data)
+                    .filter(k => (!data._disconnected || k !== 'ups.status') && !k.startsWith('_'));
+                // Variables the UPS does not report, added in NUT Server
+                const addedKeys = Object.keys(overrides)
+                    .filter(k => overrides[k] && overrides[k].added === true && !(k in data));
+                const sortedKeys = upsKeys.concat(addedKeys).sort();
                 let currentIndex = 0;
-                
+
                 for (const key of sortedKeys) {
-                    const value = data[key];
+                    const ovr = overrides[key] || null;
+                    const value = (key in data) ? data[key] : ovr.value;
                     const rowId = `row-${key.replace(/\./g, '-')}`;
                     let tr = document.getElementById(rowId);
-                    
                     if (!tr) {
-                        const desc = NUT_DESCRIPTIONS[key] || '--';
                         tr = document.createElement('tr');
                         tr.id = rowId;
-                        tr.innerHTML = `
-                            <td>${key}</td>
-                            <td class="ups-val">${value}</td>
-                            <td>${desc}</td>
-                        `;
-                    } else {
-                        const valCell = tr.querySelector('.ups-val');
-                        if (valCell && valCell.textContent !== String(value)) {
-                            valCell.textContent = value;
-                        }
                     }
-                    
+                    const rowEst = key === 'ups.realpower' ? est : null;
+                    // Cells rebuilt only when the value, the custom variable or the estimate changes
+                    const sig = JSON.stringify([String(value),
+                        ovr ? [ovr.key, ovr.value, ovr.description, ovr.added === true] : null,
+                        rowEst ? [rowEst.source, rowEst.key, rowEst.nominal, rowEst.unit, rowEst.factor, estLoad] : null]);
+                    if (tr.dataset.sig !== sig) {
+                        fillUpsRow(tr, key, value, ovr, rowEst, estLoad);
+                        tr.dataset.sig = sig;
+                    }
+
                     // Enforce DOM order
                     if (upsTableBody.children[currentIndex] !== tr) {
                         upsTableBody.insertBefore(tr, upsTableBody.children[currentIndex] || null);
@@ -686,27 +2480,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             
-            const beeperActions = document.querySelector('.ups-actions');
-            const beeperToggle = document.getElementById('toggle-beeper');
-            const beeperState = document.getElementById('beeper-state');
-            
-            if (beeperActions) {
-                if (data['ups.beeper.switchable'] === true && data['ups.beeper.status'] !== undefined) {
-                    beeperActions.style.display = 'flex';
-                    if (beeperToggle && beeperState) {
-                        beeperToggle.disabled = false;
-                        const isEnabled = data['ups.beeper.status'] === 'enabled';
-                        if (beeperToggle.checked !== isEnabled) {
-                            beeperToggle.checked = isEnabled;
-                        }
-                        beeperState.textContent = isEnabled ? 'Enabled' : 'Disabled';
-                        beeperState.className = 'state-text ' + (isEnabled ? 'active' : 'paused');
-                    }
-                } else {
-                    beeperActions.style.display = 'none';
-                }
-            }
-            
         } catch (error) {
             console.error('Failed to fetch UPS vars:', error);
             const statusBadge = document.getElementById('status-badge');
@@ -715,33 +2488,650 @@ document.addEventListener('DOMContentLoaded', () => {
                 statusBadge.className = 'status-badge status-offline';
             }
         } finally {
-            isFetchingUpsVars = false;
+            upsVarsInFlight = false;
         }
     }
 
-    // Start polling when UPS tab is clicked
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            if (tab.getAttribute('data-target') === 'ups') {
-                if (!upsPollInterval) {
-                    fetchUpsVars();
-                    upsPollInterval = setInterval(fetchUpsVars, 2000);
-                }
-            } else {
-                if (upsPollInterval) {
-                    clearInterval(upsPollInterval);
-                    upsPollInterval = null;
-                }
-            }
-        });
-    });
+    // US-059: UPS command list
+    const CMD_CONFIRM_WARNING = 'This command switches off the power to the UPS outlets: the devices connected to the UPS will lose power.';
+    const CMD_ICON_PLAY = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M7 4l13 8-13 8z"/></svg>';
+    const CMD_ERRORS = {
+        400: 'Command not supported',
+        500: 'Command rejected by the UPS',
+        503: 'UPS not connected'
+    };
+    const CMD_RESULT_MS = 4000;
 
-    // Start polling immediately if UPS tab is active on load
-    if (activeTab && activeTab.getAttribute('data-target') === 'ups') {
+    // Button content is built from constants only, never from API data
+    function setRunButtonContent(btn, iconHtml, label) {
+        btn.innerHTML = iconHtml;
+        btn.appendChild(document.createTextNode(' ' + label));
+    }
+
+    async function runCommand(name, btn, out) {
+        if (btn.disabled) return;
+        out.className = 'cmd-result';
+        out.textContent = '';
+        btn.disabled = true;
+        btn.classList.add('running');
+        setRunButtonContent(btn, '<span class="cmd-spinner"></span>', 'Running…');
+
+        let ok = false;
+        let message;
+        try {
+            const res = await apiFetch('/api/ups/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name })
+            });
+            if (res.status === 200) {
+                ok = true;
+                message = 'Command sent';
+            } else {
+                message = CMD_ERRORS[res.status] || `Command failed (HTTP ${res.status})`;
+            }
+        } catch (err) {
+            console.error('UPS command error:', err);
+            message = 'Network error';
+        }
+
+        btn.classList.remove('running');
+        setRunButtonContent(btn, CMD_ICON_PLAY, 'Run');
+        out.className = 'cmd-result ' + (ok ? 'success' : 'error');
+        out.textContent = message;
+
+        // The message stays ~4 s, then fades; the button is re-enabled with it
+        setTimeout(() => {
+            out.classList.add('fade');
+            btn.disabled = false;
+        }, CMD_RESULT_MS);
+        setTimeout(() => {
+            out.className = 'cmd-result';
+            out.textContent = '';
+        }, CMD_RESULT_MS + 600);
+    }
+
+    function buildCommandRow(cmd, destructive) {
+        const row = document.createElement('div');
+        row.className = 'cmd-row';
+        row.dataset.cmd = cmd.name;
+
+        const name = document.createElement('div');
+        name.className = 'cmd-name';
+        name.textContent = cmd.name;
+
+        const desc = document.createElement('div');
+        desc.className = 'cmd-desc';
+        desc.textContent = typeof cmd.description === 'string' ? cmd.description : '';
+
+        const action = document.createElement('div');
+        action.className = 'cmd-action';
+
+        const out = document.createElement('span');
+        out.className = 'cmd-result';
+        out.setAttribute('aria-live', 'polite');
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-outline btn-sm cmd-run';
+        if (destructive) {
+            // US-068: never locked, also in AP mode. Native confirmation first, Cancel sends nothing
+            setRunButtonContent(btn, CMD_ICON_PLAY, 'Run');
+            btn.addEventListener('click', () => {
+                if (btn.disabled) return;
+                if (!window.confirm(`Run "${cmd.name}"?\n\n${CMD_CONFIRM_WARNING}`)) return;
+                runCommand(cmd.name, btn, out);
+            });
+        } else {
+            setRunButtonContent(btn, CMD_ICON_PLAY, 'Run');
+            btn.addEventListener('click', () => runCommand(cmd.name, btn, out));
+        }
+
+        action.append(out, btn);
+        row.append(name, desc, action);
+        return row;
+    }
+
+    function renderCommands(commands) {
+        const list = document.getElementById('cmd-list');
+        const empty = document.getElementById('cmd-empty');
+        const groupActions = document.getElementById('cmd-group-actions');
+        const groupPower = document.getElementById('cmd-group-power');
+        if (!list || !empty || !groupActions || !groupPower) return;
+
+        [groupActions, groupPower].forEach(g => g.querySelectorAll('.cmd-row').forEach(r => r.remove()));
+
+        let nActions = 0;
+        let nPower = 0;
+        for (const cmd of commands) {
+            if (!cmd || typeof cmd.name !== 'string' || cmd.name === '') continue;
+            const destructive = !!cmd.destructive;
+            (destructive ? groupPower : groupActions).appendChild(buildCommandRow(cmd, destructive));
+            if (destructive) nPower++; else nActions++;
+        }
+
+        const countActions = document.getElementById('cmd-count-actions');
+        const countPower = document.getElementById('cmd-count-power');
+        if (countActions) countActions.textContent = String(nActions);
+        if (countPower) countPower.textContent = String(nPower);
+        groupActions.hidden = nActions === 0;
+        groupPower.hidden = nPower === 0;
+
+        const isEmpty = nActions + nPower === 0;
+        list.hidden = isEmpty;
+        empty.hidden = !isEmpty;
+    }
+
+    let commandsLoadSeq = 0;
+
+    async function loadCommands() {
+        if (sessionExpired) return;
+        const seq = ++commandsLoadSeq;
+        let commands = [];
+        try {
+            const res = await apiFetch('/api/ups/commands');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const json = await res.json();
+            if (json && Array.isArray(json.commands)) commands = json.commands;
+        } catch (err) {
+            console.error('Failed to fetch UPS commands:', err);
+        }
+        // A newer request started meanwhile: its answer wins
+        if (seq !== commandsLoadSeq) return;
+        renderCommands(commands);
+    }
+
+    // US-068: UPS Settings (writable variables). Read when the tab opens and after
+    // each Apply or Reset: no polling, the tab is not in UPS_POLL_TABS.
+    const SET_CONFIRM_WARNING = 'This setting can switch the UPS outlets, bypass or ECO mode: the devices connected to the UPS may lose power.';
+    // Fallback texts by HTTP status: the server's {"error": "..."} wins when present
+    const SET_ERRORS = {
+        400: 'Invalid value',
+        500: 'Rejected by the UPS',
+        503: 'UPS not connected'
+    };
+    const SET_RESET_ERRORS = {
+        400: 'Not a driver-side variable',
+        500: 'Could not save the setting',
+        503: 'UPS not connected'
+    };
+    const SET_RESULT_MS = 4000;
+    const SET_ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+    const SET_ICON_RESET = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>';
+    const SET_ICON_ZAP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9z"/></svg>';
+    const SET_ICON_BATTERY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="18" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/><line x1="6" y1="10" x2="6" y2="14"/><line x1="10" y1="10" x2="10" y2="14"/></svg>';
+    const SET_ICON_CHIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>';
+
+    const SET_ASCII_RE = /^[\x20-\x7e]*$/;
+    const SET_ASCII_MSG = 'Only printable ASCII characters (no accents or symbols such as €)';
+
+    let settingsLoadSeq = 0;
+    let settingsLastVars = [];          // catalog of the last successful GET
+    const settingsBusy = new Map();     // name -> 'apply' | 'reset', request in flight
+    const settingsOutcomes = new Map(); // name -> outcome to show after the next render
+
+    function settingText(v) {
+        return v === undefined || v === null ? '' : String(v);
+    }
+
+    function clockTime(d) {
+        return [d.getHours(), d.getMinutes(), d.getSeconds()]
+            .map(n => String(n).padStart(2, '0')).join(':');
+    }
+
+    function buildCurrentValue(value) {
+        const span = document.createElement('span');
+        span.className = 'set-current-value' + (value === '' ? ' is-empty' : '');
+        span.textContent = value === '' ? '(empty)' : value;
+        return span;
+    }
+
+    function setRowBusy(row, kind) {
+        const btn = kind === 'reset' ? row._set.reset : row._set.apply;
+        if (!btn) return;
+        btn.disabled = true;
+        btn.classList.add('running');
+        setRunButtonContent(btn, '<span class="cmd-spinner"></span>', kind === 'reset' ? 'Resetting…' : 'Applying…');
+        if (kind === 'apply') row._set.input.disabled = true;
+        row._set.out.className = 'cmd-result';
+        row._set.out.textContent = '';
+    }
+
+    // Apply turns on only when the field differs from the current value and holds only
+    // printable ASCII (0x20-0x7E), the bytes the firmware accepts, as the NUT line reader
+    function refreshSettingRow(row) {
+        const p = row._set;
+        const dirty = p.input.value !== p.v.value;
+        const ascii = p.input.tagName === 'SELECT' || SET_ASCII_RE.test(p.input.value);
+        p.field.classList.toggle('dirty', dirty);
+        if (!ascii) {
+            p.field.classList.add('invalid');
+            p.out.className = 'cmd-result error';
+            p.out.textContent = `✕ ${SET_ASCII_MSG}`;
+            p.asciiError = true;
+        } else if (p.asciiError) {
+            p.field.classList.remove('invalid');
+            p.out.className = 'cmd-result';
+            p.out.textContent = '';
+            p.asciiError = false;
+        }
+        if (!p.apply.classList.contains('running')) p.apply.disabled = !dirty || !ascii || p.v.override !== null;
+        if (p.counter) {
+            p.counter.textContent = `${p.input.value.length}/${p.v.max_length}`;
+            p.counter.classList.toggle('full', p.input.value.length >= p.v.max_length);
+        }
+    }
+
+    function showSettingOutcome(row, outcome) {
+        const p = row._set;
+        p.out.className = 'cmd-result ' + (outcome.ok ? 'success' : 'error');
+        p.out.textContent = outcome.ok ? `✓ ${outcome.label} ` : `✕ ${outcome.label}`;
+        if (outcome.ok) {
+            // "Applied 20 → 30": old value dimmed, then the value re-read by the firmware
+            const arrow = document.createElement('span');
+            arrow.className = 'arrow';
+            arrow.textContent = `${outcome.from} →`;
+            p.out.append(arrow, document.createTextNode(' ' + outcome.to));
+            p.current.classList.add('updated');
+            setTimeout(() => p.current.classList.remove('updated'), 2500);
+            // Success fades like the command results
+            setTimeout(() => p.out.classList.add('fade'), SET_RESULT_MS);
+            setTimeout(() => {
+                p.out.className = 'cmd-result';
+                p.out.textContent = '';
+            }, SET_RESULT_MS + 600);
+        } else if (outcome.draft !== undefined) {
+            // A failed Apply: message and red frame stay until the value is edited
+            p.field.classList.add('invalid');
+        }
+    }
+
+    async function postSetting(url, payload, errors) {
+        try {
+            const res = await apiFetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            let json = null;
+            try { json = await res.json(); } catch (e) { json = null; }
+            if (res.status === 200) {
+                return { ok: true, value: json && typeof json.value === 'string' ? json.value : null };
+            }
+            const error = json && typeof json.error === 'string' && json.error !== '' ? json.error : null;
+            return { ok: false, message: error || errors[res.status] || `Failed (HTTP ${res.status})` };
+        } catch (err) {
+            console.error('UPS setting error:', err);
+            return { ok: false, message: 'Network error' };
+        }
+    }
+
+    async function applySetting(row) {
+        const p = row._set;
+        if (p.apply.disabled || settingsBusy.has(p.v.name)) return;
+        const name = p.v.name;
+        const from = p.v.value;
+        const value = p.input.value;
+        // Native confirmation, as for the destructive UPS commands; Cancel sends nothing
+        if (p.v.confirm && !window.confirm(`Set "${name}" to "${value}"?\n\n${SET_CONFIRM_WARNING}`)) return;
+
+        settingsBusy.set(name, 'apply');
+        setRowBusy(row, 'apply');
+        const r = await postSetting('/api/ups/variable', { name: name, value: value }, SET_ERRORS);
+        settingsBusy.delete(name);
+        settingsOutcomes.set(name, r.ok
+            ? { ok: true, label: 'Applied', from: from, to: r.value !== null ? r.value : value }
+            : { ok: false, label: r.message, draft: value });
+        loadSettings();
+    }
+
+    async function resetSetting(row) {
+        const p = row._set;
+        if (!p.reset || p.reset.disabled || settingsBusy.has(p.v.name)) return;
+        const name = p.v.name;
+        const from = p.v.value;
+
+        settingsBusy.set(name, 'reset');
+        setRowBusy(row, 'reset');
+        const r = await postSetting('/api/ups/variable/reset', { name: name }, SET_RESET_ERRORS);
+        settingsBusy.delete(name);
+        settingsOutcomes.set(name, r.ok
+            ? { ok: true, label: 'Reset to default', from: from, to: r.value !== null ? r.value : '' }
+            : { ok: false, label: r.message });
+        loadSettings();
+    }
+
+    function buildSettingRow(v) {
+        const row = document.createElement('div');
+        row.className = 'cmd-row set-row';
+        row.dataset.var = v.name;
+
+        // Name + tags
+        const id = document.createElement('div');
+        id.className = 'set-id';
+        const name = document.createElement('div');
+        name.className = 'cmd-name';
+        name.textContent = v.name;
+        const tags = document.createElement('div');
+        tags.className = 'set-tags';
+        if (v.enum.length) {
+            const tag = document.createElement('span');
+            tag.className = 'set-tag';
+            tag.textContent = 'enum';
+            tags.appendChild(tag);
+        }
+        if (v.confirm) {
+            const tag = document.createElement('span');
+            tag.className = 'set-tag warn';
+            tag.title = 'Asks for confirmation before applying';
+            tag.innerHTML = SET_ICON_ZAP;
+            tag.appendChild(document.createTextNode('confirm'));
+            tags.appendChild(tag);
+        }
+        // US-115: custom value in the NUT Server tab, read-only here as for upsrw
+        if (v.override !== null) {
+            row.classList.add('is-overridden');
+            const tag = document.createElement('span');
+            tag.className = 'set-tag ovr';
+            tag.title = 'Has a custom value in the NUT Server tab';
+            tag.innerHTML = CV_ICON_LAYERS;
+            tag.appendChild(document.createTextNode('override'));
+            tags.appendChild(tag);
+        }
+        id.append(name, tags);
+
+        const desc = document.createElement('div');
+        desc.className = 'cmd-desc';
+        desc.textContent = v.description;
+
+        // Current value (+ Reset to default for the driver-side variables)
+        const cur = document.createElement('div');
+        cur.className = 'set-current';
+        const curLabel = document.createElement('span');
+        curLabel.className = 'set-current-label';
+        curLabel.textContent = 'Current';
+        const current = buildCurrentValue(v.value);
+        cur.append(curLabel, current);
+        let reset = null;
+        if (v.driver_side) {
+            reset = document.createElement('button');
+            reset.type = 'button';
+            reset.className = 'btn btn-sm set-reset';
+            setRunButtonContent(reset, SET_ICON_RESET, 'Reset to default');
+            reset.addEventListener('click', () => resetSetting(row));
+            cur.appendChild(reset);
+        }
+
+        // New value: <select> for ENUM, text input with the NUT max length otherwise
+        const edit = document.createElement('div');
+        edit.className = 'set-edit';
+        const controls = document.createElement('div');
+        controls.className = 'set-controls';
+        const field = document.createElement('label');
+        field.className = 'set-field' + (v.enum.length ? ' enum' : '');
+        let input;
+        let counter = null;
+        if (v.enum.length) {
+            input = document.createElement('select');
+            const options = v.enum.slice();
+            // The current value is always selectable, even if the UPS reports it outside the list
+            if (!options.includes(v.value)) options.unshift(v.value);
+            for (const o of options) {
+                const opt = document.createElement('option');
+                opt.value = o;
+                opt.textContent = o;
+                input.appendChild(opt);
+            }
+            input.value = v.value;
+        } else {
+            input = document.createElement('input');
+            input.type = 'text';
+            input.value = v.value;
+            input.spellcheck = false;
+            input.autocomplete = 'off';
+            if (v.max_length > 0) {
+                input.maxLength = v.max_length;
+                counter = document.createElement('span');
+                counter.className = 'set-counter';
+            }
+            input.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                applySetting(row);
+            });
+        }
+        input.setAttribute('aria-label', `New value for ${v.name}`);
+        field.appendChild(input);
+        if (counter) field.appendChild(counter);
+
+        const apply = document.createElement('button');
+        apply.type = 'button';
+        apply.className = 'btn btn-outline btn-sm set-apply';
+        setRunButtonContent(apply, SET_ICON_CHECK, 'Apply');
+        apply.addEventListener('click', () => applySetting(row));
+        controls.append(field, apply);
+
+        const out = document.createElement('span');
+        out.className = 'cmd-result';
+        out.setAttribute('aria-live', 'polite');
+        edit.append(controls, out);
+        if (v.override !== null) {
+            input.disabled = true;
+            if (reset) reset.disabled = true;
+            const note = document.createElement('div');
+            note.className = 'set-ovr-note';
+            note.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>';
+            const text = document.createElement('span');
+            text.appendChild(document.createTextNode('Overridden in the NUT Server tab: NUT clients see '));
+            const b = document.createElement('b');
+            b.textContent = v.override;
+            text.appendChild(b);
+            text.appendChild(document.createTextNode('. Remove the custom variable to change it here. '));
+            const link = document.createElement('button');
+            link.type = 'button';
+            link.className = 'cv-link';
+            link.textContent = 'Open NUT Server';
+            link.addEventListener('click', () => {
+                cvState.highlight = v.name;
+                const tab = document.querySelector('.tab[data-target="nut"]');
+                if (tab) tab.click();
+            });
+            text.appendChild(link);
+            note.appendChild(text);
+            edit.appendChild(note);
+        }
+
+        row.append(id, desc, cur, edit);
+        row._set = { v, field, input, counter, apply, reset, out, current };
+
+        input.addEventListener('input', () => {
+            field.classList.remove('invalid');
+            if (out.classList.contains('error')) {
+                out.className = 'cmd-result';
+                out.textContent = '';
+            }
+            refreshSettingRow(row);
+        });
+        refreshSettingRow(row);
+        return row;
+    }
+
+    function buildSettingGroup(id, title, sub, icon, vars) {
+        const group = document.createElement('section');
+        group.className = 'cmd-group set-group';
+        group.id = id;
+
+        const header = document.createElement('div');
+        header.className = 'cmd-group-header';
+        header.innerHTML = icon;
+        const titleEl = document.createElement('span');
+        titleEl.textContent = title;
+        const subEl = document.createElement('span');
+        subEl.className = 'set-group-sub';
+        subEl.textContent = sub;
+        const count = document.createElement('span');
+        count.className = 'cmd-group-count';
+        count.textContent = String(vars.length);
+        header.append(titleEl, subEl, count);
+
+        const head = document.createElement('div');
+        head.className = 'set-head';
+        for (const caption of ['Variable', 'Description', 'Current', 'New value']) {
+            const s = document.createElement('span');
+            s.textContent = caption;
+            head.appendChild(s);
+        }
+
+        group.append(header, head);
+        for (const v of vars) group.appendChild(buildSettingRow(v));
+        return group;
+    }
+
+    function renderSettings(connected, variables) {
+        const list = document.getElementById('set-list');
+        const empty = document.getElementById('set-empty');
+        const snapshot = document.getElementById('set-snapshot');
+        const snapshotTime = document.getElementById('set-snapshot-time');
+        const lead = document.getElementById('set-lead');
+        if (!list || !empty) return;
+
+        const vars = [];
+        for (const raw of variables) {
+            if (!raw || typeof raw.name !== 'string' || raw.name === '') continue;
+            vars.push({
+                name: raw.name,
+                description: typeof raw.description === 'string' ? raw.description : '',
+                value: settingText(raw.value),
+                max_length: Number.isFinite(raw.max_length) ? raw.max_length : 0,
+                enum: Array.isArray(raw.enum) ? raw.enum.map(settingText) : [],
+                driver_side: raw.driver_side === true,
+                confirm: raw.confirm === true,
+                override: typeof raw.override === 'string' ? raw.override : null
+            });
+        }
+
+        // Values typed but not applied yet survive the reload (not the ones just applied)
+        const drafts = new Map();
+        list.querySelectorAll('.set-row').forEach(row => {
+            const p = row._set;
+            if (p && p.input.value !== p.v.value) drafts.set(p.v.name, p.input.value);
+        });
+
+        const isEmpty = !connected || vars.length === 0;
+        if (snapshot) snapshot.hidden = isEmpty;
+        if (lead) lead.hidden = isEmpty;
+        if (snapshotTime) snapshotTime.textContent = clockTime(new Date());
+        empty.hidden = !isEmpty;
+        list.hidden = isEmpty;
+        if (isEmpty) {
+            list.replaceChildren();
+            settingsOutcomes.clear();
+            return;
+        }
+
+        const groups = [];
+        const ups = vars.filter(v => !v.driver_side);
+        const driver = vars.filter(v => v.driver_side);
+        if (ups.length) groups.push(buildSettingGroup('set-group-ups', 'UPS parameters', 'stored in the UPS', SET_ICON_BATTERY, ups));
+        if (driver.length) groups.push(buildSettingGroup('set-group-driver', 'Driver parameters', 'saved on the ESP32', SET_ICON_CHIP, driver));
+        list.replaceChildren(...groups);
+
+        list.querySelectorAll('.set-row').forEach(row => {
+            const p = row._set;
+            const name = p.v.name;
+            const outcome = settingsOutcomes.get(name);
+            let draft = drafts.get(name);
+            if (outcome && outcome.ok) draft = undefined;
+            if (outcome && !outcome.ok && outcome.draft !== undefined) draft = outcome.draft;
+            if (draft !== undefined && draft !== p.v.value) {
+                const allowed = p.input.tagName !== 'SELECT' ||
+                    Array.from(p.input.options).some(o => o.value === draft);
+                if (allowed) p.input.value = draft;
+                refreshSettingRow(row);
+            }
+            if (settingsBusy.has(name)) setRowBusy(row, settingsBusy.get(name));
+            if (outcome) showSettingOutcome(row, outcome);
+        });
+        settingsOutcomes.clear();
+    }
+
+    async function loadSettings() {
+        if (sessionExpired) return;
+        const seq = ++settingsLoadSeq;
+        let connected = false;
+        let variables = [];
+        let failed = false;
+        try {
+            const res = await apiFetch('/api/ups/variables');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const json = await res.json();
+            if (json && json.connected === true && Array.isArray(json.variables)) {
+                connected = true;
+                variables = json.variables;
+            }
+        } catch (err) {
+            console.error('Failed to fetch UPS settings:', err);
+            failed = true;
+        }
+        // A newer request started meanwhile: its answer wins
+        if (seq !== settingsLoadSeq) return;
+        if (failed && settingsOutcomes.size && settingsLastVars.length) {
+            // Re-read after Apply/Reset failed: keep the last list, with the values just
+            // written, so that the outcome stays visible on its row
+            variables = settingsLastVars.map(v => {
+                const o = settingsOutcomes.get(v.name);
+                return o && o.ok ? Object.assign({}, v, { value: o.to }) : v;
+            });
+            connected = true;
+        }
+        settingsLastVars = connected ? variables : [];
+        renderSettings(connected, variables);
+    }
+
+    function startUpsPolling() {
         if (!upsPollInterval) {
             fetchUpsVars();
             upsPollInterval = setInterval(fetchUpsVars, 2000);
         }
+    }
+
+    function stopUpsPolling() {
+        if (upsPollInterval) {
+            clearInterval(upsPollInterval);
+            upsPollInterval = null;
+        }
+    }
+
+    // Poll /api/ups-vars while the telemetry or the commands tab is shown
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const target = tab.getAttribute('data-target');
+            if (UPS_POLL_TABS.includes(target)) {
+                startUpsPolling();
+                if (target === 'commands') loadCommands();
+            } else {
+                stopUpsPolling();
+                // US-068: one read per opening, no periodic requests
+                if (target === 'settings') loadSettings();
+            }
+        });
+    });
+
+    // Start polling immediately if one of those tabs is active on load
+    if (activeTab && UPS_POLL_TABS.includes(activeTab.getAttribute('data-target'))) {
+        startUpsPolling();
+        if (activeTab.getAttribute('data-target') === 'commands') loadCommands();
+    } else if (activeTab && activeTab.getAttribute('data-target') === 'settings') {
+        loadSettings();
+    }
+
+    function renderUpdateNotice(data) {
+        const banner = document.getElementById('update-banner');
+        if (!banner) return;
+        const upd = data.update || {};
+        const show = upd.available === true && typeof upd.latest === 'string' && upd.latest !== '';
+        if (show) banner.textContent = 'Firmware ' + upd.latest + ' is available. Open Firmware OTA to install it.';
+        banner.hidden = !show;
     }
 
     // Issue #47: surface crash diagnostics without a serial console
@@ -764,17 +3154,33 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.ups && data.ups.stale) {
             addLine('UPS is not answering: values are stale and NUT clients get ERR DATA-STALE.');
         }
-        if (diag.degraded) {
-            addLine('Degraded mode: the board restarted ' + diag.consecutive_restarts + ' times in a row without recovering the UPS link, so automatic restarts are suspended and NUT clients get ERR DATA-STALE. Replug the UPS USB cable or reboot the board.');
+        if (diag.degraded && diag.ups_not_enumerated) {
+            // US-121: port power-cycled and board restarted, the UPS never enumerated
+            addLine('The UPS did not come back after the automatic restart: the board restarted ' + diag.consecutive_restarts + ' times in a row and power-cycled its USB port, and the UPS never enumerated. Automatic restarts are suspended and NUT clients get ERR DATA-STALE. Unplug and replug the UPS USB cable.');
+        } else if (diag.degraded) {
+            // Issue #78: a board restart does not leave degraded mode (the counter survives it,
+            // US-142), only a UPS that comes back does
+            addLine('Degraded mode: the board restarted ' + diag.consecutive_restarts + ' times in a row without recovering the UPS link, so automatic restarts are suspended and NUT clients get ERR DATA-STALE. Replug the UPS USB cable.');
         }
-        if (diag.last_restart_cause) {
+        // US-142: a restart asked from the Web UI is not automatic; it is shown in the
+        // title of the Uptime row
+        if (diag.last_restart_cause && diag.last_restart_manual !== true) {
             addLine('Last automatic restart: ' + diag.last_restart_cause +
                 (diag.consecutive_restarts > 1 ? ' (' + diag.consecutive_restarts + ' in a row)' : ''));
+        }
+        // Issue #78: the later restarts overwrite the cause, this one started the series.
+        // After a manual restart only in degraded mode, like the line above (US-142)
+        if (diag.first_restart_cause && diag.consecutive_restarts > 1 &&
+            (diag.degraded || diag.last_restart_manual !== true)) {
+            addLine('First automatic restart of the series: ' + diag.first_restart_cause);
         }
         if (diag.last_crash) {
             addLine('Last crash (reset: ' + diag.reset_reason + ') in task "' + diag.last_crash.task + '", PC ' + diag.last_crash.pc + '. Backtrace: ', diag.last_crash.backtrace);
         } else if (diag.reset_reason && ['PANIC', 'TASK_WDT', 'INTERRUPT_WDT', 'OTHER_WDT', 'BROWNOUT'].includes(diag.reset_reason)) {
             addLine('Last reset reason: ' + diag.reset_reason);
+        }
+        if (diag.twdt_tasks) {
+            addLine('Task watchdog: tasks not responding: ', diag.twdt_tasks);
         }
         if (diag.coredump_partition === false) {
             addLine('Crash details cannot be saved: the partition table has no coredump partition. Flash the full firmware once with the web installer (OTA cannot update the partition table).');
@@ -784,14 +3190,46 @@ document.addEventListener('DOMContentLoaded', () => {
         banner.hidden = lines.length === 0;
     }
 
-    let isFetchingSystemStatus = false;
+    // US-142: seconds since boot as 45s, 12m, 3h 12m or 5d 3h
+    function formatUptime(s) {
+        if (s < 60) return s + 's';
+        const m = Math.floor(s / 60) % 60;
+        if (s < 3600) return m + 'm';
+        const h = Math.floor(s / 3600) % 24;
+        if (s < 86400) return h + 'h ' + m + 'm';
+        return Math.floor(s / 86400) + 'd ' + h + 'h';
+    }
+
+    // US-142: Uptime row of the sidebar; null data (board not answering) shows "--"
+    function renderUptime(data) {
+        const lbl = document.getElementById('lbl-uptime');
+        const item = document.getElementById('status-uptime');
+        if (!lbl || !item) return;
+        const s = data ? data.uptime_s : undefined;
+        const ok = typeof s === 'number' && Number.isFinite(s) && s >= 0;
+        lbl.textContent = 'Uptime: ' + (ok ? formatUptime(Math.floor(s)) : '--');
+        const diag = (data && data.diagnostics) || {};
+        const details = [];
+        if (ok && diag.reset_reason) details.push('Last reset: ' + diag.reset_reason);
+        if (ok && diag.last_restart_cause) details.push('Last restart: ' + diag.last_restart_cause);
+        if (details.length > 0) {
+            item.title = details.join('\n');
+        } else {
+            item.removeAttribute('title');
+        }
+    }
+
+    let statusInFlight = false;
+    // "Ethernet" on boards without Wi-Fi, from /api/system-status (US-092)
+    let networkLabel = 'Wi-Fi';
 
     async function fetchSystemStatus() {
-        if (isFetchingSystemStatus) return;
-
-        isFetchingSystemStatus = true;
+        if (sessionExpired) return;
+        if (statusInFlight) return;
+        
+        statusInFlight = true;
         try {
-            const response = await fetch('/api/system-status');
+            const response = await apiFetch('/api/system-status');
             if (!response.ok) return;
             const data = await response.json();
             
@@ -800,8 +3238,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const indUps = document.getElementById('ind-ups');
             const lblUps = document.getElementById('lbl-ups');
 
-            if (lblWifi && data.wifi) {
-                lblWifi.textContent = 'Wi-Fi: ' + data.wifi.status;
+            if (data.network && data.network.type === 'ethernet') networkLabel = 'Ethernet';
+            if (lblWifi && data.wifi && !netRestarting) {
+                lblWifi.textContent = networkLabel + ': ' + data.wifi.status;
                 if (data.wifi.status === 'AP Mode Active') {
                     indWifi.className = 'status-indicator info';
                 } else if (data.wifi.status === 'Connecting') {
@@ -814,10 +3253,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             renderDiagnostics(data);
+            renderUptime(data);
+            renderUpdateNotice(data);
+            renderNetworkStatus(data.network);
 
             if (lblUps && data.ups) {
                 lblUps.textContent = 'UPS: ' + data.ups.status + (data.ups.stale ? ' (stale)' : '');
                 if (data.ups.stale) {
+                    indUps.className = 'status-indicator warning';
+                } else if (data.ups.unsupported) {
+                    // Q* UPS recognised but not supported yet (US-132): "UPS: Not supported yet"
                     indUps.className = 'status-indicator warning';
                 } else if (data.ups.status === 'Connecting') {
                     indUps.className = 'status-indicator warning';
@@ -827,7 +3272,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     indUps.className = 'status-indicator success';
                 }
             }
-            
+
             const indMqtt = document.getElementById('ind-mqtt');
             const lblMqtt = document.getElementById('lbl-mqtt');
             if (lblMqtt && data.mqtt) {
@@ -859,17 +3304,74 @@ document.addEventListener('DOMContentLoaded', () => {
             const indUps = document.getElementById('ind-ups');
             const lblUps = document.getElementById('lbl-ups');
             
-            if (lblWifi) lblWifi.textContent = 'Wi-Fi: Offline';
-            if (indWifi) indWifi.className = 'status-indicator danger';
+            if (!netRestarting) {
+                if (lblWifi) lblWifi.textContent = networkLabel + ': Offline';
+                if (indWifi) indWifi.className = 'status-indicator danger';
+            }
             if (lblUps) lblUps.textContent = 'UPS: Offline';
             if (indUps) indUps.className = 'status-indicator danger';
+            renderUptime(null);
+            renderNetworkOffline();
         } finally {
-            isFetchingSystemStatus = false;
+            statusInFlight = false;
         }
     }
 
     fetchSystemStatus();
     setInterval(fetchSystemStatus, 3000);
+
+    // US-119: before the download the board reads once the USB reports the poll has not cached
+    // (POST /api/usb/dump/read); the page follows the read (GET) until it ends or for 60 s.
+    // Without a UPS ready (503) or on an error the export is downloaded at once, as before.
+    // Returns 'expired' when the session ended, so the download does not start.
+    const DIAG_READ_POLL_MS = 500;
+    const DIAG_READ_MAX_MS = 60000;
+    async function runDiagRead() {
+        addLogEntry('INFO', 'Reading USB reports for the export...');
+        let st;
+        try {
+            const res = await apiFetch('/api/usb/dump/read', { method: 'POST', cache: 'no-store' });
+            if (res.status === 401) return 'expired';
+            if (!res.ok) {
+                addLogEntry('WARN', 'UPS not ready: export without the read');
+                return 'skipped';
+            }
+            st = await res.json();
+        } catch (err) {
+            console.error('USB read request failed:', err);
+            return 'skipped';
+        }
+        const started = Date.now();
+        let statusError = false;
+        while (st && st.state === 'reading' && Date.now() - started < DIAG_READ_MAX_MS) {
+            await new Promise(resolve => setTimeout(resolve, DIAG_READ_POLL_MS));
+            if (sessionExpired) return 'expired';
+            try {
+                const res = await apiFetch('/api/usb/dump/read', { cache: 'no-store' });
+                if (res.status === 401) return 'expired';
+                if (!res.ok) { statusError = true; break; }
+                st = await res.json();
+            } catch (err) {
+                console.error('USB read status failed:', err);
+                statusError = true;
+                break;
+            }
+        }
+        const state = st && st.state;
+        if (state === 'done') {
+            addLogEntry('INFO', `Read ${st.total} USB reports (${st.empty} empty, ${st.failed} failed)`);
+        } else if (state === 'interrupted') {
+            addLogEntry('WARN', 'USB link interrupted: export with the reports read so far');
+        } else if (state === 'idle') {
+            // The board forgets the read when the UPS is disconnected (or a new one is claimed)
+            addLogEntry('WARN', 'UPS disconnected during the read: export without the read');
+        } else if (statusError) {
+            addLogEntry('WARN', 'USB read status not available: export with the reports read so far');
+        } else {
+            addLogEntry('WARN', 'USB read still running after 60 s: export with the reports read so far');
+        }
+        return state || 'unknown';
+    }
 
     const exportUsbBtn = document.getElementById('link-export-usb');
     if (exportUsbBtn) {
@@ -891,7 +3393,10 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
             
             try {
-                const response = await fetch(exportUsbBtn.href);
+                // The link stays disabled during the read: a second click sends nothing
+                if (await runDiagRead() === 'expired') return;
+                addLogEntry('INFO', 'Downloading USB diagnostics...');
+                const response = await apiFetch(exportUsbBtn.href);
                 if (response.ok) {
                     const blob = await response.blob();
                     const url = window.URL.createObjectURL(blob);
@@ -915,4 +3420,1380 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // US-061: session row (username + Log out) at the bottom of the sidebar.
+    // Hidden until /api/auth/status confirms a session; never shown in AP mode,
+    // where the UI is open without login.
+    const sidebarSession = document.getElementById('sidebar-session');
+    const sessionUser = document.getElementById('session-user');
+    const sessionUsername = document.getElementById('session-username');
+    const btnLogout = document.getElementById('btn-logout');
+    const btnLogoutAll = document.getElementById('btn-logout-all');
+    const logoutAllError = document.getElementById('logout-all-error');
+
+    // /api/auth/status is read once: it drives the sidebar session row and the
+    // US-063 Web Login form (STA change vs AP reset).
+    const authStatus = apiFetch('/api/auth/status', { cache: 'no-store' })
+        .then(res => (res.ok ? res.json() : {}))
+        .then(status => status || {})
+        .catch(err => {
+            console.error('Failed to fetch auth status:', err);
+            return {};
+        });
+
+    function setSidebarUsername(name) {
+        if (!sessionUser || !sessionUsername) return;
+        sessionUsername.textContent = name;
+        sessionUser.title = name ? 'Signed in as ' + name : 'Signed in user';
+        sessionUser.hidden = name === '';
+    }
+
+    if (sidebarSession) {
+        authStatus.then(status => {
+            if (status.ap_mode === true || status.authenticated !== true) return;
+            setSidebarUsername(typeof status.username === 'string' ? status.username : '');
+            sidebarSession.hidden = false;
+        });
+    }
+
+    // US-063: Web Login tab. STA: change the credentials, the current password
+    // is required. AP: reset them without it (the firmware decides from its own
+    // AP flag whether the current password is needed: hiding it is cosmetic).
+    const credForm = document.getElementById('cred-form');
+    if (credForm) {
+        const $ = (id) => document.getElementById(id);
+        const btnCred = $('btn-cred');
+        const CRED_FIELDS = ['cur-password', 'cred-username', 'cred-password', 'cred-password2'];
+        const CRED_FIX_FIELDS = 'Please fix the highlighted fields.';
+        const CRED_NOT_CLOSED = 'Other sessions could not be closed, use Log out of all devices';
+        // AP: "Log out of all devices" is hidden, the only way out is another reset
+        const CRED_NOT_CLOSED_AP = 'Credentials reset, but the existing sessions could not be closed. ' +
+            'Try the reset again.';
+        const NUT_LINK = '<button type="button" class="inline-link" data-goto="nut">NUT Server tab</button>';
+        const FINEPRINT_STA = 'Saving signs out every other device. NUT credentials are not affected (' +
+            NUT_LINK + ').';
+        const FINEPRINT_AP = 'Resetting closes every session on every device. NUT credentials are not affected (' +
+            NUT_LINK + '). While in AP mode the device is not on your home network, so NUT clients cannot reach it.';
+        let credApMode = false;
+        // false on first boot without credentials (status.configured false): the form creates them
+        let credConfigured = true;
+        let credThrottleTimer = null;
+
+        const credLabel = () => (!credConfigured ? 'Create credentials'
+            : credApMode ? 'Reset credentials' : 'Save credentials');
+        const credBusyLabel = () => (!credConfigured ? 'Creating' : credApMode ? 'Resetting' : 'Saving');
+
+        function setCredBusy(busy) {
+            btnCred.disabled = busy;
+            const label = btnCred.querySelector('.btn-label');
+            label.textContent = busy ? credBusyLabel() + '…' : credLabel();
+            const sp = btnCred.querySelector('.spinner');
+            if (busy && !sp) {
+                const s = document.createElement('span');
+                s.className = 'spinner';
+                btnCred.insertBefore(s, label);
+            } else if (!busy && sp) {
+                sp.remove();
+            }
+        }
+
+        function applyCredMode(ap) {
+            credApMode = ap;
+            $('grp-current').hidden = ap;
+            $('sec-verify').hidden = ap;
+            $('sec-new').hidden = ap;
+            $('cred-ap-banner').hidden = !ap;
+            $('cred-badge').hidden = !ap;
+            $('cred-lead').hidden = ap;
+            // Constant markup only, never API data
+            $('cred-fineprint').innerHTML = ap ? FINEPRINT_AP : FINEPRINT_STA;
+            if (!credThrottleTimer) setCredBusy(false);
+        }
+
+        function showCredError(text) {
+            $('cred-error-text').textContent = text;
+            $('cred-error').hidden = false;
+            $('cred-success').hidden = true;
+        }
+
+        function showCredSuccess(text) {
+            $('cred-success-text').textContent = text;
+            $('cred-success').hidden = false;
+            $('cred-error').hidden = true;
+        }
+
+        // Same rules as the firmware and the US-061 create form: username 1-32
+        // printable ASCII characters, password 8-64 bytes.
+        const printable = /^[\x20-\x7E]+$/;
+        const byteLength = (s) => new TextEncoder().encode(s).length;
+
+        function credRules() {
+            const u = $('cred-username').value;
+            const p = $('cred-password').value;
+            const c = $('cred-password2').value;
+            const pLen = byteLength(p);
+            return {
+                user: u.length >= 1 && u.length <= 32 && printable.test(u),
+                pass: pLen >= 8 && pLen <= 64,
+                match: c.length > 0 && p === c,
+                current: credApMode || $('cur-password').value.length > 0
+            };
+        }
+
+        function paintCredRules(showBad) {
+            const r = credRules();
+            credForm.querySelectorAll('#rule-list li').forEach((li) => {
+                const ok = r[li.dataset.rule];
+                li.classList.toggle('ok', ok);
+                li.classList.toggle('bad', !ok && showBad);
+            });
+            return r;
+        }
+
+        function setCredFieldError(inputId, errId, show) {
+            $(inputId).classList.toggle('invalid', show);
+            $(errId).hidden = !show;
+        }
+
+        function validateCred() {
+            const r = paintCredRules(true);
+            setCredFieldError('cur-password', 'err-current', !r.current);
+            setCredFieldError('cred-username', 'err-username', !r.user);
+            setCredFieldError('cred-password', 'err-password', !r.pass);
+            setCredFieldError('cred-password2', 'err-password2', r.pass && !r.match);
+            const ok = r.current && r.user && r.pass && r.match;
+            if (!ok) showCredError(CRED_FIX_FIELDS);
+            return ok;
+        }
+
+        CRED_FIELDS.forEach((id) => {
+            $(id).addEventListener('input', () => {
+                const r = paintCredRules(false);
+                // clear a field's error as soon as it becomes valid
+                if (r.current) setCredFieldError('cur-password', 'err-current', false);
+                if (r.user) setCredFieldError('cred-username', 'err-username', false);
+                if (r.pass) setCredFieldError('cred-password', 'err-password', false);
+                if (r.match) setCredFieldError('cred-password2', 'err-password2', false);
+                $('cred-success').hidden = true;
+            });
+        });
+
+        // 429: same wait as the login page (body retry_after, else Retry-After);
+        // the button stays disabled while the countdown runs.
+        function credRetryAfter(data, headers) {
+            let n = Number(data.retry_after);
+            if (!Number.isFinite(n) || n <= 0) n = Number(headers && headers.get('Retry-After'));
+            return Number.isFinite(n) && n > 0 ? Math.ceil(n) : 1;
+        }
+
+        function paintCountdown(left) {
+            const n = document.createElement('span');
+            n.className = 'countdown';
+            n.textContent = String(left);
+            $('cred-error-text').replaceChildren('Too many attempts. Try again in ', n, ' s');
+            $('cred-error').hidden = false;
+            $('cred-success').hidden = true;
+        }
+
+        function startCredThrottle(seconds) {
+            if (credThrottleTimer) clearInterval(credThrottleTimer);
+            let left = seconds;
+            btnCred.disabled = true;
+            paintCountdown(left);
+            credThrottleTimer = setInterval(() => {
+                left--;
+                if (left > 0) {
+                    paintCountdown(left);
+                    return;
+                }
+                clearInterval(credThrottleTimer);
+                credThrottleTimer = null;
+                $('cred-error').hidden = true;
+                btnCred.disabled = false;
+            }, 1000);
+        }
+
+        credForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (credThrottleTimer || btnCred.disabled || sessionExpired) return;
+            $('cred-success').hidden = true;
+            if (!validateCred()) return;
+            $('cred-error').hidden = true;
+
+            const body = {
+                username: $('cred-username').value,
+                password: $('cred-password').value
+            };
+            if (!credApMode) body.current_password = $('cur-password').value;
+
+            setCredBusy(true);
+            let res;
+            let data = {};
+            try {
+                // Plain fetch, not apiFetch: a 401 "invalid_current_password" must not log out
+                res = await fetch('/api/auth/credentials', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                try {
+                    data = (await res.json()) || {};
+                } catch (err) {
+                    // empty or non-JSON body: the status code is enough
+                }
+            } catch (err) {
+                console.error('Credentials request failed:', err);
+                setCredBusy(false);
+                showCredError('Network error, please try again');
+                return;
+            }
+            setCredBusy(false);
+
+            if (res.status === 200) {
+                const name = typeof data.username === 'string' ? data.username : body.username;
+                CRED_FIELDS.forEach((id) => $(id).classList.remove('invalid'));
+                ['cur-password', 'cred-password', 'cred-password2'].forEach((id) => { $(id).value = ''; });
+                $('cred-username').value = name;
+                paintCredRules(false);
+                setSidebarUsername(name);
+                if (!credConfigured) {
+                    // First creation (TOFU): no sessions to close, the button becomes Save/Reset
+                    credConfigured = true;
+                    setCredBusy(false);
+                    showCredSuccess('Credentials created.');
+                    return;
+                }
+                if (credApMode && data.sessions_closed === false) {
+                    showCredSuccess(CRED_NOT_CLOSED_AP);
+                    return;
+                }
+                const head = credApMode ? 'Credentials reset. ' : 'Credentials saved. ';
+                let tail = credApMode ? 'All sessions have been closed.' : 'Other devices have been signed out.';
+                if (data.sessions_closed === false) tail = CRED_NOT_CLOSED;
+                showCredSuccess(head + tail);
+                return;
+            }
+            if (res.status === 401) {
+                if (data.error === 'invalid_current_password') {
+                    showCredError('Current password is wrong');
+                    const cur = $('cur-password');
+                    cur.value = '';
+                    cur.classList.add('invalid');
+                    cur.focus({ preventScroll: true });
+                    paintCredRules(false);
+                } else if (!sessionExpired) {
+                    // Session expired or closed: same redirect as apiFetch
+                    redirectExpired();
+                }
+                return;
+            }
+            if (res.status === 429) {
+                $('cur-password').value = '';
+                startCredThrottle(credRetryAfter(data, res.headers));
+                return;
+            }
+            if (res.status === 400 && data.error === 'invalid_username') {
+                setCredFieldError('cred-username', 'err-username', true);
+                showCredError(CRED_FIX_FIELDS);
+            } else if (res.status === 400 && data.error === 'invalid_password') {
+                setCredFieldError('cred-password', 'err-password', true);
+                showCredError(CRED_FIX_FIELDS);
+            } else if (res.status === 400) {
+                showCredError('Invalid request, please try again');
+            } else if (res.status === 500 && data.error === 'storage_error') {
+                showCredError('Could not save the credentials on the device. Please try again.');
+            } else {
+                showCredError(`Could not save the credentials (HTTP ${res.status})`);
+            }
+        });
+
+        // Show / hide password
+        credForm.querySelectorAll('[data-toggle]').forEach((b) => {
+            b.addEventListener('click', () => {
+                const input = $(b.dataset.toggle);
+                const show = input.type === 'password';
+                input.type = show ? 'text' : 'password';
+                b.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+                b.style.color = show ? 'var(--accent)' : '';
+            });
+        });
+
+        // "NUT Server tab" link in the fineprint: same as clicking the tab
+        $('content-weblogin').addEventListener('click', (e) => {
+            const link = e.target.closest('[data-goto]');
+            if (!link) return;
+            const tab = document.querySelector(`.tab[data-target="${link.dataset.goto}"]`);
+            if (tab) tab.click();
+        });
+
+        applyCredMode(false);
+        paintCredRules(false);
+        authStatus.then(status => {
+            credConfigured = status.configured !== false;
+            applyCredMode(status.ap_mode === true);
+            const userInput = $('cred-username');
+            if (typeof status.username === 'string' && !userInput.value) {
+                userInput.value = status.username;
+                paintCredRules(false);
+            }
+        });
+    }
+
+    // US-094: Board page. GET /api/board when the tab opens (no polling). The status
+    // LED (switch and 5 brightness levels) is applied immediately with POST /api/board;
+    // the UPS USB port is saved with "Save & restart" and the board restarts.
+    const boardContent = document.getElementById('content-board');
+    if (boardContent) {
+        const B = (id) => document.getElementById(id);
+        const BOARD_RESULT_MS = 4000;
+        const BOARD_RESTART_S = 15;
+        const BOARD_ERRORS = { 400: 'Invalid request', 500: 'Failed to save settings' };
+        const BOARD_SPINNER = '<span class="cmd-spinner"></span>';
+        const levelPicker = B('level-picker');
+        const levelBtns = Array.from(levelPicker.querySelectorAll('.level'));
+        const ledSwitch = B('led-on');
+        const ledResult = B('led-result');
+        const btnSaveUsb = B('btn-save-usb');
+        const usbPortBox = B('usb-port');
+
+        let board = null;           // last GET /api/board, with the values saved since
+        let ledBusy = false;
+        let boardRestarting = false;
+        let boardLoadSeq = 0;
+        let ledResultTimers = [];
+
+        function boardLevel(led) {
+            const max = Number.isInteger(led.levels) && led.levels > 0 ? led.levels : levelBtns.length;
+            const n = Number(led.level);
+            return Number.isInteger(n) ? Math.min(max, Math.max(1, n)) : 1;
+        }
+
+        async function postBoard(payload) {
+            try {
+                const res = await apiFetch('/api/board', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                let json = null;
+                try { json = await res.json(); } catch (e) { json = null; }
+                if (res.status === 200 && (!json || json.success !== false)) {
+                    return { ok: true, restart: !!(json && json.restart === true) };
+                }
+                const error = json && typeof json.error === 'string' && json.error !== '' ? json.error : null;
+                return { ok: false, message: error || BOARD_ERRORS[res.status] || `Failed (HTTP ${res.status})` };
+            } catch (err) {
+                console.error('Board settings error:', err);
+                return { ok: false, message: 'Network error' };
+            }
+        }
+
+        // ---------- Status LED: applied immediately ----------
+        function setLedBusy(busy) {
+            ledBusy = busy;
+            ledSwitch.disabled = busy;
+            const on = board && board.led && board.led.on === true;
+            levelBtns.forEach(b => { b.disabled = busy || !on; });
+        }
+
+        function renderLed() {
+            const led = board.led;
+            const on = led.on === true;
+            const level = boardLevel(led);
+            ledSwitch.checked = on;
+            B('led-state').textContent = on ? 'On' : 'Off';
+            B('led-state').classList.toggle('on', on);
+            B('row-brightness').classList.toggle('is-disabled', !on);
+            levelBtns.forEach(b => {
+                const n = Number(b.dataset.level);
+                b.setAttribute('aria-checked', String(n === level));
+                b.classList.toggle('lit', n <= level);
+            });
+            setLedBusy(ledBusy);
+            // Only the level number, never the 0-255 PWM value
+            B('level-readout').textContent = on ? `Level ${level}` : `LED off · level ${level} kept`;
+            const preview = B('led-preview');
+            preview.classList.toggle('off', !on);
+            preview.style.setProperty('--glow', (0.2 + (level - 1) * 0.2).toFixed(2));
+        }
+
+        function clearLedResult() {
+            ledResultTimers.forEach(t => clearTimeout(t));
+            ledResultTimers = [];
+            ledResult.className = 'cmd-result';
+            ledResult.textContent = '';
+        }
+
+        // "✓ Applied level 3 → 5": old value dimmed, fades like the command results
+        function showLedResult(text, from, to) {
+            clearLedResult();
+            ledResult.className = 'cmd-result success';
+            ledResult.textContent = `✓ ${text}`;
+            if (from !== undefined) {
+                const arrow = document.createElement('span');
+                arrow.className = 'arrow';
+                arrow.textContent = ` level ${from} →`;
+                ledResult.append(arrow, document.createTextNode(` ${to}`));
+            }
+            ledResultTimers.push(setTimeout(() => ledResult.classList.add('fade'), BOARD_RESULT_MS));
+            ledResultTimers.push(setTimeout(clearLedResult, BOARD_RESULT_MS + 600));
+        }
+
+        function clearLedError() {
+            B('led-error').hidden = true;
+            levelPicker.classList.remove('invalid');
+        }
+
+        function showLedError(text) {
+            clearLedResult();
+            B('led-error-text').textContent = text;
+            B('led-error').hidden = false;
+            levelPicker.classList.add('invalid');
+        }
+
+        ledSwitch.addEventListener('change', async () => {
+            if (!board || !board.led || ledBusy) return;
+            const on = ledSwitch.checked;
+            const prev = board.led.on === true;
+            clearLedError();
+            clearLedResult();
+            setLedBusy(true);
+            const r = await postBoard({ led_on: on });
+            ledBusy = false;
+            // On error the switch goes back to the saved value
+            if (r.ok) board.led.on = on;
+            else board.led.on = prev;
+            renderLed();
+            if (r.ok) showLedResult(on ? 'LED on · saved' : 'LED off · saved, stays dark in every state');
+            else showLedError(r.message);
+        });
+
+        levelPicker.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.level');
+            if (!btn || btn.disabled || ledBusy || !board || !board.led || board.led.on !== true) return;
+            const level = Number(btn.dataset.level);
+            const from = boardLevel(board.led);
+            if (level === from) return;
+            clearLedError();
+            clearLedResult();
+            setLedBusy(true);
+            btn.insertAdjacentHTML('beforeend', BOARD_SPINNER);
+            const r = await postBoard({ led_level: level });
+            const spin = btn.querySelector('.cmd-spinner');
+            if (spin) spin.remove();
+            ledBusy = false;
+            // On error the previous level stays selected
+            if (r.ok) board.led.level = level;
+            renderLed();
+            if (r.ok) showLedResult('Applied', from, level);
+            else showLedError(r.message);
+        });
+
+        // Arrow keys move along the radiogroup
+        levelPicker.addEventListener('keydown', (e) => {
+            if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+            if (!board || !board.led || board.led.on !== true || ledBusy) return;
+            e.preventDefault();
+            const cur = boardLevel(board.led);
+            const next = Math.min(levelBtns.length, Math.max(1, cur + (e.key === 'ArrowRight' ? 1 : -1)));
+            const b = levelBtns[next - 1];
+            b.focus();
+            b.click();
+        });
+
+        // ---------- US-114: automatic shutdown, applied immediately ----------
+        const autosdSwitch = B('autosd-on');
+        const autosdResult = B('autosd-result');
+        const AUTOSD_REASONS = {
+            no_command: 'Not available: this UPS offers no shutdown command.',
+            no_ups: 'Not available: no UPS connected. Open this page again once the UPS is connected.'
+        };
+        let autosdBusy = false;
+        let autosdTimers = [];
+
+        // Missing in the answer (older firmware): treated as "no UPS"
+        function autosdState() {
+            const sd = board && board.auto_shutdown && typeof board.auto_shutdown === 'object'
+                ? board.auto_shutdown : null;
+            if (!sd) return { on: false, available: false, reason: 'no_ups' };
+            return { on: sd.on === true, available: sd.available === true, reason: sd.reason };
+        }
+
+        function renderAutoShutdown() {
+            const sd = autosdState();
+            autosdSwitch.checked = sd.on;
+            // Not available: it cannot be turned on, but it can always be turned off
+            autosdSwitch.disabled = autosdBusy || (!sd.available && !sd.on);
+            B('autosd-state').textContent = sd.on ? 'On' : 'Off';
+            B('autosd-state').classList.toggle('on', sd.on);
+            B('row-autosd').classList.toggle('is-disabled', !sd.available && !sd.on);
+            const note = B('autosd-unavailable');
+            note.hidden = sd.available;
+            if (!sd.available) {
+                B('autosd-unavailable-text').textContent = AUTOSD_REASONS[sd.reason] || AUTOSD_REASONS.no_ups;
+            }
+        }
+
+        function clearAutosdResult() {
+            autosdTimers.forEach(t => clearTimeout(t));
+            autosdTimers = [];
+            autosdResult.className = 'cmd-result';
+            autosdResult.textContent = '';
+        }
+
+        function showAutosdResult(text) {
+            clearAutosdResult();
+            autosdResult.className = 'cmd-result success';
+            autosdResult.textContent = `✓ ${text}`;
+            autosdTimers.push(setTimeout(() => autosdResult.classList.add('fade'), BOARD_RESULT_MS));
+            autosdTimers.push(setTimeout(clearAutosdResult, BOARD_RESULT_MS + 600));
+        }
+
+        autosdSwitch.addEventListener('change', async () => {
+            if (!board || autosdBusy) return;
+            const on = autosdSwitch.checked;
+            B('autosd-error').hidden = true;
+            clearAutosdResult();
+            autosdBusy = true;
+            renderAutoShutdown();
+            autosdSwitch.checked = on;
+            const r = await postBoard({ auto_shutdown: on });
+            autosdBusy = false;
+            // On error the switch goes back to the saved value
+            if (r.ok) {
+                if (!board.auto_shutdown || typeof board.auto_shutdown !== 'object') {
+                    board.auto_shutdown = { available: true };
+                }
+                board.auto_shutdown.on = on;
+            }
+            renderAutoShutdown();
+            if (r.ok) {
+                showAutosdResult(on ? 'Automatic shutdown on · saved' : 'Automatic shutdown off · saved');
+            } else {
+                B('autosd-error-text').textContent = r.message;
+                B('autosd-error').hidden = false;
+            }
+        });
+
+        // "UPS Settings tab" link in the hint: same as clicking the tab
+        B('autosd-section').addEventListener('click', (e) => {
+            const link = e.target.closest('[data-goto]');
+            if (!link) return;
+            const tab = document.querySelector(`.tab[data-target="${link.dataset.goto}"]`);
+            if (tab) tab.click();
+        });
+
+        // ---------- US-138: Q* driver options, applied without a restart ----------
+        const qxSelect = B('qx-protocol');
+        const qxSwitch = B('qx-novendor');
+        const btnSaveQx = B('btn-save-qx');
+        const qxResult = B('qx-result');
+        // While the protocol is not detected yet and the Board tab stays open, GET /api/board
+        // again every QX_REFRESH_MS: only "Detected protocol" changes, never the controls
+        const QX_REFRESH_MS = 5000;
+        let qxBusy = false;
+        let qxTimers = [];
+        let qxRefreshTimer = null;
+        let qxRefreshSeq = 0;
+
+        // The "qx" object of GET /api/board, present only while a Q* driver is bound
+        function qxState() {
+            const q = board && board.qx && typeof board.qx === 'object' ? board.qx : null;
+            if (!q) return null;
+            return {
+                protocol: typeof q.protocol === 'string' ? q.protocol : '',
+                novendor: q.novendor === true,
+                protocols: Array.isArray(q.protocols)
+                    ? q.protocols.filter(p => typeof p === 'string' && p !== '') : [],
+                detected: typeof q.detected === 'string' ? q.detected : ''
+            };
+        }
+
+        function qxDirty() {
+            const q = qxState();
+            return !!q && (qxSelect.value !== q.protocol || qxSwitch.checked !== q.novendor);
+        }
+
+        function refreshQxControls() {
+            const on = qxSwitch.checked;
+            B('qx-novendor-state').textContent = on ? 'On' : 'Off';
+            B('qx-novendor-state').classList.toggle('on', on);
+            qxSelect.disabled = qxBusy;
+            qxSwitch.disabled = qxBusy;
+            btnSaveQx.disabled = qxBusy || !qxDirty();
+        }
+
+        // Controls back to the saved values
+        function renderQx() {
+            const q = qxState();
+            B('qx-section').hidden = !q;
+            if (!q) {
+                stopQxRefresh();
+                return;
+            }
+            qxSelect.textContent = '';
+            const auto = document.createElement('option');
+            auto.value = '';
+            auto.textContent = 'Automatic';
+            qxSelect.appendChild(auto);
+            q.protocols.forEach(p => {
+                const o = document.createElement('option');
+                o.value = p;
+                o.textContent = p;
+                qxSelect.appendChild(o);
+            });
+            // A saved name the list does not have (older firmware): shown as automatic
+            qxSelect.value = q.protocols.includes(q.protocol) ? q.protocol : '';
+            qxSwitch.checked = q.novendor;
+            renderQxDetected(q.detected);
+            refreshQxControls();
+            scheduleQxRefresh();
+        }
+
+        function renderQxDetected(detected) {
+            const det = B('qx-detected');
+            det.textContent = detected || 'Not detected yet';
+            det.classList.toggle('on', detected !== '');
+        }
+
+        function stopQxRefresh() {
+            qxRefreshSeq++;
+            if (qxRefreshTimer) clearTimeout(qxRefreshTimer);
+            qxRefreshTimer = null;
+        }
+
+        // Armed after every render of the section: one pending read at most
+        function scheduleQxRefresh() {
+            stopQxRefresh();
+            const q = qxState();
+            if (!q || q.detected !== '' || sessionExpired || boardRestarting) return;
+            const seq = qxRefreshSeq;
+            qxRefreshTimer = setTimeout(() => refreshQxDetected(seq), QX_REFRESH_MS);
+        }
+
+        async function refreshQxDetected(seq) {
+            qxRefreshTimer = null;
+            if (seq !== qxRefreshSeq || sessionExpired || boardRestarting ||
+                !boardContent.classList.contains('active')) return;
+            let data = null;
+            try {
+                const res = await apiFetch('/api/board', { cache: 'no-store' });
+                if (res.ok) data = await res.json();
+            } catch (err) {
+                console.error('Failed to refresh the Q* section:', err);
+            }
+            // Tab left, tab opened again or settings saved meanwhile
+            if (seq !== qxRefreshSeq || !board || !board.qx) return;
+            if (data && typeof data === 'object') {
+                if (!data.qx || typeof data.qx !== 'object') {
+                    // The Q* UPS was unplugged: the section goes away
+                    delete board.qx;
+                    B('qx-section').hidden = true;
+                    return;
+                }
+                board.qx.detected = typeof data.qx.detected === 'string' ? data.qx.detected : '';
+                renderQxDetected(board.qx.detected);
+            }
+            // A failed read just waits for the next one
+            scheduleQxRefresh();
+        }
+
+        function clearQxResult() {
+            qxTimers.forEach(t => clearTimeout(t));
+            qxTimers = [];
+            qxResult.className = 'cmd-result';
+            qxResult.textContent = '';
+        }
+
+        function showQxResult(text) {
+            clearQxResult();
+            qxResult.className = 'cmd-result success';
+            qxResult.textContent = `✓ ${text}`;
+            qxTimers.push(setTimeout(() => qxResult.classList.add('fade'), BOARD_RESULT_MS));
+            qxTimers.push(setTimeout(clearQxResult, BOARD_RESULT_MS + 600));
+        }
+
+        qxSelect.addEventListener('change', () => {
+            B('qx-error').hidden = true;
+            refreshQxControls();
+        });
+        qxSwitch.addEventListener('change', () => {
+            B('qx-error').hidden = true;
+            refreshQxControls();
+        });
+
+        B('qx-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!board || qxBusy || !qxDirty()) return;
+            const payload = { qx_protocol: qxSelect.value, qx_novendor: qxSwitch.checked };
+            B('qx-error').hidden = true;
+            clearQxResult();
+            qxBusy = true;
+            refreshQxControls();
+            const r = await postBoard(payload);
+            qxBusy = false;
+            if (r.ok) {
+                board.qx.protocol = payload.qx_protocol;
+                board.qx.novendor = payload.qx_novendor;
+                // The detection starts again on the board
+                board.qx.detected = '';
+                renderQx();
+                showQxResult('Saved · detecting the protocol again');
+            } else {
+                // The controls go back to the saved values
+                renderQx();
+                B('qx-error-text').textContent = r.message;
+                B('qx-error').hidden = false;
+            }
+        });
+
+        // ---------- UPS USB port: saved, then the board restarts ----------
+        function setUsbButton(label, spinner) {
+            btnSaveUsb.innerHTML = '<span class="glow"></span>' + (spinner ? BOARD_SPINNER : '');
+            const span = document.createElement('span');
+            span.className = 'btn-label';
+            span.textContent = label;
+            btnSaveUsb.appendChild(span);
+        }
+
+        function usbRadios() {
+            return Array.from(usbPortBox.querySelectorAll('input[name="usb-port"]'));
+        }
+
+        function selectedPort() {
+            const r = usbRadios().find(i => i.checked);
+            return r ? r.value : null;
+        }
+
+        function clearUsbError() {
+            B('usb-error').hidden = true;
+            usbPortBox.classList.remove('invalid');
+        }
+
+        function showUsbError(text) {
+            B('usb-error-text').textContent = text;
+            B('usb-error').hidden = false;
+            usbPortBox.classList.add('invalid');
+        }
+
+        function refreshUsbButton() {
+            const port = selectedPort();
+            btnSaveUsb.disabled = boardRestarting || !port || port === board.usb.port;
+        }
+
+        function renderUsb(ports) {
+            usbPortBox.textContent = '';
+            ports.forEach(p => {
+                const card = document.createElement('label');
+                card.className = 'port-card';
+                const input = document.createElement('input');
+                input.type = 'radio';
+                input.name = 'usb-port';
+                input.value = p.id;
+                input.checked = p.id === board.usb.port;
+                const radio = document.createElement('span');
+                radio.className = 'port-radio';
+                radio.setAttribute('aria-hidden', 'true');
+                const body = document.createElement('span');
+                body.className = 'port-body';
+                const title = document.createElement('span');
+                title.className = 'port-title';
+                title.textContent = typeof p.label === 'string' && p.label !== '' ? p.label : p.id;
+                body.appendChild(title);
+                // "In use": the port saved on the device (the selection may differ before saving)
+                const current = document.createElement('span');
+                current.className = 'port-current';
+                current.textContent = 'In use';
+                current.hidden = p.id !== board.usb.port;
+                card.append(input, radio, body, current);
+                usbPortBox.appendChild(card);
+            });
+            clearUsbError();
+            B('board-success').hidden = true;
+            setUsbButton('Save & restart');
+            refreshUsbButton();
+        }
+
+        usbPortBox.addEventListener('change', () => {
+            clearUsbError();
+            refreshUsbButton();
+        });
+
+        // Board restarting: UPS shown as restarting in the sidebar, countdown in the element
+        // countdownId, then the page reloads (USB port change and Restart board, US-142)
+        function runRestartCountdown(countdownId) {
+            boardRestarting = true;
+            const indUps = B('ind-ups');
+            const lblUps = B('lbl-ups');
+            if (indUps) indUps.className = 'status-indicator warning';
+            if (lblUps) lblUps.textContent = 'Restarting...';
+            let left = BOARD_RESTART_S;
+            B(countdownId).textContent = left;
+            const timer = setInterval(() => {
+                left -= 1;
+                B(countdownId).textContent = Math.max(0, left);
+                if (left <= 0) {
+                    clearInterval(timer);
+                    window.location.reload();
+                }
+            }, 1000);
+        }
+
+        function startBoardRestart() {
+            usbRadios().forEach(r => { r.disabled = true; });
+            btnSaveUsb.disabled = true;
+            setUsbButton('Restarting…', true);
+            B('board-success').hidden = false;
+            runRestartCountdown('usb-countdown');
+        }
+
+        // ---------- US-142: Restart board ----------
+        const btnRestart = B('btn-restart-board');
+
+        function setRestartButton(label, spinner) {
+            btnRestart.innerHTML = spinner ? BOARD_SPINNER : '';
+            const span = document.createElement('span');
+            span.className = 'btn-label';
+            span.textContent = label;
+            btnRestart.appendChild(span);
+        }
+
+        btnRestart.addEventListener('click', async () => {
+            if (boardRestarting || btnRestart.disabled) return;
+            if (!window.confirm('Restart the board now?\n\nThe Web UI and NUT clients disconnect for about ' +
+                '15 seconds. The UPS keeps running.')) return;
+            B('restart-error').hidden = true;
+            btnRestart.disabled = true;
+            setRestartButton('Restarting…', true);
+            let message = null;
+            try {
+                const res = await apiFetch('/api/system/restart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                let json = null;
+                try { json = await res.json(); } catch (e) { json = null; }
+                if (res.status !== 200) {
+                    message = json && typeof json.error === 'string' && json.error !== ''
+                        ? json.error : `Failed (HTTP ${res.status})`;
+                }
+            } catch (err) {
+                console.error('Restart error:', err);
+                message = 'Network error';
+            }
+            if (message) {
+                B('restart-error-text').textContent = message;
+                B('restart-error').hidden = false;
+                btnRestart.disabled = false;
+                setRestartButton('Restart');
+                return;
+            }
+            B('restart-success').hidden = false;
+            runRestartCountdown('restart-countdown');
+        });
+
+        B('usb-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const port = selectedPort();
+            if (btnSaveUsb.disabled || boardRestarting || !board || !port || port === board.usb.port) return;
+            clearUsbError();
+            btnSaveUsb.disabled = true;
+            usbRadios().forEach(r => { r.disabled = true; });
+            setUsbButton('Saving…', true);
+            const r = await postBoard({ usb_port: port });
+            if (!r.ok) {
+                usbRadios().forEach(i => { i.disabled = false; });
+                setUsbButton('Save & restart');
+                showUsbError(r.message);
+                refreshUsbButton();
+                return;
+            }
+            board.usb.port = port;
+            if (r.restart) {
+                usbPortBox.querySelectorAll('.port-current').forEach(t => {
+                    t.hidden = t.parentElement.querySelector('input').value !== port;
+                });
+                startBoardRestart();
+            } else {
+                renderUsb(board.usb.ports);
+            }
+        });
+
+        // ---------- Load ----------
+        function renderBoard() {
+            const id = typeof board.id === 'string' ? board.id : '';
+            const label = typeof board.label === 'string' && board.label !== '' ? board.label : (id || '--');
+            B('board-name').textContent = label;
+            B('board-profile').title = id ? `Board profile: ${id} (read-only)` : 'Board profile';
+
+            const hasLed = !!board.led && typeof board.led === 'object' && board.led.present !== false;
+            B('led-section').hidden = !hasLed;
+            if (hasLed) {
+                clearLedError();
+                renderLed();
+            }
+
+            const ports = board.usb && Array.isArray(board.usb.ports)
+                ? board.usb.ports.filter(p => p && typeof p.id === 'string' && p.id !== '')
+                : [];
+            const hasUsb = ports.length > 1;
+            B('usb-section').hidden = !hasUsb;
+            if (hasUsb) renderUsb(ports);
+
+            // US-138: only while a Q* driver is bound
+            B('qx-error').hidden = true;
+            renderQx();
+
+            // US-114: on every board
+            B('autosd-error').hidden = true;
+            renderAutoShutdown();
+        }
+
+        async function loadBoard() {
+            if (sessionExpired || boardRestarting) return;
+            const seq = ++boardLoadSeq;
+            let data = null;
+            try {
+                const res = await apiFetch('/api/board', { cache: 'no-store' });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                data = await res.json();
+            } catch (err) {
+                console.error('Failed to fetch board settings:', err);
+            }
+            // A newer request started meanwhile, or the board is restarting
+            if (seq !== boardLoadSeq || boardRestarting) return;
+            if (!data || typeof data !== 'object') {
+                B('board-error-text').textContent = 'Could not read the board settings. Open the tab again to retry.';
+                B('board-error').hidden = false;
+                return;
+            }
+            B('board-error').hidden = true;
+            board = data;
+            renderBoard();
+        }
+
+        // One read per opening; the only periodic request is the Q* refresh (US-138), while the
+        // protocol is not detected yet and only with this tab open
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                if (tab.getAttribute('data-target') === 'board') loadBoard();
+                else stopQxRefresh();
+            });
+        });
+        if (activeTab && activeTab.getAttribute('data-target') === 'board') loadBoard();
+    }
+
+    // --- Firmware updates section of Board Settings: GET /api/update when the tab opens,
+    // POST /api/update/settings on each change of the switch ---
+    const fwcheckSwitch = document.getElementById('fwcheck-on');
+    if (fwcheckSwitch) {
+        const F = (id) => document.getElementById(id);
+        let fwcheckOn = null;
+        let fwcheckBusy = false;
+        let fwcheckTimer = null;
+
+        function renderFwcheck() {
+            const known = fwcheckOn !== null;
+            fwcheckSwitch.checked = fwcheckOn === true;
+            fwcheckSwitch.disabled = fwcheckBusy || !known;
+            F('fwcheck-state').textContent = fwcheckOn ? 'On' : 'Off';
+            F('fwcheck-state').classList.toggle('on', fwcheckOn === true);
+            F('row-fwcheck').classList.toggle('is-disabled', !known);
+        }
+
+        function fwcheckError(text) {
+            F('fwcheck-error-text').textContent = text;
+            F('fwcheck-error').hidden = false;
+        }
+
+        async function loadFwcheck() {
+            if (sessionExpired) return;
+            try {
+                const res = await apiFetch('/api/update', { cache: 'no-store' });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                fwcheckOn = data.auto_check === true;
+                F('fwcheck-error').hidden = true;
+            } catch (err) {
+                console.error('Failed to fetch update settings:', err);
+                fwcheckOn = null;
+                fwcheckError('Could not read the update settings. Open the tab again to retry.');
+            }
+            renderFwcheck();
+        }
+
+        fwcheckSwitch.addEventListener('change', async () => {
+            if (fwcheckBusy || fwcheckOn === null) return;
+            const on = fwcheckSwitch.checked;
+            F('fwcheck-error').hidden = true;
+            clearTimeout(fwcheckTimer);
+            F('fwcheck-result').textContent = '';
+            fwcheckBusy = true;
+            renderFwcheck();
+            fwcheckSwitch.checked = on;
+            let message = 'Network error';
+            try {
+                const res = await apiFetch('/api/update/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ auto_check: on })
+                });
+                let json = null;
+                try { json = await res.json(); } catch (err) { json = null; }
+                if (res.ok && json && json.success === true) {
+                    message = null;
+                } else {
+                    message = (json && typeof json.error === 'string' && json.error) || `Failed (HTTP ${res.status})`;
+                }
+            } catch (err) {
+                console.error('Update settings save error:', err);
+            }
+            fwcheckBusy = false;
+            if (message === null) {
+                fwcheckOn = on;
+                F('fwcheck-result').className = 'cmd-result success';
+                F('fwcheck-result').textContent = on ? '✓ Daily update check on · saved' : '✓ Daily update check off · saved';
+                fwcheckTimer = setTimeout(() => { F('fwcheck-result').textContent = ''; }, 4000);
+            } else {
+                fwcheckError(message);
+            }
+            renderFwcheck();
+        });
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                if (tab.getAttribute('data-target') === 'board') loadFwcheck();
+            });
+        });
+        if (activeTab && activeTab.getAttribute('data-target') === 'board') loadFwcheck();
+    }
+
+    // --- US-117: Time section of Board Settings (ADR 0009). GET /api/time when the tab opens
+    // and after Save; while the tab is visible, again every 10 s for the state only. The form
+    // is never overwritten while the user is editing it. The select is filled from
+    // "options.zones". Applied by the firmware without a restart. ---
+    const timeSection = document.getElementById('time-section');
+    if (timeSection) {
+        const T = (id) => document.getElementById(id);
+        const TIME_POLL_MS = 10000;
+        const TIME_RESULT_MS = 4000;
+        // The firmware applies new settings in the next loop: state read again after it
+        const TIME_APPLY_MS = 1500;
+        const TIME_LOOK = {
+            disabled: { badge: 'idle', dot: 'off', text: 'Off' },
+            waiting: { badge: 'connecting', dot: 'warning', text: 'Waiting' },
+            synchronized: { badge: 'connected', dot: 'success', text: 'Synchronized' },
+            no_answer: { badge: 'down', dot: 'danger', text: 'No answer' }
+        };
+        const TIME_FIELDS = ['f-time-server', 'f-time-zone'];
+        // Field of a 400 {"error"} of the API
+        const TIME_ERROR_FIELD = {
+            'Invalid server': 'f-time-server',
+            'Server required to enable NTP': 'f-time-server',
+            'Invalid time zone': 'f-time-zone',
+            'Invalid DHCP option': null
+        };
+        const TIME_SPINNER = '<span class="cmd-spinner"></span>';
+        const btnSave = T('btn-save-time');
+        const result = T('time-result');
+
+        let time = null;            // last GET /api/time
+        let timeDirty = false;      // the form was edited since it was filled
+        let timeSaving = false;
+        let timeLoadSeq = 0;
+        let zonesKey = '';
+        let timeTimers = [];
+
+        // Same rule as validNtpServer() of the firmware
+        function validServer(h) {
+            return /^[A-Za-z0-9.-]{1,63}$/.test(h) && !/^[.-]/.test(h) && !h.endsWith('.');
+        }
+
+        function renderZones() {
+            const zones = time.options && Array.isArray(time.options.zones)
+                ? time.options.zones.filter(z => typeof z === 'string' && z !== '') : [];
+            const key = zones.join('|');
+            if (key === zonesKey) return;
+            zonesKey = key;
+            const sel = T('time-zone');
+            const keep = sel.value;
+            sel.textContent = '';
+            zones.forEach(z => {
+                const opt = document.createElement('option');
+                opt.value = z;
+                opt.textContent = z.replace(/_/g, ' ');
+                sel.appendChild(opt);
+            });
+            if (zones.includes(keep)) sel.value = keep;
+        }
+
+        function setSwitch(on) {
+            T('time-ntp').checked = on;
+            T('time-ntp-state').textContent = on ? 'On' : 'Off';
+            T('time-ntp-state').classList.toggle('on', on);
+            // US-145: the DHCP option needs NTP; it keeps its value while disabled
+            T('time-dhcp').disabled = !on;
+        }
+
+        function setDhcpSwitch(on) {
+            T('time-dhcp').checked = on;
+            T('time-dhcp-state').textContent = on ? 'On' : 'Off';
+            T('time-dhcp-state').classList.toggle('on', on);
+        }
+
+        function hideError() {
+            T('time-error').hidden = true;
+            TIME_FIELDS.forEach(id => {
+                T(id).classList.remove('invalid');
+                T(id).querySelector('input, select').removeAttribute('aria-invalid');
+            });
+        }
+
+        function showError(fieldId, text) {
+            hideError();
+            T('time-error-text').textContent = text;
+            T('time-error').hidden = false;
+            if (fieldId) {
+                T(fieldId).classList.add('invalid');
+                T(fieldId).querySelector('input, select').setAttribute('aria-invalid', 'true');
+            }
+        }
+
+        function renderForm() {
+            const s = time.time || {};
+            setSwitch(s.ntp === true);
+            setDhcpSwitch(s.dhcp === true);
+            T('time-server').value = typeof s.server === 'string' ? s.server : '';
+            if (typeof s.zone === 'string') T('time-zone').value = s.zone;
+            hideError();
+        }
+
+        function renderStatus() {
+            const st = time.status || {};
+            const state = TIME_LOOK[st.state] ? st.state : 'disabled';
+            const look = TIME_LOOK[state];
+            const badge = T('time-state');
+            badge.className = 'link-badge ' + look.badge;
+            badge.querySelector('.status-indicator').className = 'status-indicator ' + look.dot;
+            badge.querySelector('.badge-text').textContent = look.text;
+            renderSource(st);
+
+            // "2026-11-05 09:12:03 CET", only with a valid time
+            const now = T('time-now');
+            const hasTime = typeof st.local === 'string' && st.local !== '';
+            now.className = hasTime ? '' : 'na';
+            now.textContent = '';
+            if (!hasTime) {
+                now.textContent = '—';
+                now.title = '';
+                return;
+            }
+            const main = document.createElement('span');
+            main.className = 'main';
+            main.textContent = typeof st.abbr === 'string' && st.abbr !== '' ? `${st.local} ${st.abbr}` : st.local;
+            now.appendChild(main);
+            now.title = typeof st.utc === 'string' ? `UTC ${st.utc}` : '';
+        }
+
+        // US-145: "192.168.1.1 (from DHCP)" or "pool.ntp.org (configured)", with a note on
+        // the DHCP server; "—" with NTP off (no "server" in the status)
+        function renderSource(st) {
+            const el = T('time-source');
+            el.textContent = '';
+            const server = typeof st.server === 'string' ? st.server : '';
+            if (timeStateOf(st) === 'disabled' || server === '') {
+                el.className = 'na';
+                el.textContent = '—';
+                return;
+            }
+            el.className = '';
+            const main = document.createElement('span');
+            main.className = 'main';
+            main.textContent = `${server} ${st.origin === 'dhcp' ? '(from DHCP)' : '(configured)'}`;
+            el.appendChild(main);
+            const dhcpServer = typeof st.dhcp_server === 'string' ? st.dhcp_server : '';
+            let note = '';
+            if (st.dhcp === 'none') note = 'DHCP gave no server';
+            else if (st.dhcp === 'no_answer') note = `DHCP server ${dhcpServer} did not answer`;
+            else if (st.dhcp === 'off' && dhcpServer !== '') note = `DHCP offers ${dhcpServer}`;
+            if (note) {
+                const sub = document.createElement('span');
+                sub.className = 'sub';
+                sub.textContent = note;
+                el.append(' ', sub);
+            }
+        }
+
+        function timeStateOf(st) {
+            return TIME_LOOK[st.state] ? st.state : 'disabled';
+        }
+
+        // statusOnly: the 10 s refresh (the form follows the same rule as any load: filled
+        // again only when it is not being edited)
+        async function loadTime(statusOnly) {
+            if (sessionExpired) return;
+            const seq = ++timeLoadSeq;
+            let data = null;
+            try {
+                const res = await apiFetch('/api/time', { cache: 'no-store' });
+                if (res.status === 401) return;
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                data = await res.json();
+            } catch (err) {
+                console.error('Failed to fetch time settings:', err);
+            }
+            if (seq !== timeLoadSeq) return;
+            if (!data || typeof data !== 'object' || !data.time) {
+                if (!statusOnly && !timeDirty) {
+                    showError(null, 'Could not read the time settings. Open the tab again to retry.');
+                }
+                return;
+            }
+            time = data;
+            renderZones();
+            if (!timeDirty && !timeSaving) renderForm();
+            renderStatus();
+        }
+
+        function clearResult() {
+            timeTimers.forEach(clearTimeout);
+            timeTimers = [];
+            result.textContent = '';
+            result.className = 'cmd-result';
+        }
+
+        function setSaveButton(spinner) {
+            btnSave.innerHTML = '<span class="glow"></span>' + (spinner ? TIME_SPINNER : '');
+            btnSave.appendChild(document.createTextNode(spinner ? ' Saving...' : ' Save'));
+        }
+
+        // Same checks as checkTimeBody() of the firmware
+        function validate(v) {
+            if (v.server && !validServer(v.server)) {
+                return ['f-time-server', 'Invalid server: use an IP address or a host name (letters, digits, dots, hyphens)'];
+            }
+            if (v.ntp && !v.server) return ['f-time-server', 'Server required to enable NTP'];
+            if (!v.zone) return ['f-time-zone', 'Invalid time zone'];
+            return null;
+        }
+
+        async function saveTime(e) {
+            e.preventDefault();
+            if (timeSaving || !time) return;
+            clearResult();
+            const server = T('time-server').value.trim();
+            T('time-server').value = server;
+            const v = { ntp: T('time-ntp').checked, server, zone: T('time-zone').value, dhcp: T('time-dhcp').checked };
+            const err = validate(v);
+            if (err) {
+                showError(err[0], err[1]);
+                T(err[0]).querySelector('input, select').focus();
+                return;
+            }
+            hideError();
+            timeSaving = true;
+            btnSave.disabled = true;
+            setSaveButton(true);
+            let ok = false;
+            let message = null;
+            try {
+                const res = await apiFetch('/api/time', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ time: v })
+                });
+                let json = null;
+                try { json = await res.json(); } catch (x) { json = null; }
+                ok = res.status === 200 && !!json && json.success === true;
+                if (!ok) {
+                    message = json && typeof json.error === 'string' && json.error !== ''
+                        ? json.error : `Failed (HTTP ${res.status})`;
+                }
+            } catch (x) {
+                console.error('Time settings save error:', x);
+                message = 'Network error';
+            }
+            timeSaving = false;
+            btnSave.disabled = false;
+            setSaveButton(false);
+            if (sessionExpired) return;
+            if (!ok) {
+                // The message of the server, as it is
+                showError(TIME_ERROR_FIELD[message] || null, message);
+                return;
+            }
+            timeDirty = false;
+            result.className = 'cmd-result success';
+            result.textContent = v.ntp ? `✓ Saved, applied now (${v.server}, ${v.zone})` : `✓ Saved, NTP off (${v.zone})`;
+            timeTimers.push(setTimeout(() => result.classList.add('fade'), TIME_RESULT_MS));
+            loadTime(false);
+            timeTimers.push(setTimeout(() => loadTime(true), TIME_APPLY_MS));
+        }
+
+        function edited() {
+            timeDirty = true;
+            hideError();
+            clearResult();
+        }
+
+        T('time-ntp').addEventListener('change', (e) => { setSwitch(e.target.checked); edited(); });
+        T('time-dhcp').addEventListener('change', (e) => { setDhcpSwitch(e.target.checked); edited(); });
+        T('time-server').addEventListener('input', edited);
+        T('time-zone').addEventListener('change', edited);
+        T('time-form').addEventListener('submit', saveTime);
+
+        // Every opening of the tab; then the state every 10 s while it is visible
+        tabs.forEach(tab => tab.addEventListener('click', () => {
+            if (tab.getAttribute('data-target') === 'board') loadTime(false);
+        }));
+        if (activeTab && activeTab.getAttribute('data-target') === 'board') loadTime(false);
+        setInterval(() => {
+            if (sessionExpired || !time || document.hidden) return;
+            if (!document.getElementById('content-board').classList.contains('active')) return;
+            loadTime(true);
+        }, TIME_POLL_MS);
+    }
+
+    // US-061 Log out (this session) and US-062 Log out of all devices: same
+    // flow, different endpoint. Both buttons live in the session row, so they
+    // share its visibility (hidden in AP mode and without a session).
+    function bindLogout(btn, url) {
+        if (!btn) return;
+        const all = url === '/api/auth/logout-all';
+        btn.addEventListener('click', async () => {
+            if (btnLogout) btnLogout.disabled = true;
+            if (btnLogoutAll) btnLogoutAll.disabled = true;
+            if (logoutAllError) logoutAllError.hidden = true;
+            // Stop the polling first: after the logout every API call would get 401
+            sessionExpired = true;
+            let ok = false;
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                // Same redirect as apiFetch (sessionExpired is already set here)
+                if (all && response.status === 401) {
+                    redirectExpired();
+                    return;
+                }
+                ok = response.ok;
+            } catch (err) {
+                console.error('Logout request failed:', err);
+            }
+            // US-062: logout-all failed, the session is still open: stay and retry
+            if (all && !ok) {
+                sessionExpired = false;
+                if (logoutAllError) logoutAllError.hidden = false;
+                if (btnLogout) btnLogout.disabled = false;
+                if (btnLogoutAll) btnLogoutAll.disabled = false;
+                return;
+            }
+            window.location.replace('/login');
+        });
+    }
+    bindLogout(btnLogout, '/api/auth/logout');
+    bindLogout(btnLogoutAll, '/api/auth/logout-all');
 });

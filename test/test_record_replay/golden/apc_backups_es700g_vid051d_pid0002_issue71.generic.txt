@@ -1,0 +1,68 @@
+[snapshot]
+battery.charge.low=10
+battery.charge=97
+battery.mfr.date=2018/04/15
+battery.runtime=1860
+battery.voltage.nominal=12
+battery.voltage=13.3
+driver.name=esp32-nut
+driver.version.data=GenericDriver
+driver.version=dev
+input.transfer.high=266
+input.transfer.low=180
+input.voltage.nominal=230
+input.voltage=234.0
+ups.beeper.status=enabled
+ups.delay.shutdown=20
+ups.mfr.date=2018/04/15
+ups.mfr=APC
+ups.model=Back-UPS ES 700G FW:871.O4 .I USB FW:O4 
+ups.serial=TEST0000
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=1
+ups.status.discharging=0
+ups.status.no_battery=0
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.status.replace_battery=0
+ups.status.shutdown_imminent=0
+ups.status=OL CHRG
+[cmd]
+beeper.enable beeper.disable beeper.toggle beeper.mute test.panel.start test.panel.stop load.off load.off.delay shutdown.stop shutdown.reboot shutdown.default
+[rw]
+ups.delay.shutdown:10
+[rw.final]
+ups.delay.shutdown:10
+[snapshot.final]
+battery.charge.low=10
+battery.charge=97
+battery.mfr.date=2018/04/15
+battery.runtime=1860
+battery.voltage.nominal=12
+battery.voltage=13.3
+driver.name=esp32-nut
+driver.version.data=GenericDriver
+driver.version=dev
+input.transfer.high=266
+input.transfer.low=180
+input.voltage.nominal=230
+input.voltage=234.0
+ups.beeper.status=enabled
+ups.delay.shutdown=20
+ups.mfr.date=2018/04/15
+ups.mfr=APC
+ups.model=Back-UPS ES 700G FW:871.O4 .I USB FW:O4 
+ups.serial=TEST0000
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=1
+ups.status.discharging=0
+ups.status.no_battery=0
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.status.replace_battery=0
+ups.status.shutdown_imminent=0
+ups.status=OL CHRG
+[requests]
+ 7/3 8/3 9/3 12/3 22/3 24/3 32/3 48/3 49/3 50/3 51/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 7/3 8/3 9/3 12/3 22/3 24/3 32/3 48/3 49/3 50/3 51/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3 12/3 22/3 34/3 35/3 80/3 122/3

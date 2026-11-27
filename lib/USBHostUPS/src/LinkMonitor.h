@@ -15,6 +15,12 @@
  * After a link failure, polling backs off exponentially. If the pipe does not come
  * back within linkTimeoutMs, the monitor first asks for an interface recovery
  * (up to maxRecoveries times), then for a controlled restart.
+ * If a timed-out control transfer is still held by the USB stack (ctrlStuck), an
+ * interface recovery cannot free EP0: stuckRestartMs after the first failure the monitor
+ * asks for the restart directly (issue #60, APC Back-UPS BX). 3 s, before the data turns
+ * stale (staleAfterMs). For a RESTART with ctrlStuck the owner first power-cycles the
+ * root port, which hands the stuck URB back, and restarts only if that did not help
+ * (PortCyclePolicy, US-122).
  * Devices that only stream INPUT reports never issue control requests, so they
  * never accumulate failures and are never reset.
  */
@@ -28,27 +34,19 @@ public:
         uint32_t staleAfterMs;
         uint32_t linkTimeoutMs;
         uint8_t maxRecoveries;
+        uint32_t stuckRestartMs;
     };
 
     static Config defaultConfig() {
-        return Config{2000, 30000, 20000, 60000, 2};
+        return Config{2000, 30000, 20000, 60000, 2, 3000};
     }
 
     LinkMonitor() : LinkMonitor(defaultConfig()) {}
-    explicit LinkMonitor(const Config& cfg) : _cfg(cfg), _carriesData(true) { reset(0); }
-
-    /**
-     * False when the control pipe carries no UPS data (QUIRK_NO_GET_REPORT: values only
-     * come from INPUT reports, guarded by InputWatchdog). Its failures then still back off
-     * the remaining requests (strings, beeper) but never make the data stale nor climb the
-     * recovery ladder: a string request timing out on such a device used to restart the
-     * board while INPUT data kept flowing.
-     */
-    void setCarriesData(bool carriesData) { _carriesData = carriesData; }
-    bool carriesData() const { return _carriesData; }
+    explicit LinkMonitor(const Config& cfg) : _cfg(cfg) { reset(0); }
 
     void reset(uint32_t now) {
         _failures = 0;
+        _firstFailureMs = now;
         _recoveries = 0;
         _lastAliveMs = now;
         _windowStartMs = now;
@@ -65,6 +63,7 @@ public:
     }
 
     void onLinkFailure(uint32_t now) {
+        if (_failures == 0) _firstFailureMs = now;
         if (_failures < 255) _failures++;
         uint32_t backoff = _cfg.backoffBaseMs;
         for (uint8_t i = 1; i < _failures && backoff < _cfg.backoffMaxMs; i++) backoff *= 2;
@@ -78,22 +77,15 @@ public:
     }
 
     bool isStale(uint32_t now) const {
-        return _carriesData && _failures > 0 && (now - _lastAliveMs) >= _cfg.staleAfterMs;
+        return _failures > 0 && (now - _lastAliveMs) >= _cfg.staleAfterMs;
     }
 
-    /**
-     * With no device attached nothing is current (review A1): like usbhid-ups + upsd,
-     * NUT clients must get ERR DATA-STALE, not an empty "Unknown" status. A UPS that
-     * resets its USB port when it goes on battery would otherwise never show OB.
-     * Only the first bootGraceMs after boot are exempt, while the UPS enumerates.
-     */
-    static bool isStaleWithoutDevice(bool deviceSeen, uint32_t now, uint32_t bootGraceMs) {
-        return deviceSeen || now >= bootGraceMs;
-    }
-
-    Action tick(uint32_t now) {
-        if (!_carriesData) return Action::NONE;
-        if (_failures == 0 || (now - _windowStartMs) < _cfg.linkTimeoutMs) return Action::NONE;
+    Action tick(uint32_t now, bool ctrlStuck = false) {
+        if (_failures == 0) return Action::NONE;
+        // An interface restart cannot give EP0 back: the owner power-cycles the root port,
+        // or restarts (US-122, ADR 0008)
+        if (ctrlStuck && (now - _firstFailureMs) >= _cfg.stuckRestartMs) return Action::RESTART;
+        if ((now - _windowStartMs) < _cfg.linkTimeoutMs) return Action::NONE;
         if (_recoveries >= _cfg.maxRecoveries) return Action::RESTART;
         _recoveries++;
         // Give the recovered interface a full window before escalating again.
@@ -108,9 +100,9 @@ public:
 
 private:
     Config _cfg;
-    bool _carriesData;
     uint8_t _failures;
     uint8_t _recoveries;
+    uint32_t _firstFailureMs; // first failure since the device last answered
     uint32_t _lastAliveMs;
     uint32_t _windowStartMs;
     uint32_t _backoffUntilMs;
@@ -121,8 +113,9 @@ private:
  * @brief Liveness check of the interrupt IN pipe (review A2).
  *
  * LinkMonitor only sees EP0. If INPUT reports stop without any error, the values they
- * carry stay frozen and never become stale: the worst case is QUIRK_NO_GET_REPORT
- * (APC 5G, Smart-UPS), where INPUT reports are the only source of data.
+ * carry stay frozen and never become stale. With QUIRK_NO_INTERRUPT_PIPE (APC 5G, US-108)
+ * INPUT reports are dropped before onInput(): the watchdog is never fed, never periodic,
+ * and never acts.
  *
  * The watchdog learns the period of the device. Reports closer than burstGapMs form one
  * burst (a device sends several report IDs at once), and the intervals between bursts
@@ -131,6 +124,14 @@ private:
  * makes the data stale and asks for an interface recovery, then a restart, with the same
  * ladder as LinkMonitor. Devices that send only on changes are never periodic, so the
  * watchdog never acts on them.
+ *
+ * US-123 (issue #111): the watchdog guards values that would freeze. When the driver
+ * requests with GET_REPORT every value it reads from the INPUT reports
+ * (IUPSDriver::inputValuesPolled(), passed in with setValuesPolled()), a silence freezes
+ * nothing: the poll reads those reports again once their INPUT twins are older than
+ * maxReportAgeMs(). The watchdog then never makes the data stale and never asks for a
+ * recovery or a restart, as usbhid-ups, which has no INPUT watchdog at all (ADR 0003). It
+ * keeps learning the period, and takeSilenceNotice() reports each silence once, for the log.
  */
 class InputWatchdog {
 public:
@@ -162,7 +163,14 @@ public:
         _silent = false;
         _recoveries = 0;
         _windowStartMs = now;
+        _valuesPolled = false;
+        _noticed = false;
     }
+
+    // US-123: true when the poll requests every value of the INPUT reports. The owner sets it
+    // from the driver before each tick(); reset() clears it (unknown for a new device).
+    void setValuesPolled(bool polled) { _valuesPolled = polled; }
+    bool valuesPolled() const { return _valuesPolled; }
 
     // ts: when the HID task received the report, not when the loopTask processed it
     void onInput(uint32_t ts) {
@@ -170,6 +178,7 @@ public:
         uint32_t threshold = silenceThresholdMs();
         _silent = false;
         _recoveries = 0;
+        _noticed = false;
 
         if (_haveBurst && (ts - _lastInputMs) < _cfg.burstGapMs) {
             _lastInputMs = ts; // same burst
@@ -209,10 +218,18 @@ public:
         return t > _cfg.minSilenceMs ? t : _cfg.minSilenceMs;
     }
 
-    bool isStale(uint32_t now) const {
+    // A silence of a periodic device, whether or not the poll covers its values
+    bool isSilent(uint32_t now) const {
         return isPeriodic() && (now - _lastInputMs) >= silenceThresholdMs();
     }
 
+    // Values the poll does not read again are frozen (never with setValuesPolled(true))
+    bool isStale(uint32_t now) const {
+        return !_valuesPolled && isSilent(now);
+    }
+
+    // With the values polled: NONE, and the ladder state (_silent, _recoveries, window) is
+    // left alone, so a change of coverage starts the ladder from the beginning
     Action tick(uint32_t now) {
         if (!isStale(now)) return Action::NONE;
         if (!_silent) {
@@ -227,6 +244,14 @@ public:
     }
 
     uint8_t recoveries() const { return _recoveries; }
+
+    // US-123: true once per silence while the values are polled, for one log line. A new
+    // INPUT report or reset() arms it again.
+    bool takeSilenceNotice(uint32_t now) {
+        if (!_valuesPolled || _noticed || !isSilent(now)) return false;
+        _noticed = true;
+        return true;
+    }
 
 private:
     uint32_t median() const {
@@ -252,6 +277,8 @@ private:
     bool _silent;
     uint8_t _recoveries;
     uint32_t _windowStartMs;
+    bool _valuesPolled; // US-123: every INPUT value is also requested by the poll
+    bool _noticed;      // takeSilenceNotice() already reported the current silence
 };
 
 #endif // LINK_MONITOR_H

@@ -1,11 +1,16 @@
-import { test, expect } from './fixtures';
+import { test, expect } from '@playwright/test';
+import { serveIndex } from './support/webui';
 
 test.describe('Responsive Web UI', () => {
   // Impostiamo la viewport a una risoluzione tipica per mobile
   test.use({ viewport: { width: 375, height: 812 } });
 
+  test.beforeEach(async ({ page }) => {
+    await serveIndex(page);
+  });
+
   test('should display mobile layout and prevent horizontal scroll', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('http://esp32.local/');
 
     const appContainer = page.locator('.app-container');
     await expect(appContainer).toBeVisible();

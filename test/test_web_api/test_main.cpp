@@ -1,7 +1,11 @@
 #include <Arduino.h>
 #include <unity.h>
 #include <ArduinoJson.h>
+#include <string>
+#include <utility>
+#include <vector>
 #include "WebApiJson.h"
+#include "IUSBHostUPS.h"
 
 // A simple mock for testing API JSON generation natively
 class APIMockUSBHost : public IUSBHostUPS {
@@ -10,15 +14,22 @@ public:
     bool connected = true;
     std::vector<HIDUsageDef> usages;
 
+    // Chiamate ai metodi dell'host usati dalle API delle variabili, per verificare che i
+    // 400 di forma non lo tocchino (US-068)
+    mutable int hostCalls = 0;
+
     void lock() const override {}
     void unlock() const override {}
     void end() override {}
-    UPSDataLock getUPSData() const override { return UPSDataLock(data, this); }
-    bool isConnected() const override { return connected; }
+    UPSDataLock getUPSData() const override { hostCalls++; return UPSDataLock(data, this); }
+    bool isConnected() const override { hostCalls++; return connected; }
     String getUPSStatusString() const override { return connected ? "OL" : "UNKNOWN"; }
     bool setBeeper(bool enable) override { return true; }
     bool supportsBeeperToggle() const override { return true; }
-    
+    // As GenericDriver (US-079): the commands of the genericHid2Nut() rows
+    const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::genericHid2Nut(n); }
+    bool setBeeperField(const HIDUsageDef&, bool enable) override { return setBeeper(enable); }
+
     // New pure virtuals
     HIDParser _hid_parser;
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
@@ -29,11 +40,107 @@ public:
     bool isPollingPaused() const override { return false; }
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) override { return true; }
     bool requestStringDescriptor(uint8_t string_index) override { return true; }
+
+    // Scritture HID registrate (path, valore) per i test dei comandi (US-059)
+    bool writeOk = true;
+    std::vector<std::pair<std::string, uint32_t>> writes;
+    bool writeUsage(const HIDUsageDef& def, uint32_t value) override {
+        writes.emplace_back(def.path, value);
+        return writeOk;
+    }
+
+    // Chiamate a executeCommand(), per verificare quando un comando arriva all'host (US-058)
+    int executeCalls = 0;
+    CommandResult executeCommand(const char* name, const char* param = nullptr) override {
+        executeCalls++;
+        return IUSBHostUPS::executeCommand(name, param);
+    }
+
+    // --- US-068: variabili scrivibili ---
+
+    bool stale = false;
+    bool isDataStale() const override { hostCalls++; return stale; }
+
+    // US-132: first poll pending and recognised-but-unsupported device
+    bool waitingFirstData = false;
+    bool isWaitingFirstData() const override { return waitingFirstData; }
+    String unsupported;
+    String unsupportedDevice() const override { return unsupported; }
+
+    // Catalogo LIST RW restituito così com'è
+    std::vector<NutTable::RWVariable> rw;
+    std::vector<NutTable::RWVariable> getWritableVariables() const override { hostCalls++; return rw; }
+
+    // Scritture arrivate all'host, {name, value}, e il loro esito. Con OK il valore finisce
+    // nei dati, oppure storedValue se impostato (un UPS che arrotonda)
+    NutTable::SetStatus setResult = NutTable::SetStatus::OK;
+    const char* storedValue = nullptr;
+    std::vector<std::pair<std::string, std::string>> sets;
+    NutTable::SetStatus setVariable(const char* name, const char* value) override {
+        hostCalls++;
+        sets.push_back({name, value});
+        if (setResult == NutTable::SetStatus::OK) data.set(name, storedValue ? storedValue : value);
+        if (disconnectOnWrite) connected = false;
+        return setResult;
+    }
+
+    // Reset arrivati all'host e il loro esito. Con OK la variabile torna a resetDefault
+    NutTable::SetStatus resetResult = NutTable::SetStatus::OK;
+    const char* resetDefault = "";
+    std::vector<std::string> resets;
+    NutTable::SetStatus resetVariable(const char* name) override {
+        hostCalls++;
+        resets.push_back(name);
+        if (resetResult == NutTable::SetStatus::OK) data.set(name, resetDefault);
+        if (disconnectOnWrite) connected = false;
+        return resetResult;
+    }
+
+    // UPS scollegato durante setVariable()/resetVariable(): l'host risponde comunque OK
+    bool disconnectOnWrite = false;
 };
 
 APIMockUSBHost mockHost;
 
-void setUp(void) {}
+// Usage FEATURE con path e codice dati
+static HIDUsageDef featureUsage(const char* path, uint32_t usage = 0) {
+    HIDUsageDef u;
+    u.usage = usage;
+    u.report_type = 0x03;
+    u.bit_size = 8;
+    u.found = true;
+    strncpy(u.path, path, sizeof(u.path) - 1);
+    return u;
+}
+
+// UPS con test batteria e comandi di spegnimento (load.off, shutdown.return, ...)
+static void addTestAndShutdownUsages() {
+    mockHost.usages.push_back(featureUsage("UPS.BatterySystem.Battery.Test"));
+    mockHost.usages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeShutdown"));
+    mockHost.usages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeStartup"));
+}
+
+void setUp(void) {
+    // Stato del mock ripristinato a ogni test
+    mockHost.connected = true;
+    mockHost.usages.clear();
+    mockHost.writes.clear();
+    mockHost.writeOk = true;
+    mockHost.executeCalls = 0;
+    mockHost.data = UPSData();
+    mockHost.hostCalls = 0;
+    mockHost.stale = false;
+    mockHost.rw.clear();
+    mockHost.setResult = NutTable::SetStatus::OK;
+    mockHost.storedValue = nullptr;
+    mockHost.sets.clear();
+    mockHost.resetResult = NutTable::SetStatus::OK;
+    mockHost.resetDefault = "";
+    mockHost.resets.clear();
+    mockHost.disconnectOnWrite = false;
+    mockHost.waitingFirstData = false;
+    mockHost.unsupported = "";
+}
 void tearDown(void) {}
 
 void test_api_null_host() {
@@ -44,10 +151,10 @@ void test_api_null_host() {
 void test_api_disconnected_host() {
     mockHost.connected = false;
     String out = WebApiJson::generateUpsVars(&mockHost);
-    
+
     JsonDocument doc;
     deserializeJson(doc, out);
-    
+
     TEST_ASSERT_TRUE(doc["_disconnected"].as<bool>());
     TEST_ASSERT_EQUAL_STRING("Disconnected", doc["ups.status"].as<const char*>());
     // Ensure no other standard fields are present
@@ -58,22 +165,2725 @@ void test_api_disconnected_host() {
 void test_api_connected_host_with_data() {
     mockHost.connected = true;
     mockHost.data.set("ups.mfr", "Eaton");
-    
+
     String out = WebApiJson::generateUpsVars(&mockHost);
-    
+
     JsonDocument doc;
     deserializeJson(doc, out);
-    
+
     TEST_ASSERT_TRUE(doc["_disconnected"].isNull());
     TEST_ASSERT_EQUAL_STRING("OL", doc["ups.status"].as<const char*>());
     TEST_ASSERT_EQUAL_STRING("Eaton", doc["ups.mfr"].as<const char*>());
-    TEST_ASSERT_TRUE(doc["ups.beeper.switchable"].as<bool>());
+    // The Web UI beeper toggle is gone (US-086): no ups.beeper.switchable even when connected
+    TEST_ASSERT_TRUE(doc["ups.beeper.switchable"].isNull());
+}
+
+// --- US-132: Q* UPS recognised but not supported yet ---
+
+static const char* QX_TEXT = "Q* UPS (USB transport: hunnox)";
+
+void test_api_disconnected_without_unsupported_text() {
+    mockHost.connected = false;
+    String out = WebApiJson::generateUpsVars(&mockHost);
+    TEST_ASSERT_EQUAL_STRING("{\"_disconnected\":true,\"ups.status\":\"Disconnected\"}", out.c_str());
+}
+
+void test_api_disconnected_with_unsupported_text() {
+    mockHost.connected = false;
+    mockHost.unsupported = QX_TEXT;
+    String out = WebApiJson::generateUpsVars(&mockHost);
+
+    JsonDocument doc;
+    deserializeJson(doc, out);
+    TEST_ASSERT_TRUE(doc["_disconnected"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("Disconnected", doc["ups.status"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING(QX_TEXT, doc["_unsupported"].as<const char*>());
+}
+
+// Impossible today (a Q* UPS is never connected), but the text must not leak into the data
+void test_api_connected_ignores_unsupported_text() {
+    mockHost.connected = true;
+    mockHost.unsupported = QX_TEXT;
+    mockHost.data.set("ups.mfr", "Eaton");
+    String out = WebApiJson::generateUpsVars(&mockHost);
+
+    JsonDocument doc;
+    deserializeJson(doc, out);
+    TEST_ASSERT_TRUE(doc["_unsupported"].isNull());
+    TEST_ASSERT_TRUE(doc["_disconnected"].isNull());
+    TEST_ASSERT_EQUAL_STRING("Eaton", doc["ups.mfr"].as<const char*>());
+}
+
+static void upsStatus(JsonDocument& doc, IUpsSource* src) {
+    WebApiJson::upsStatusJson(doc["ups"].to<JsonObject>(), src);
+}
+
+void test_ups_status_disconnected() {
+    mockHost.connected = false;
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Disconnected", doc["ups"]["status"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["ups"]["unsupported"].isNull());
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
+
+    JsonDocument none;
+    upsStatus(none, nullptr);
+    TEST_ASSERT_EQUAL_STRING("Disconnected", none["ups"]["status"].as<const char*>());
+}
+
+void test_ups_status_unsupported_qx() {
+    mockHost.connected = false;
+    mockHost.stale = true; // what the host says with no device bound
+    mockHost.unsupported = QX_TEXT;
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Not supported yet", doc["ups"]["status"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING(QX_TEXT, doc["ups"]["unsupported"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
+}
+
+void test_ups_status_connected_with_model() {
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Eaton 3S 700", doc["ups"]["status"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
+    TEST_ASSERT_TRUE(doc["ups"]["unsupported"].isNull());
+}
+
+void test_ups_status_connected_without_model() {
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Unknown Model", doc["ups"]["status"].as<const char*>());
+}
+
+// #12: a Q* UPS without the I command (Ippon, INNOVATAE) has only device.mfr
+void test_ups_status_without_model_shows_manufacturer() {
+    mockHost.data.set("device.mfr", "Ippon");
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Ippon", doc["ups"]["status"].as<const char*>());
+}
+
+void test_ups_status_model_before_manufacturer() {
+    mockHost.data.set("device.mfr", "Ippon");
+    mockHost.data.set("ups.mfr", "EATON");
+    mockHost.data.set("device.model", "3S 700");
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("3S 700", doc["ups"]["status"].as<const char*>());
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    JsonDocument doc2;
+    upsStatus(doc2, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Eaton 3S 700", doc2["ups"]["status"].as<const char*>());
+}
+
+void test_ups_status_empty_model_falls_back() {
+    mockHost.data.set("ups.model", "");
+    mockHost.data.set("ups.mfr", "EATON");
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("EATON", doc["ups"]["status"].as<const char*>());
+}
+
+void test_ups_status_stale_data() {
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.stale = true;
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Eaton 3S 700", doc["ups"]["status"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].as<bool>());
+}
+
+void test_ups_status_waiting_first_data_is_not_stale() {
+    mockHost.stale = true;
+    mockHost.waitingFirstData = true;
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
+}
+
+// --- US-059: generateUpsCommands ---
+
+void test_commands_null_host() {
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsCommands(nullptr));
+    TEST_ASSERT_FALSE(doc["connected"].as<bool>());
+    TEST_ASSERT_TRUE(doc["commands"].is<JsonArray>());
+    TEST_ASSERT_EQUAL(0, doc["commands"].size());
+}
+
+void test_commands_disconnected_host() {
+    addTestAndShutdownUsages();
+    mockHost.connected = false;
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsCommands(&mockHost));
+    TEST_ASSERT_FALSE(doc["connected"].as<bool>());
+    TEST_ASSERT_TRUE(doc["commands"].is<JsonArray>());
+    TEST_ASSERT_EQUAL(0, doc["commands"].size());
+}
+
+void test_commands_catalog() {
+    addTestAndShutdownUsages();
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsCommands(&mockHost));
+    TEST_ASSERT_TRUE(doc["connected"].as<bool>());
+
+    bool foundQuick = false, foundLoadOff = false;
+    for (JsonObject c : doc["commands"].as<JsonArray>()) {
+        const char* name = c["name"];
+        if (strcmp(name, "test.battery.start.quick") == 0) {
+            foundQuick = true;
+            TEST_ASSERT_FALSE(c["destructive"].as<bool>());
+            TEST_ASSERT_EQUAL_STRING("Start a quick battery test", c["description"].as<const char*>());
+        } else if (strcmp(name, "load.off") == 0) {
+            foundLoadOff = true;
+            TEST_ASSERT_TRUE(c["destructive"].as<bool>());
+        }
+    }
+    TEST_ASSERT_TRUE(foundQuick);
+    TEST_ASSERT_TRUE(foundLoadOff);
+}
+
+// US-068 (prima US-062): nessun campo locked, i distruttivi restano marcati destructive
+// e la conferma la chiede la pagina, in STA come in AP
+void test_commands_catalog_without_locked() {
+    addTestAndShutdownUsages();
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsCommands(&mockHost));
+    JsonArray commands = doc["commands"].as<JsonArray>();
+    TEST_ASSERT_TRUE(commands.size() > 0);
+    bool anyDestructive = false, anyOther = false;
+    for (JsonObject c : commands) {
+        const char* name = c["name"].as<const char*>();
+        TEST_ASSERT_TRUE_MESSAGE(c["locked"].isNull(), name);
+        TEST_ASSERT_TRUE_MESSAGE(c["destructive"].is<bool>(), name);
+        if (c["destructive"].as<bool>()) anyDestructive = true; else anyOther = true;
+        // Soli campi name, description, destructive
+        TEST_ASSERT_EQUAL_MESSAGE(3, c.size(), name);
+    }
+    TEST_ASSERT_TRUE(anyDestructive);
+    TEST_ASSERT_TRUE(anyOther);
+}
+
+// --- US-059: runUpsCommand ---
+
+void test_run_command_ok() {
+    addTestAndShutdownUsages();
+    String response;
+    int status = WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response);
+    TEST_ASSERT_EQUAL(200, status);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true}", response.c_str());
+    TEST_ASSERT_EQUAL(1, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING("UPS.BatterySystem.Battery.Test", mockHost.writes[0].first.c_str());
+    TEST_ASSERT_EQUAL_UINT32(1, mockHost.writes[0].second);
+}
+
+void test_run_command_invalid_json() {
+    String response;
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "not json", response));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", response.c_str());
+}
+
+void test_run_command_missing_name() {
+    String response;
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "{}", response));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", response.c_str());
+}
+
+void test_run_command_unknown() {
+    addTestAndShutdownUsages();
+    String response;
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"foo\"}", response));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Command not supported\"}", response.c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+    TEST_ASSERT_EQUAL(0, mockHost.executeCalls);
+}
+
+void test_run_command_disconnected() {
+    addTestAndShutdownUsages();
+    mockHost.connected = false;
+    String response;
+    TEST_ASSERT_EQUAL(503, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"UPS not connected\"}", response.c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_run_command_write_failed() {
+    addTestAndShutdownUsages();
+    mockHost.writeOk = false;
+    String response;
+    TEST_ASSERT_EQUAL(500, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Command rejected by the UPS\"}", response.c_str());
+}
+
+void test_run_command_not_supported_by_ups() {
+    // Comando noto al catalogo ma senza l'usage Test nel descriptor
+    mockHost.usages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeShutdown"));
+    String response;
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Command not supported\"}", response.c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_run_command_body_too_long() {
+    addTestAndShutdownUsages();
+    std::string padded = "{\"name\":\"test.battery.start.quick\",\"pad\":\"";
+    padded.append(WebApiJson::MAX_COMMAND_BODY_LENGTH, 'x');
+    padded += "\"}";
+    String response;
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, String(padded.c_str()), response));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", response.c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_run_command_extra_fields_ignored() {
+    addTestAndShutdownUsages();
+    String response;
+    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsCommand(&mockHost, "{\"x\":[1,2,3],\"name\":\"test.battery.start.quick\"}", response));
+    TEST_ASSERT_EQUAL(1, mockHost.writes.size());
+}
+
+void test_run_command_null_host() {
+    String response;
+    TEST_ASSERT_EQUAL(503, WebApiJson::runUpsCommand(nullptr, "{\"name\":\"test.battery.start.quick\"}", response));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"UPS not connected\"}", response.c_str());
+}
+
+// --- US-062, US-068: comandi distruttivi eseguiti senza blocco, in STA come in AP ---
+
+// Ritardi configurati come all'avvio del driver (ups.delay.*)
+static void setConfiguredDelays() {
+    mockHost.data.set("ups.delay.shutdown", "20");
+    mockHost.data.set("ups.delay.start", "30");
+}
+
+// Prima US-068 era il 403 "Available via NUT only in Access Point mode": ora il comando
+// arriva all'host (cambiamento deciso con l'utente il 2026-10-16)
+void test_run_command_destructive_executed() {
+    addTestAndShutdownUsages();
+    setConfiguredDelays();
+    String response;
+    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"shutdown.return\"}", response));
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true}", response.c_str());
+    TEST_ASSERT_EQUAL(1, mockHost.executeCalls);
+    TEST_ASSERT_EQUAL(2, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.DelayBeforeStartup", mockHost.writes[0].first.c_str());
+    TEST_ASSERT_EQUAL_UINT32(30, mockHost.writes[0].second);
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.DelayBeforeShutdown", mockHost.writes[1].first.c_str());
+    TEST_ASSERT_EQUAL_UINT32(20, mockHost.writes[1].second);
+}
+
+// US-058: shutdown.default e i comandi con ritardo, prima rifiutati con 403, ora eseguiti
+void test_run_command_shutdown_default_and_delay_executed() {
+    addTestAndShutdownUsages();
+    mockHost.usages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeReboot"));
+    setConfiguredDelays();
+    struct Case { const char* body; int executeCalls; };
+    const Case cases[] = {
+        { "{\"name\":\"shutdown.default\"}", 2 },  // shutdown.default, poi shutdown.return
+        { "{\"name\":\"load.off.delay\"}", 1 },
+        { "{\"name\":\"load.off.delay\",\"value\":\"30\"}", 1 },
+    };
+    for (const Case& c : cases) {
+        mockHost.executeCalls = 0;
+        mockHost.writes.clear();
+        String response;
+        TEST_ASSERT_EQUAL_MESSAGE(200, WebApiJson::runUpsCommand(&mockHost, c.body, response), c.body);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"success\":true}", response.c_str(), c.body);
+        TEST_ASSERT_EQUAL_MESSAGE(c.executeCalls, mockHost.executeCalls, c.body);
+        TEST_ASSERT_TRUE_MESSAGE(mockHost.writes.size() > 0, c.body);
+    }
+}
+
+void test_run_command_load_off_delay_uses_configured_delay() {
+    addTestAndShutdownUsages();
+    setConfiguredDelays();
+    String response;
+    // "value" nel body e' ignorato: a executeCommand non arriva alcun parametro
+    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"load.off.delay\",\"value\":\"5\"}", response));
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true}", response.c_str());
+    TEST_ASSERT_EQUAL(1, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.DelayBeforeShutdown", mockHost.writes[0].first.c_str());
+    TEST_ASSERT_EQUAL_UINT32(20, mockHost.writes[0].second);
+}
+
+void test_run_command_shutdown_default_runs_fallback() {
+    addTestAndShutdownUsages();
+    setConfiguredDelays();
+    String response;
+    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"shutdown.default\"}", response));
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true}", response.c_str());
+    TEST_ASSERT_EQUAL(2, mockHost.executeCalls);  // shutdown.default, poi shutdown.return
+    TEST_ASSERT_TRUE(mockHost.writes.size() > 0);
+    TEST_ASSERT_EQUAL_STRING("shutdown.return", mockHost.lastDefaultShutdown().c_str());
+}
+
+void test_run_command_destructive_null_host() {
+    // Prima US-068 il 403 arrivava prima del controllo sull'host: ora è un 503
+    String response;
+    TEST_ASSERT_EQUAL(503, WebApiJson::runUpsCommand(nullptr, "{\"name\":\"load.off\"}", response));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"UPS not connected\"}", response.c_str());
+}
+
+// --- US-068: pagina "UPS Settings" ---
+
+// Catalogo LIST RW nell'ordine di upsd (strcasecmp) e i valori correnti
+static void addWritableVariables() {
+    mockHost.rw = {
+        { "battery.charge.low", 5, {}, false },
+        { "outlet.1.desc", 20, {}, true },
+        { "outlet.1.switchable", 3, { "yes", "no" }, false },
+        { "outlet.3.desc", 20, {}, true },                 // senza VARDESC in cmdvartab
+        { "ups.delay.shutdown", 10, {}, true },
+        { "ups.shutdown", 8, { "enabled", "disabled" }, false },
+        { "ups.test.aux", 0, {}, false },                   // aux < 1: insanity del driver
+    };
+    mockHost.data.set("battery.charge.low", "20");
+    mockHost.data.set("outlet.1.desc", "Main Outlet");
+    mockHost.data.set("outlet.1.switchable", "yes");
+    mockHost.data.set("ups.delay.shutdown", "60");
+    mockHost.data.set("ups.shutdown", "enabled");
+    // outlet.3.desc e ups.test.aux senza valore nei dati
+}
+
+static JsonObject findVariable(JsonDocument& doc, const char* name) {
+    for (JsonObject v : doc["variables"].as<JsonArray>()) {
+        if (strcmp(v["name"].as<const char*>(), name) == 0) return v;
+    }
+    return JsonObject();
+}
+
+// ---- generateUpsVariables ----
+
+void test_variables_catalog_payload() {
+    addWritableVariables();
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::generateUpsVariables(&mockHost)));
+    TEST_ASSERT_TRUE(doc["connected"].as<bool>());
+    JsonArray vars = doc["variables"].as<JsonArray>();
+    TEST_ASSERT_EQUAL(7, vars.size());
+    // Ordine di getWritableVariables()
+    const char* order[] = { "battery.charge.low", "outlet.1.desc", "outlet.1.switchable", "outlet.3.desc",
+                            "ups.delay.shutdown", "ups.shutdown", "ups.test.aux" };
+    for (size_t i = 0; i < 7; i++) {
+        TEST_ASSERT_EQUAL_STRING(order[i], vars[i]["name"].as<const char*>());
+    }
+
+    JsonObject v = vars[0];
+    TEST_ASSERT_EQUAL(7, v.size());  // name, description, value, max_length, enum, driver_side, confirm
+    TEST_ASSERT_EQUAL_STRING("Remaining battery level when UPS switches to LB (percent)", v["description"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("20", v["value"].as<const char*>());
+    TEST_ASSERT_EQUAL(5, v["max_length"].as<int>());
+    TEST_ASSERT_TRUE(v["enum"].is<JsonArray>());
+    TEST_ASSERT_EQUAL(0, v["enum"].size());
+    TEST_ASSERT_TRUE(v["driver_side"].is<bool>());
+    TEST_ASSERT_FALSE(v["driver_side"].as<bool>());
+    TEST_ASSERT_TRUE(v["confirm"].is<bool>());
+    TEST_ASSERT_FALSE(v["confirm"].as<bool>());
+}
+
+void test_variables_description_fallback_and_missing_value() {
+    addWritableVariables();
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVariables(&mockHost));
+    JsonObject known = findVariable(doc, "outlet.1.desc");
+    TEST_ASSERT_EQUAL_STRING("Outlet description", known["description"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("Main Outlet", known["value"].as<const char*>());
+    // Come il server NUT: "Description unavailable" senza VARDESC; valore vuoto senza chiave
+    JsonObject unknown = findVariable(doc, "outlet.3.desc");
+    TEST_ASSERT_EQUAL_STRING("Description unavailable", unknown["description"].as<const char*>());
+    TEST_ASSERT_TRUE(unknown["value"].is<const char*>());
+    TEST_ASSERT_EQUAL_STRING("", unknown["value"].as<const char*>());
+}
+
+void test_variables_enum_max_length_driver_side() {
+    addWritableVariables();
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVariables(&mockHost));
+    JsonObject sw = findVariable(doc, "outlet.1.switchable");
+    TEST_ASSERT_EQUAL(3, sw["max_length"].as<int>());
+    TEST_ASSERT_EQUAL(2, sw["enum"].size());
+    TEST_ASSERT_EQUAL_STRING("yes", sw["enum"][0].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("no", sw["enum"][1].as<const char*>());
+    TEST_ASSERT_FALSE(sw["driver_side"].as<bool>());
+
+    JsonObject delay = findVariable(doc, "ups.delay.shutdown");
+    TEST_ASSERT_EQUAL(10, delay["max_length"].as<int>());
+    TEST_ASSERT_TRUE(delay["driver_side"].as<bool>());
+    TEST_ASSERT_TRUE(findVariable(doc, "outlet.1.desc")["driver_side"].as<bool>());
+    TEST_ASSERT_EQUAL(0, findVariable(doc, "ups.test.aux")["max_length"].as<int>());
+}
+
+void test_variables_confirm_flag() {
+    addWritableVariables();
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVariables(&mockHost));
+    TEST_ASSERT_TRUE(findVariable(doc, "ups.shutdown")["confirm"].as<bool>());
+    TEST_ASSERT_TRUE(findVariable(doc, "outlet.1.switchable")["confirm"].as<bool>());
+    TEST_ASSERT_FALSE(findVariable(doc, "outlet.1.desc")["confirm"].as<bool>());
+    TEST_ASSERT_FALSE(findVariable(doc, "ups.delay.shutdown")["confirm"].as<bool>());
+}
+
+void test_variables_disconnected_or_null_host() {
+    addWritableVariables();
+    mockHost.connected = false;
+    IUSBHostUPS* hosts[] = { &mockHost, nullptr };
+    for (IUSBHostUPS* host : hosts) {
+        JsonDocument doc;
+        TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::generateUpsVariables(host)));
+        TEST_ASSERT_TRUE(doc["connected"].is<bool>());
+        TEST_ASSERT_FALSE(doc["connected"].as<bool>());
+        TEST_ASSERT_TRUE(doc["variables"].is<JsonArray>());
+        TEST_ASSERT_EQUAL(0, doc["variables"].size());
+    }
+}
+
+void test_variables_empty_catalog() {
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVariables(&mockHost));
+    TEST_ASSERT_TRUE(doc["connected"].as<bool>());
+    TEST_ASSERT_TRUE(doc["variables"].is<JsonArray>());
+    TEST_ASSERT_EQUAL(0, doc["variables"].size());
+}
+
+// ---- runUpsVariable ----
+
+// Esegue runUpsVariable e verifica status e risposta; restituisce host_called
+static bool expectSet(const char* body, int status, const char* response) {
+    String out;
+    bool host_called = true;
+    TEST_ASSERT_EQUAL_MESSAGE(status, WebApiJson::runUpsVariable(&mockHost, body, out, &host_called), body);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(response, out.c_str(), body);
+    return host_called;
+}
+
+// 400 di forma: nessuna chiamata all'host
+void test_set_variable_invalid_request() {
+    addWritableVariables();
+    std::string tooLong = "{\"name\":\"battery.charge.low\",\"value\":\"30\",\"pad\":\"";
+    tooLong.append(WebApiJson::MAX_COMMAND_BODY_LENGTH, 'x');
+    tooLong += "\"}";
+    const char* bodies[] = {
+        "not json",
+        "",
+        "{\"name\":\"battery.charge.low\",\"value\":30}",     // value numerico
+        "{\"name\":\"battery.charge.low\",\"value\":true}",
+        "{\"name\":\"battery.charge.low\",\"value\":null}",
+        "{\"name\":\"battery.charge.low\"}",                  // value mancante
+        "{\"value\":\"30\"}",                                 // name mancante
+        "{\"name\":\"\",\"value\":\"30\"}",
+        "{\"name\":5,\"value\":\"30\"}",
+        tooLong.c_str(),
+    };
+    for (const char* body : bodies) {
+        TEST_ASSERT_FALSE_MESSAGE(expectSet(body, 400, "{\"error\":\"Invalid request\"}"), body);
+    }
+    TEST_ASSERT_EQUAL(0, mockHost.hostCalls);
+    TEST_ASSERT_EQUAL(0, mockHost.sets.size());
+}
+
+void test_set_variable_invalid_request_null_host() {
+    String out;
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsVariable(nullptr, "{\"name\":\"battery.charge.low\",\"value\":30}", out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+}
+
+// Come il lettore di riga del server NUT: fuori da 0x20-0x7E il valore non arriva all'host
+void test_set_variable_control_chars_rejected() {
+    addWritableVariables();
+    const char* bodies[] = {
+        "{\"name\":\"battery.charge.low\",\"value\":\"3\\n0\"}",
+        "{\"name\":\"battery.charge.low\",\"value\":\"3\\r\"}",
+        "{\"name\":\"battery.charge.low\",\"value\":\"\\t30\"}",
+        "{\"name\":\"battery.charge.low\",\"value\":\"\\u0001\"}",
+        "{\"name\":\"battery.charge.low\",\"value\":\"\\u007f\"}",
+        "{\"name\":\"battery.charge.low\",\"value\":\"\\u00e0\"}",   // non ASCII (UTF-8)
+    };
+    for (const char* body : bodies) {
+        TEST_ASSERT_FALSE_MESSAGE(expectSet(body, 400, "{\"error\":\"Invalid value\"}"), body);
+    }
+    TEST_ASSERT_EQUAL(0, mockHost.hostCalls);
+    TEST_ASSERT_EQUAL(0, mockHost.sets.size());
+}
+
+void test_set_variable_not_writable() {
+    addWritableVariables();
+    TEST_ASSERT_FALSE(expectSet("{\"name\":\"ups.mfr\",\"value\":\"x\"}", 400, "{\"error\":\"Variable not writable\"}"));
+    TEST_ASSERT_EQUAL(0, mockHost.sets.size());
+}
+
+void test_set_variable_invalid_aux() {
+    addWritableVariables();
+    TEST_ASSERT_FALSE(expectSet("{\"name\":\"ups.test.aux\",\"value\":\"1\"}", 400, "{\"error\":\"Variable not writable\"}"));
+    TEST_ASSERT_EQUAL(0, mockHost.sets.size());
+}
+
+void test_set_variable_too_long() {
+    addWritableVariables();
+    TEST_ASSERT_FALSE(expectSet("{\"name\":\"battery.charge.low\",\"value\":\"123456\"}", 400,
+                                "{\"error\":\"Value too long (max 5)\"}"));
+    TEST_ASSERT_FALSE(expectSet("{\"name\":\"outlet.1.desc\",\"value\":\"123456789012345678901\"}", 400,
+                                "{\"error\":\"Value too long (max 20)\"}"));
+    TEST_ASSERT_EQUAL(0, mockHost.sets.size());
+}
+
+void test_set_variable_invalid_enum() {
+    addWritableVariables();
+    TEST_ASSERT_FALSE(expectSet("{\"name\":\"ups.shutdown\",\"value\":\"maybe\"}", 400, "{\"error\":\"Invalid value\"}"));
+    // ENUM confrontati con strcmp, come upsd
+    TEST_ASSERT_FALSE(expectSet("{\"name\":\"outlet.1.switchable\",\"value\":\"YES\"}", 400, "{\"error\":\"Invalid value\"}"));
+    TEST_ASSERT_EQUAL(0, mockHost.sets.size());
+}
+
+void test_set_variable_conversion_failed() {
+    addWritableVariables();
+    mockHost.setResult = NutTable::SetStatus::CONVERSION_FAILED;
+    TEST_ASSERT_TRUE(expectSet("{\"name\":\"battery.charge.low\",\"value\":\"abc\"}", 400, "{\"error\":\"Invalid value\"}"));
+    TEST_ASSERT_EQUAL(1, mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("20", mockHost.data.get("battery.charge.low").c_str());
+}
+
+void test_set_variable_unknown() {
+    addWritableVariables();
+    mockHost.setResult = NutTable::SetStatus::UNKNOWN;
+    TEST_ASSERT_TRUE(expectSet("{\"name\":\"battery.charge.low\",\"value\":\"30\"}", 400, "{\"error\":\"Variable not supported\"}"));
+    TEST_ASSERT_EQUAL(1, mockHost.sets.size());
+}
+
+void test_set_variable_disconnected() {
+    addWritableVariables();
+    mockHost.connected = false;
+    TEST_ASSERT_FALSE(expectSet("{\"name\":\"battery.charge.low\",\"value\":\"30\"}", 503, "{\"error\":\"UPS not connected\"}"));
+    TEST_ASSERT_EQUAL(0, mockHost.sets.size());
+}
+
+void test_set_variable_null_host() {
+    String out;
+    bool host_called = true;
+    TEST_ASSERT_EQUAL(503, WebApiJson::runUpsVariable(nullptr, "{\"name\":\"battery.charge.low\",\"value\":\"30\"}", out, &host_called));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"UPS not connected\"}", out.c_str());
+    TEST_ASSERT_FALSE(host_called);
+}
+
+void test_set_variable_stale() {
+    addWritableVariables();
+    mockHost.stale = true;
+    TEST_ASSERT_FALSE(expectSet("{\"name\":\"battery.charge.low\",\"value\":\"30\"}", 503, "{\"error\":\"UPS data stale\"}"));
+    TEST_ASSERT_EQUAL(0, mockHost.sets.size());
+}
+
+// Host scollegato tra i controlli e la scrittura
+void test_set_variable_not_connected_from_host() {
+    addWritableVariables();
+    mockHost.setResult = NutTable::SetStatus::NOT_CONNECTED;
+    TEST_ASSERT_TRUE(expectSet("{\"name\":\"battery.charge.low\",\"value\":\"30\"}", 503, "{\"error\":\"UPS not connected\"}"));
+    TEST_ASSERT_EQUAL(1, mockHost.sets.size());
+}
+
+void test_set_variable_failed() {
+    addWritableVariables();
+    mockHost.setResult = NutTable::SetStatus::FAILED;
+    TEST_ASSERT_TRUE(expectSet("{\"name\":\"battery.charge.low\",\"value\":\"30\"}", 500, "{\"error\":\"Rejected by the UPS\"}"));
+    TEST_ASSERT_EQUAL(1, mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("20", mockHost.data.get("battery.charge.low").c_str());
+}
+
+void test_set_variable_ok() {
+    addWritableVariables();
+    TEST_ASSERT_TRUE(expectSet("{\"name\":\"battery.charge.low\",\"value\":\"30\"}", 200, "{\"success\":true,\"value\":\"30\"}"));
+    TEST_ASSERT_EQUAL(1, mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("battery.charge.low", mockHost.sets[0].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("30", mockHost.sets[0].second.c_str());
+    // Valore di lunghezza esattamente max_length e valore ENUM valido
+    TEST_ASSERT_TRUE(expectSet("{\"name\":\"battery.charge.low\",\"value\":\"12345\"}", 200, "{\"success\":true,\"value\":\"12345\"}"));
+    TEST_ASSERT_TRUE(expectSet("{\"name\":\"ups.shutdown\",\"value\":\"disabled\"}", 200, "{\"success\":true,\"value\":\"disabled\"}"));
+}
+
+// Il valore della risposta è quello dei dati dopo la scrittura, non quello inviato
+void test_set_variable_ok_returns_stored_value() {
+    addWritableVariables();
+    mockHost.storedValue = "35";
+    TEST_ASSERT_TRUE(expectSet("{\"name\":\"battery.charge.low\",\"value\":\"33\"}", 200, "{\"success\":true,\"value\":\"35\"}"));
+    TEST_ASSERT_EQUAL_STRING("33", mockHost.sets[0].second.c_str());
+}
+
+// Il nome arriva a setVariable() nella forma del catalogo
+void test_set_variable_canonical_name() {
+    addWritableVariables();
+    TEST_ASSERT_TRUE(expectSet("{\"name\":\"Battery.Charge.LOW\",\"value\":\"30\"}", 200, "{\"success\":true,\"value\":\"30\"}"));
+    TEST_ASSERT_EQUAL(1, mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("battery.charge.low", mockHost.sets[0].first.c_str());
+}
+
+// Un valore con virgolette resta JSON valido nella risposta
+void test_set_variable_ok_escapes_value() {
+    addWritableVariables();
+    String out;
+    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsVariable(&mockHost, "{\"name\":\"outlet.1.desc\",\"value\":\"My \\\"UPS\\\"\"}", out));
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, out));
+    TEST_ASSERT_TRUE(doc["success"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("My \"UPS\"", doc["value"].as<const char*>());
+}
+
+void test_set_variable_extra_fields_ignored() {
+    addWritableVariables();
+    TEST_ASSERT_TRUE(expectSet("{\"x\":[1,2],\"name\":\"battery.charge.low\",\"value\":\"30\"}", 200,
+                               "{\"success\":true,\"value\":\"30\"}"));
+}
+
+// ---- resetUpsVariable ----
+
+static bool expectReset(const char* body, int status, const char* response) {
+    String out;
+    bool host_called = true;
+    TEST_ASSERT_EQUAL_MESSAGE(status, WebApiJson::resetUpsVariable(&mockHost, body, out, &host_called), body);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(response, out.c_str(), body);
+    return host_called;
+}
+
+void test_reset_variable_invalid_request() {
+    addWritableVariables();
+    const char* bodies[] = { "not json", "{}", "{\"name\":\"\"}", "{\"name\":1}" };
+    for (const char* body : bodies) {
+        TEST_ASSERT_FALSE_MESSAGE(expectReset(body, 400, "{\"error\":\"Invalid request\"}"), body);
+    }
+    TEST_ASSERT_EQUAL(0, mockHost.hostCalls);
+    TEST_ASSERT_EQUAL(0, mockHost.resets.size());
+}
+
+void test_reset_variable_not_driver_side() {
+    addWritableVariables();
+    TEST_ASSERT_FALSE(expectReset("{\"name\":\"battery.charge.low\"}", 400, "{\"error\":\"Not a driver-side variable\"}"));
+    TEST_ASSERT_FALSE(expectReset("{\"name\":\"ups.mfr\"}", 400, "{\"error\":\"Not a driver-side variable\"}"));
+    TEST_ASSERT_EQUAL(0, mockHost.resets.size());
+}
+
+void test_reset_variable_unknown_from_host() {
+    addWritableVariables();
+    mockHost.resetResult = NutTable::SetStatus::UNKNOWN;
+    TEST_ASSERT_TRUE(expectReset("{\"name\":\"ups.delay.shutdown\"}", 400, "{\"error\":\"Not a driver-side variable\"}"));
+    TEST_ASSERT_EQUAL(1, mockHost.resets.size());
+}
+
+void test_reset_variable_disconnected_and_stale() {
+    addWritableVariables();
+    mockHost.connected = false;
+    TEST_ASSERT_FALSE(expectReset("{\"name\":\"ups.delay.shutdown\"}", 503, "{\"error\":\"UPS not connected\"}"));
+    mockHost.connected = true;
+    mockHost.stale = true;
+    TEST_ASSERT_FALSE(expectReset("{\"name\":\"ups.delay.shutdown\"}", 503, "{\"error\":\"UPS data stale\"}"));
+    TEST_ASSERT_EQUAL(0, mockHost.resets.size());
+
+    String out;
+    TEST_ASSERT_EQUAL(503, WebApiJson::resetUpsVariable(nullptr, "{\"name\":\"ups.delay.shutdown\"}", out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"UPS not connected\"}", out.c_str());
+}
+
+void test_reset_variable_not_connected_from_host() {
+    addWritableVariables();
+    mockHost.resetResult = NutTable::SetStatus::NOT_CONNECTED;
+    TEST_ASSERT_TRUE(expectReset("{\"name\":\"ups.delay.shutdown\"}", 503, "{\"error\":\"UPS not connected\"}"));
+}
+
+void test_reset_variable_failed() {
+    addWritableVariables();
+    mockHost.resetResult = NutTable::SetStatus::FAILED;
+    TEST_ASSERT_TRUE(expectReset("{\"name\":\"ups.delay.shutdown\"}", 500, "{\"error\":\"Could not save the setting\"}"));
+    TEST_ASSERT_EQUAL_STRING("60", mockHost.data.get("ups.delay.shutdown").c_str());
+}
+
+void test_reset_variable_ok() {
+    addWritableVariables();
+    mockHost.resetDefault = "20";
+    TEST_ASSERT_TRUE(expectReset("{\"name\":\"ups.delay.shutdown\"}", 200, "{\"success\":true,\"value\":\"20\"}"));
+    TEST_ASSERT_EQUAL(1, mockHost.resets.size());
+    TEST_ASSERT_EQUAL_STRING("ups.delay.shutdown", mockHost.resets[0].c_str());
+
+    mockHost.resetDefault = "Main Outlet";
+    mockHost.data.set("outlet.1.desc", "Server rack");
+    TEST_ASSERT_TRUE(expectReset("{\"name\":\"outlet.1.desc\"}", 200, "{\"success\":true,\"value\":\"Main Outlet\"}"));
+}
+
+// UPS scollegato dopo l'OK dell'host: value null, il valore vale dalla connessione successiva
+void test_set_and_reset_variable_ok_then_disconnected() {
+    addWritableVariables();
+    mockHost.disconnectOnWrite = true;
+    TEST_ASSERT_TRUE(expectSet("{\"name\":\"battery.charge.low\",\"value\":\"30\"}", 200, "{\"success\":true,\"value\":null}"));
+    mockHost.connected = true;
+    mockHost.resetDefault = "20";
+    TEST_ASSERT_TRUE(expectReset("{\"name\":\"ups.delay.shutdown\"}", 200, "{\"success\":true,\"value\":null}"));
+}
+
+void test_reset_variable_canonical_name() {
+    addWritableVariables();
+    mockHost.resetDefault = "20";
+    TEST_ASSERT_TRUE(expectReset("{\"name\":\"UPS.Delay.Shutdown\"}", 200, "{\"success\":true,\"value\":\"20\"}"));
+    TEST_ASSERT_EQUAL(1, mockHost.resets.size());
+    TEST_ASSERT_EQUAL_STRING("ups.delay.shutdown", mockHost.resets[0].c_str());
+}
+
+// ---- needsConfirmation ----
+
+// ---- UPS name of the NUT configuration (US-082) ----
+
+static String nameFromConfig(const char* json, bool& defaulted) {
+    JsonDocument doc;
+    deserializeJson(doc, json);
+    return WebApiJson::upsNameFromConfig(doc["nut"]["ups_name"], &defaulted);
+}
+
+void test_ups_name_from_config() {
+    bool defaulted = false;
+    // Missing key: as<String>() would give "null", the default is used instead
+    TEST_ASSERT_EQUAL_STRING("ups", nameFromConfig("{\"nut\":{\"username\":\"\"}}", defaulted).c_str());
+    TEST_ASSERT_TRUE(defaulted);
+    TEST_ASSERT_EQUAL_STRING("ups", nameFromConfig("{\"nut\":{\"ups_name\":\"\"}}", defaulted).c_str());
+    TEST_ASSERT_TRUE(defaulted);
+    TEST_ASSERT_EQUAL_STRING("ups", nameFromConfig("{\"nut\":{\"ups_name\":null}}", defaulted).c_str());
+    TEST_ASSERT_TRUE(defaulted);
+    TEST_ASSERT_EQUAL_STRING("ups", nameFromConfig("{\"nut\":{\"ups_name\":5}}", defaulted).c_str());
+    TEST_ASSERT_TRUE(defaulted);
+    TEST_ASSERT_EQUAL_STRING("eaton", nameFromConfig("{\"nut\":{\"ups_name\":\"eaton\"}}", defaulted).c_str());
+    TEST_ASSERT_FALSE(defaulted);
+    // defaulted is optional
+    JsonDocument doc;
+    TEST_ASSERT_EQUAL_STRING("ups", WebApiJson::upsNameFromConfig(doc["missing"]).c_str());
+}
+
+static int nutConfigStatus(const char* json, String& out) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, json));
+    out = "";
+    return WebApiJson::checkNutConfigBody(doc, out);
+}
+
+void test_nut_config_body_check() {
+    String out;
+    // Without ups_name (or null) the saved name stays: no error
+    TEST_ASSERT_EQUAL(0, nutConfigStatus("{\"username\":\"admin\",\"password\":\"x\"}", out));
+    TEST_ASSERT_EQUAL(0, nutConfigStatus("{\"ups_name\":null}", out));
+    TEST_ASSERT_EQUAL(0, nutConfigStatus("{\"ups_name\":\"ups\"}", out));
+    TEST_ASSERT_EQUAL(0, nutConfigStatus("{\"ups_name\":\"Back-UPS_1\"}", out));
+    TEST_ASSERT_EQUAL_STRING("", out.c_str());
+
+    const char* invalid[] = {
+        "{\"ups_name\":\"\"}", "{\"ups_name\":\"my ups\"}", "{\"ups_name\":\"a#b\"}",
+        "{\"ups_name\":\"a@b\"}", "{\"ups_name\":\"citt\\u00e0\"}", "{\"ups_name\":123}",
+        "{\"ups_name\":true}", "{\"ups_name\":[\"ups\"]}",
+    };
+    for (const char* json : invalid) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, nutConfigStatus(json, out), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid UPS name\"}", out.c_str(), json);
+    }
+}
+
+// US-124: the NUT settings apply at once, the reply never asks for a restart
+void test_nut_config_applied_json() {
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"success\":true,\"applied\":true,\"restart\":false,\"changed\":true,\"sessions_closed\":2}",
+        WebApiJson::nutConfigAppliedJson(true, true, 2).c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"success\":true,\"applied\":true,\"restart\":false,\"changed\":false,\"sessions_closed\":0}",
+        WebApiJson::nutConfigAppliedJson(true, false, 0).c_str());
+    // No NUT server to take them: saved, used at the next start
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"success\":true,\"applied\":false,\"restart\":false,\"changed\":false,\"sessions_closed\":0}",
+        WebApiJson::nutConfigAppliedJson(false, false, 0).c_str());
+}
+
+// US-125: body of POST /api/nut/config merged into the saved settings
+static const char* BOTH_OR_NEITHER =
+    "{\"error\":\"Set both the NUT username and password, or remove the NUT credentials\"}";
+
+static int nutFromBody(const char* json, const NUTServerConfig& current, NUTServerConfig& next, String& out) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, json));
+    out = "";
+    return WebApiJson::nutConfigFromBody(doc, current, next, out);
+}
+
+static NUTServerConfig nutCfg(const char* user, const char* pass, const char* name) {
+    NUTServerConfig c;
+    c.username = user;
+    c.password = pass;
+    c.ups_name = name;
+    return c;
+}
+
+static void assertNut(const NUTServerConfig& c, const char* user, const char* pass, const char* name) {
+    TEST_ASSERT_EQUAL_STRING(user, c.username.c_str());
+    TEST_ASSERT_EQUAL_STRING(pass, c.password.c_str());
+    TEST_ASSERT_EQUAL_STRING(name, c.ups_name.c_str());
+}
+
+void test_nut_config_keeps_the_saved_password() {
+    const NUTServerConfig saved = nutCfg("admin", "secret", "ups");
+    NUTServerConfig next;
+    String out;
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"ups_name\":\"eaton\",\"username\":\"admin\",\"password\":\"\"}", saved, next, out));
+    assertNut(next, "admin", "secret", "eaton");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"ups_name\":\"eaton\"}", saved, next, out));
+    assertNut(next, "admin", "secret", "eaton");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"username\":\"operator\",\"password\":\"\"}", saved, next, out));
+    assertNut(next, "operator", "secret", "ups");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"username\":\"admin\",\"password\":\"new\"}", saved, next, out));
+    assertNut(next, "admin", "new", "ups");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{}", saved, next, out));
+    assertNut(next, "admin", "secret", "ups");
+    TEST_ASSERT_EQUAL_STRING("", out.c_str());
+}
+
+void test_nut_config_both_or_neither() {
+    NUTServerConfig next;
+    String out;
+    // An empty username with a saved password
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"username\":\"\"}", nutCfg("admin", "secret", "ups"), next, out));
+    TEST_ASSERT_EQUAL_STRING(BOTH_OR_NEITHER, out.c_str());
+
+    const NUTServerConfig none = nutCfg("", "", "ups");
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"username\":\"admin\",\"password\":\"\"}", none, next, out));
+    TEST_ASSERT_EQUAL_STRING(BOTH_OR_NEITHER, out.c_str());
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"username\":\"admin\"}", none, next, out));
+    TEST_ASSERT_EQUAL_STRING(BOTH_OR_NEITHER, out.c_str());
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"username\":\"\",\"password\":\"x\"}", none, next, out));
+    TEST_ASSERT_EQUAL_STRING(BOTH_OR_NEITHER, out.c_str());
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"password\":\"x\"}", none, next, out));
+    TEST_ASSERT_EQUAL_STRING(BOTH_OR_NEITHER, out.c_str());
+    // Both empty: no credentials, as the default settings
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"username\":\"\",\"password\":\"\"}", none, next, out));
+    assertNut(next, "", "", "ups");
+    // Both new
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"username\":\"admin\",\"password\":\"x\"}", none, next, out));
+    assertNut(next, "admin", "x", "ups");
+}
+
+void test_nut_config_remove_credentials() {
+    const NUTServerConfig saved = nutCfg("admin", "secret", "ups");
+    NUTServerConfig next;
+    String out;
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"remove_credentials\":true}", saved, next, out));
+    assertNut(next, "", "", "ups");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"remove_credentials\":true,\"ups_name\":\"eaton\"}", saved, next, out));
+    assertNut(next, "", "", "eaton");
+    // Empty fields of the form may come along
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"remove_credentials\":true,\"username\":\"\",\"password\":\"\"}", saved, next, out));
+    assertNut(next, "", "", "ups");
+
+    const char* invalid[] = {
+        "{\"remove_credentials\":true,\"password\":\"x\"}",
+        "{\"remove_credentials\":true,\"username\":\"admin\"}",
+        "{\"remove_credentials\":\"yes\"}",
+        "{\"remove_credentials\":1}",
+    };
+    for (const char* json : invalid) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, nutFromBody(json, saved, next, out), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid request\"}", out.c_str(), json);
+    }
+    // false or null: an ordinary save
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"remove_credentials\":false,\"username\":\"admin\",\"password\":\"x\"}", saved, next, out));
+    assertNut(next, "admin", "x", "ups");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"remove_credentials\":null}", saved, next, out));
+    assertNut(next, "admin", "secret", "ups");
+}
+
+// The UPS name rules of US-082 are unchanged
+void test_nut_config_from_body_checks_the_ups_name() {
+    NUTServerConfig next;
+    String out;
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"ups_name\":\"my ups\"}", nutCfg("admin", "secret", "ups"), next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid UPS name\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"ups_name\":123,\"remove_credentials\":true}", nutCfg("admin", "secret", "ups"),
+                                       next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid UPS name\"}", out.c_str());
+}
+
+void test_needs_confirmation_spec_names() {
+    const char* names[] = {
+        "ups.shutdown",
+        "outlet.switchable",
+        "outlet.1.switchable",
+        "outlet.2.switchable",
+        "outlet.12.switchable",
+        "input.bypass.switchable",
+        "input.bypass.switch.on",
+        "input.eco.switchable",
+        "input.transfer.bypass.forced",
+    };
+    for (const char* n : names) TEST_ASSERT_TRUE_MESSAGE(WebApiJson::needsConfirmation(n), n);
+}
+
+void test_needs_confirmation_other_names() {
+    const char* names[] = {
+        "outlet.1.desc",
+        "battery.charge.low",
+        "input.transfer.low",
+        "input.transfer.bypass.high",
+        "input.bypass.",
+        "outlet..switchable",
+        "outlet.x.switchable",
+        "outlet.1.switchable.x",
+        "outlet.1.delay.shutdown",
+        "ups.shutdown.x",
+        "ups.delay.shutdown",
+        "",
+    };
+    for (const char* n : names) TEST_ASSERT_FALSE_MESSAGE(WebApiJson::needsConfirmation(n), n);
+    TEST_ASSERT_FALSE(WebApiJson::needsConfirmation(nullptr));
+}
+
+
+// --- Board page (US-094) ---
+
+static const BoardConfig P4_LIKE = {
+    "p4_like", "P4 test board", false, true,
+    { EthType::RMII, 0, 1, 31, 52, 50, 51, -1, -1, -1, -1, -1, -1 },
+    { false, 0, 0, {}, 0, {} },
+    { -1, -1 },
+    { 2, { { "hs", "High-Speed", 1 }, { "fs", "Full-Speed", 2 } } },
+    { "", "", false, 3, 0, NetworkMode::ETHERNET },
+};
+
+static int checkBoard(const char* json, const BoardConfig& b, const BoardSettings& cur, BoardSettings& next,
+                      bool& restart, String& out,
+                      AutoShutdownAvailability sd = AutoShutdownAvailability::AVAILABLE) {
+    JsonDocument doc;
+    deserializeJson(doc, json);
+    return WebApiJson::checkBoardSettingsBody(doc, b, cur, sd, next, restart, out);
+}
+
+void test_board_json_s3(void) {
+    String json = WebApiJson::boardSettingsJson(board(), defaultsFor(board()), AutoShutdownAvailability::AVAILABLE);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"id\":\"esp32s3_devkit\",\"label\":\"ESP32-S3 DevKitC-1\","
+        "\"led\":{\"present\":true,\"on\":true,\"level\":3,\"levels\":5},"
+        "\"usb\":{\"ports\":[{\"id\":\"otg\",\"label\":\"USB OTG\"}],\"port\":\"otg\"},"
+        "\"auto_shutdown\":{\"on\":false,\"available\":true}}",
+        json.c_str());
+}
+
+void test_board_json_two_ports_no_led(void) {
+    BoardSettings s = defaultsFor(P4_LIKE);
+    s.usb_port = 1;
+    String json = WebApiJson::boardSettingsJson(P4_LIKE, s, AutoShutdownAvailability::AVAILABLE);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"id\":\"p4_like\",\"label\":\"P4 test board\","
+        "\"usb\":{\"ports\":[{\"id\":\"hs\",\"label\":\"High-Speed\"},{\"id\":\"fs\",\"label\":\"Full-Speed\"}],"
+        "\"port\":\"fs\"},"
+        "\"auto_shutdown\":{\"on\":false,\"available\":true}}",
+        json.c_str());
+}
+
+// US-114: the automatic shutdown object of GET /api/board
+static JsonDocument boardDoc(bool on, AutoShutdownAvailability sd) {
+    BoardSettings s = defaultsFor(board());
+    s.auto_shutdown = on;
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::boardSettingsJson(board(), s, sd));
+    return doc;
+}
+
+void test_board_json_auto_shutdown(void) {
+    JsonDocument d = boardDoc(true, AutoShutdownAvailability::AVAILABLE);
+    TEST_ASSERT_TRUE(d["auto_shutdown"]["on"].as<bool>());
+    TEST_ASSERT_TRUE(d["auto_shutdown"]["available"].as<bool>());
+    TEST_ASSERT_TRUE(d["auto_shutdown"]["reason"].isNull());
+
+    d = boardDoc(false, AutoShutdownAvailability::NO_UPS);
+    TEST_ASSERT_FALSE(d["auto_shutdown"]["on"].as<bool>());
+    TEST_ASSERT_FALSE(d["auto_shutdown"]["available"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("no_ups", d["auto_shutdown"]["reason"].as<const char*>());
+
+    // On but no longer available (another UPS): still reported as on
+    d = boardDoc(true, AutoShutdownAvailability::NO_COMMAND);
+    TEST_ASSERT_TRUE(d["auto_shutdown"]["on"].as<bool>());
+    TEST_ASSERT_FALSE(d["auto_shutdown"]["available"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("no_command", d["auto_shutdown"]["reason"].as<const char*>());
+}
+
+void test_board_body_auto_shutdown(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"auto_shutdown\":true}", board(), cur, next, restart, out));
+    TEST_ASSERT_TRUE(next.auto_shutdown);
+    TEST_ASSERT_FALSE(restart);
+    // The other settings are left alone
+    TEST_ASSERT_TRUE(next.led_on);
+    TEST_ASSERT_EQUAL_UINT8(3, next.led_level);
+
+    cur.auto_shutdown = true;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"led_level\":4}", board(), cur, next, restart, out));
+    TEST_ASSERT_TRUE(next.auto_shutdown);
+    TEST_ASSERT_EQUAL_UINT8(4, next.led_level);
+
+    // Turning it off is always allowed
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"auto_shutdown\":false}", board(), cur, next, restart, out,
+                                    AutoShutdownAvailability::NO_COMMAND));
+    TEST_ASSERT_FALSE(next.auto_shutdown);
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"auto_shutdown\":false}", board(), cur, next, restart, out,
+                                    AutoShutdownAvailability::NO_UPS));
+    TEST_ASSERT_FALSE(next.auto_shutdown);
+}
+
+void test_board_body_auto_shutdown_refused(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart;
+    String out;
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"auto_shutdown\":true}", board(), cur, next, restart, out,
+                                      AutoShutdownAvailability::NO_UPS));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"UPS not connected\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"auto_shutdown\":true}", board(), cur, next, restart, out,
+                                      AutoShutdownAvailability::NO_COMMAND));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"The UPS offers no shutdown command\"}", out.c_str());
+    const char* bad[] = { "{\"auto_shutdown\":1}", "{\"auto_shutdown\":\"yes\"}", "{\"auto_shutdown\":null}" };
+    for (const char* b : bad) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, checkBoard(b, board(), cur, next, restart, out), b);
+        TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    }
+}
+
+// --- US-138: the Q* driver section of /api/board ---
+
+void test_board_json_without_qx_has_no_qx_object(void) {
+    BoardSettings s = defaultsFor(board());
+    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "hunnox");
+    String json = WebApiJson::boardSettingsJson(board(), s, AutoShutdownAvailability::AVAILABLE);
+    TEST_ASSERT_TRUE(json.indexOf("\"qx\"") < 0);
+    TEST_ASSERT_TRUE(json.indexOf("hunnox") < 0);
+}
+
+void test_board_json_with_qx(void) {
+    BoardSettings s = defaultsFor(board());
+    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "hunnox");
+    s.qx_novendor = true;
+    BoardQxInfo qx = { "Megatec 0.10" };
+    String json = WebApiJson::boardSettingsJson(board(), s, AutoShutdownAvailability::AVAILABLE, &qx);
+    TEST_ASSERT_TRUE(json.endsWith(
+        ",\"qx\":{\"protocol\":\"hunnox\",\"novendor\":true,"
+        "\"protocols\":[\"mustek\",\"megatec/old\",\"megatec\",\"zinto\",\"hunnox\",\"innovatae\",\"q1\"],"
+        "\"detected\":\"Megatec 0.10\"}}"));
+    // Automatic, nothing claimed yet
+    BoardQxInfo none = { "" };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::boardSettingsJson(board(), defaultsFor(board()),
+                                                       AutoShutdownAvailability::AVAILABLE, &none));
+    TEST_ASSERT_EQUAL_STRING("", doc["qx"]["protocol"]);
+    TEST_ASSERT_FALSE(doc["qx"]["novendor"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("", doc["qx"]["detected"]);
+    TEST_ASSERT_EQUAL(7, (int)doc["qx"]["protocols"].size());
+}
+
+void test_board_body_qx_protocol_accepts_known_and_empty(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"hunnox\"}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("hunnox", next.qx_protocol);
+    TEST_ASSERT_FALSE(restart);
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"HUNNOX\"}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("hunnox", next.qx_protocol);
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"Megatec/Old\"}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("megatec/old", next.qx_protocol);
+    snprintf(cur.qx_protocol, sizeof(cur.qx_protocol), "%s", "zinto");
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"\"}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("", next.qx_protocol);
+    // Absent: the saved value stays, the other settings too
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"led_level\":2}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("zinto", next.qx_protocol);
+    // Also with no UPS at all: board configuration, valid at the next Q* attach
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"q1\"}", board(), cur, next, restart, out,
+                                    AutoShutdownAvailability::NO_UPS));
+    TEST_ASSERT_EQUAL_STRING("q1", next.qx_protocol);
+}
+
+void test_board_body_qx_protocol_rejects_unknown(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart;
+    String out;
+    const char* bad[] = { "{\"qx_protocol\":\"megatec-old\"}", "{\"qx_protocol\":\"voltronic\"}",
+                          "{\"qx_protocol\":3}", "{\"qx_protocol\":true}", "{\"qx_protocol\":null}",
+                          "{\"qx_protocol\":\"megatec_with_a_very_long_name\"}" };
+    for (const char* b : bad) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, checkBoard(b, board(), cur, next, restart, out), b);
+        TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid protocol\"}", out.c_str());
+    }
+}
+
+void test_board_body_qx_novendor(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"hunnox\",\"qx_novendor\":true}", board(), cur, next,
+                                    restart, out));
+    TEST_ASSERT_TRUE(next.qx_novendor);
+    TEST_ASSERT_EQUAL_STRING("hunnox", next.qx_protocol);
+    TEST_ASSERT_FALSE(restart);
+    cur.qx_novendor = true;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_novendor\":false}", board(), cur, next, restart, out));
+    TEST_ASSERT_FALSE(next.qx_novendor);
+    const char* bad[] = { "{\"qx_novendor\":\"yes\"}", "{\"qx_novendor\":1}" };
+    for (const char* b : bad) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, checkBoard(b, board(), cur, next, restart, out), b);
+        TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    }
+}
+
+void test_board_body_led(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"led_level\":5}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_UINT8(5, next.led_level);
+    TEST_ASSERT_TRUE(next.led_on);
+    TEST_ASSERT_FALSE(restart);
+
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"led_on\":false}", board(), cur, next, restart, out));
+    TEST_ASSERT_FALSE(next.led_on);
+    TEST_ASSERT_EQUAL_UINT8(3, next.led_level);
+
+    // Empty body: nothing changes
+    TEST_ASSERT_EQUAL(0, checkBoard("{}", board(), cur, next, restart, out));
+    TEST_ASSERT_TRUE(next.led_on);
+    TEST_ASSERT_EQUAL_UINT8(3, next.led_level);
+    TEST_ASSERT_FALSE(restart);
+}
+
+void test_board_body_invalid_level(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart;
+    String out;
+    const char* bad[] = { "{\"led_level\":0}", "{\"led_level\":6}", "{\"led_level\":2.5}",
+                          "{\"led_level\":true}", "{\"led_level\":\"3\"}" };
+    for (const char* b : bad) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, checkBoard(b, board(), cur, next, restart, out), b);
+        TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid LED level\"}", out.c_str());
+    }
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"led_on\":1}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkBoard("[1]", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+}
+
+void test_board_body_usb_port(void) {
+    BoardSettings cur = defaultsFor(P4_LIKE), next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"usb_port\":\"fs\"}", P4_LIKE, cur, next, restart, out));
+    TEST_ASSERT_EQUAL_UINT8(1, next.usb_port);
+    TEST_ASSERT_TRUE(restart);
+    // Same port as now: no restart
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"usb_port\":\"hs\"}", P4_LIKE, cur, next, restart, out));
+    TEST_ASSERT_FALSE(restart);
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"usb_port\":\"xx\"}", P4_LIKE, cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid USB port\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"usb_port\":1}", P4_LIKE, cur, next, restart, out));
+    // The S3 accepts only its single port
+    BoardSettings s3 = defaultsFor(board());
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"usb_port\":\"otg\"}", board(), s3, next, restart, out));
+    TEST_ASSERT_FALSE(restart);
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"usb_port\":\"fs\"}", board(), s3, next, restart, out));
+}
+
+void test_board_body_no_led(void) {
+    BoardSettings cur = defaultsFor(P4_LIKE), next;
+    bool restart;
+    String out;
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"led_on\":true}", P4_LIKE, cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"No status LED on this board\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"led_level\":3}", P4_LIKE, cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"No status LED on this board\"}", out.c_str());
+}
+
+// --- Network page (US-112) ---
+
+static JsonDocument netStatus(const NetLinkInfo& info) {
+    JsonDocument doc;
+    WebApiJson::networkStatusJson(doc["network"].to<JsonObject>(), info);
+    return doc;
+}
+
+static NetLinkInfo wifiConnected() {
+    NetLinkInfo i;
+    i.type = "wifi";
+    i.state = NetLinkState::CONNECTED;
+    i.ip = "192.168.1.126";
+    i.gateway = "192.168.1.1";
+    const uint8_t mac[6] = { 0x3C, 0x84, 0x27, 0xC1, 0x2A, 0xF0 };
+    memcpy(i.mac, mac, 6);
+    i.dhcp = true;
+    i.ssid = "HomeNetwork";
+    i.rssi = -58;
+    i.has_rssi = true;
+    return i;
+}
+
+void test_network_status_wifi_connected(void) {
+    JsonDocument doc = netStatus(wifiConnected());
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("wifi", n["type"]);
+    TEST_ASSERT_EQUAL_STRING("connected", n["state"]);
+    TEST_ASSERT_EQUAL_STRING("192.168.1.126", n["ip"]);
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", n["gateway"]);
+    TEST_ASSERT_EQUAL_STRING("3C:84:27:C1:2A:F0", n["mac"]);
+    TEST_ASSERT_TRUE(n["dhcp"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("HomeNetwork", n["ssid"]);
+    TEST_ASSERT_EQUAL_INT(-58, n["rssi"].as<int>());
+    TEST_ASSERT_TRUE(n["link_speed"].isNull());
+    TEST_ASSERT_TRUE(n["full_duplex"].isNull());
+}
+
+void test_network_status_wifi_connecting(void) {
+    NetLinkInfo i;
+    i.type = "wifi";
+    i.state = NetLinkState::CONNECTING;
+    i.ip = "0.0.0.0";
+    i.ssid = "HomeNetwork"; // the network it is joining
+    i.mac[5] = 1;
+    JsonDocument doc = netStatus(i);
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("connecting", n["state"]);
+    TEST_ASSERT_EQUAL_STRING("00:00:00:00:00:01", n["mac"]);
+    TEST_ASSERT_TRUE(n["ip"].isNull());
+    TEST_ASSERT_TRUE(n["gateway"].isNull());
+    TEST_ASSERT_EQUAL_STRING("HomeNetwork", n["ssid"]);
+    TEST_ASSERT_TRUE(n["rssi"].isNull());
+}
+
+void test_network_status_access_point(void) {
+    NetLinkInfo i;
+    i.type = "wifi";
+    i.state = NetLinkState::ACCESS_POINT;
+    i.ip = "192.168.4.1";
+    i.ssid = "ESP32-NUT-2AF0";
+    i.mac[0] = 0x3C;
+    JsonDocument doc = netStatus(i);
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("ap", n["state"]);
+    TEST_ASSERT_EQUAL_STRING("192.168.4.1", n["ip"]);
+    TEST_ASSERT_EQUAL_STRING("ESP32-NUT-2AF0", n["ssid"]);
+    TEST_ASSERT_FALSE(n["mac"].isNull());
+    TEST_ASSERT_TRUE(n["gateway"].isNull());
+    TEST_ASSERT_TRUE(n["dhcp"].isNull());
+    TEST_ASSERT_TRUE(n["rssi"].isNull());
+}
+
+void test_network_status_ethernet_connected(void) {
+    NetLinkInfo i;
+    i.type = "ethernet";
+    i.state = NetLinkState::CONNECTED;
+    i.ip = "192.168.1.50";
+    i.gateway = "192.168.1.1";
+    i.mac[0] = 0x30;
+    i.dhcp = true;
+    i.link_speed_mbps = 100;
+    i.full_duplex = true;
+    JsonDocument doc = netStatus(i);
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("ethernet", n["type"]);
+    TEST_ASSERT_EQUAL_STRING("connected", n["state"]);
+    TEST_ASSERT_EQUAL_STRING("192.168.1.50", n["ip"]);
+    TEST_ASSERT_EQUAL_INT(100, n["link_speed"].as<int>());
+    TEST_ASSERT_TRUE(n["full_duplex"].as<bool>());
+    TEST_ASSERT_TRUE(n["dhcp"].as<bool>());
+    TEST_ASSERT_TRUE(n["ssid"].isNull());
+    TEST_ASSERT_TRUE(n["rssi"].isNull());
+}
+
+void test_network_status_ethernet_down(void) {
+    NetLinkInfo i;
+    i.type = "ethernet";
+    i.state = NetLinkState::DISCONNECTED;
+    i.mac[0] = 0x30;
+    JsonDocument doc = netStatus(i);
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("disconnected", n["state"]);
+    TEST_ASSERT_TRUE(n["ip"].isNull());
+    TEST_ASSERT_TRUE(n["gateway"].isNull());
+    TEST_ASSERT_TRUE(n["link_speed"].isNull());
+    TEST_ASSERT_FALSE(n["dhcp"].as<bool>());
+}
+
+void test_network_status_no_link(void) {
+    JsonDocument doc = netStatus(NetLinkInfo());
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("none", n["type"]);
+    TEST_ASSERT_EQUAL_STRING("disconnected", n["state"]);
+    TEST_ASSERT_TRUE(n["mac"].isNull());
+    TEST_ASSERT_TRUE(n["ip"].isNull());
+}
+
+static std::string netLinks(const BoardConfig& b) {
+    JsonDocument doc;
+    WebApiJson::networkLinksJson(doc["links"].to<JsonArray>(), b);
+    std::string out;
+    serializeJson(doc["links"], out);
+    return out;
+}
+
+void test_network_links_from_board_profile(void) {
+    TEST_ASSERT_EQUAL_STRING("[\"wifi\"]", netLinks(board()).c_str());
+    TEST_ASSERT_EQUAL_STRING("[\"ethernet\"]", netLinks(P4_LIKE).c_str());
+    BoardConfig both = P4_LIKE;
+    both.has_wifi = true;
+    TEST_ASSERT_EQUAL_STRING("[\"wifi\",\"ethernet\"]", netLinks(both).c_str());
+}
+
+// --- US-113: POST /api/network/hostname and network.hostname of GET /api/config ---
+
+static int hostnameStatus(const char* json, String& next, String& out) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, json));
+    next = "unchanged";
+    out = "";
+    return WebApiJson::checkHostnameBody(doc, next, out);
+}
+
+void test_hostname_body_valid_name(void) {
+    String next, out;
+    TEST_ASSERT_EQUAL(0, hostnameStatus("{\"hostname\":\"espnut-network\"}", next, out));
+    TEST_ASSERT_EQUAL_STRING("espnut-network", next.c_str());
+    TEST_ASSERT_EQUAL_STRING("", out.c_str());
+}
+
+void test_hostname_body_empty_means_default(void) {
+    String next, out;
+    TEST_ASSERT_EQUAL(0, hostnameStatus("{\"hostname\":\"\"}", next, out));
+    TEST_ASSERT_EQUAL_STRING("", next.c_str());
+}
+
+void test_hostname_body_missing_or_not_a_string(void) {
+    const char* bodies[] = { "{}", "{\"hostname\":5}", "{\"hostname\":null}", "{\"hostname\":true}",
+                             "{\"hostname\":[\"a\"]}" };
+    for (const char* json : bodies) {
+        String next, out;
+        TEST_ASSERT_EQUAL_MESSAGE(400, hostnameStatus(json, next, out), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid request\"}", out.c_str(), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("unchanged", next.c_str(), json);
+    }
+}
+
+void test_hostname_body_invalid_name(void) {
+    std::string expected = std::string("{\"error\":\"") + WebApiJson::INVALID_HOSTNAME_ERROR + "\"}";
+    std::string name33 = "{\"hostname\":\"" + std::string(33, 'a') + "\"}";
+    const char* bodies[] = { "{\"hostname\":\"-bad\"}", "{\"hostname\":\"bad-\"}", "{\"hostname\":\"has space\"}",
+                             "{\"hostname\":\"a_b\"}", name33.c_str() };
+    for (const char* json : bodies) {
+        String next, out;
+        TEST_ASSERT_EQUAL_MESSAGE(400, hostnameStatus(json, next, out), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(expected.c_str(), out.c_str(), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("unchanged", next.c_str(), json);
+    }
+}
+
+void test_hostname_json(void) {
+    JsonDocument doc;
+    WebApiJson::hostnameJson(doc["hostname"].to<JsonObject>(), String("espnut-network"), String("espnut-network"),
+                             String("esp32-nut-56d784"));
+    std::string out;
+    serializeJson(doc["hostname"], out);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"name\":\"espnut-network\",\"custom\":\"espnut-network\",\"default\":\"esp32-nut-56d784\"}", out.c_str());
+
+    JsonDocument def;
+    WebApiJson::hostnameJson(def["hostname"].to<JsonObject>(), String("esp32-nut-56d784"), String(""),
+                             String("esp32-nut-56d784"));
+    TEST_ASSERT_EQUAL_STRING("", def["hostname"]["custom"]);
+    TEST_ASSERT_EQUAL_STRING("esp32-nut-56d784", def["hostname"]["name"]);
+}
+
+// --- US-126: GET/POST /api/network/eth and network.links with a W5500 ---
+
+static EthSpiSettings ethExample() {
+    EthSpiSettings s = { true, 12, 11, 13, 10, 9, 14 };
+    return s;
+}
+
+void test_eth_spi_json_off(void) {
+    String json = WebApiJson::ethSpiJson(board(), ethSpiDefaults(), "off", "");
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"available\":true,\"enabled\":false,\"pins\":{\"sck\":null,\"mosi\":null,\"miso\":null,\"cs\":null,"
+        "\"irq\":null,\"rst\":null},\"strapping\":[0,3,45,46],\"status\":{\"state\":\"off\"}}",
+        json.c_str());
+}
+
+void test_eth_spi_json_active(void) {
+    String json = WebApiJson::ethSpiJson(board(), ethExample(), "active", "");
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"available\":true,\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,"
+        "\"irq\":9,\"rst\":14},\"strapping\":[0,3,45,46],\"status\":{\"state\":\"active\"}}",
+        json.c_str());
+}
+
+void test_eth_spi_json_fallback_with_reason(void) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::ethSpiJson(board(), ethExample(), "fallback", "no_chip")));
+    TEST_ASSERT_EQUAL_STRING("fallback", doc["status"]["state"]);
+    TEST_ASSERT_EQUAL_STRING("no_chip", doc["status"]["reason"]);
+}
+
+static int ethStatus(const char* json, const EthSpiSettings& current, EthSpiSettings& next, bool& restart,
+                     String& out) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, json));
+    out = "";
+    return WebApiJson::checkEthSpiBody(doc, board(), current, next, restart, out);
+}
+
+void test_eth_spi_body_valid_enables_and_restarts(void) {
+    EthSpiSettings next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,"
+                                   "\"irq\":9,\"rst\":14}}",
+                                   ethSpiDefaults(), next, restart, out));
+    TEST_ASSERT_TRUE(restart);
+    TEST_ASSERT_TRUE(next == ethExample());
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":true,\"warnings\":[]}", out.c_str());
+}
+
+void test_eth_spi_body_same_values_do_not_restart(void) {
+    EthSpiSettings next;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,"
+                                   "\"irq\":9,\"rst\":14}}",
+                                   ethExample(), next, restart, out));
+    TEST_ASSERT_FALSE(restart);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":false,\"warnings\":[]}", out.c_str());
+}
+
+void test_eth_spi_body_invalid_requests(void) {
+    const char* bodies[] = { "{}", "{\"enabled\":1}", "{\"enabled\":\"true\"}", "{\"enabled\":null}",
+                             "{\"enabled\":true,\"pins\":[12]}", "{\"enabled\":true,\"pins\":5}",
+                             "{\"enabled\":false,\"pins\":{\"sck\":\"12\"}}",
+                             "{\"enabled\":false,\"pins\":{\"cs\":2.5}}",
+                             "{\"enabled\":false,\"pins\":{\"rst\":true}}" };
+    for (const char* json : bodies) {
+        EthSpiSettings next;
+        bool restart = true;
+        String out;
+        TEST_ASSERT_EQUAL_MESSAGE(400, ethStatus(json, ethExample(), next, restart, out), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid request\"}", out.c_str(), json);
+        TEST_ASSERT_TRUE_MESSAGE(next == ethExample(), json);
+        TEST_ASSERT_FALSE_MESSAGE(restart, json);
+    }
+}
+
+void test_eth_spi_body_forbidden_pin(void) {
+    EthSpiSettings next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(400, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":19,\"mosi\":11,\"miso\":13,\"cs\":10}}",
+                                     ethSpiDefaults(), next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"GPIO 19 cannot be used for SCK: USB port of the UPS\"}", out.c_str());
+    TEST_ASSERT_TRUE(next == ethSpiDefaults());
+
+    TEST_ASSERT_EQUAL(400, ethStatus("{\"enabled\":false,\"pins\":{\"cs\":300}}", ethSpiDefaults(), next, restart,
+                                     out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"GPIO 300 does not exist on this board\"}", out.c_str());
+}
+
+void test_eth_spi_body_duplicate_and_required(void) {
+    EthSpiSettings next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(400, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":12}}",
+                                     ethSpiDefaults(), next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"GPIO 12 is used for both SCK and CS\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"cs\":10}}",
+                                     ethSpiDefaults(), next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"MISO is required to enable the W5500\"}", out.c_str());
+}
+
+void test_eth_spi_body_strapping_warning(void) {
+    EthSpiSettings next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,"
+                                   "\"irq\":9,\"rst\":3}}",
+                                   ethSpiDefaults(), next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":true,\"warnings\":[\"GPIO 3 is a strapping pin: the "
+                             "board may not boot if the module pulls it at power-on\"]}",
+                             out.c_str());
+    TEST_ASSERT_EQUAL_INT8(3, next.rst);
+}
+
+void test_eth_spi_body_optional_pins_null(void) {
+    EthSpiSettings next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,"
+                                   "\"irq\":null,\"rst\":null}}",
+                                   ethExample(), next, restart, out));
+    TEST_ASSERT_EQUAL_INT8(-1, next.irq);
+    TEST_ASSERT_EQUAL_INT8(-1, next.rst);
+    TEST_ASSERT_TRUE(restart);
+
+    // Missing keys are not set either
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":false}", ethExample(), next, restart, out));
+    TEST_ASSERT_TRUE(next == ethSpiDefaults());
+}
+
+// --- US-127: link mode of the W5500 section ---
+
+void test_eth_spi_json_with_mode(void) {
+    String json = WebApiJson::ethSpiJson(board(), ethExample(), NetworkMode::ETHERNET, "active", "");
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"available\":true,\"enabled\":true,\"mode\":\"ethernet\",\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,"
+        "\"cs\":10,\"irq\":9,\"rst\":14},\"strapping\":[0,3,45,46],\"status\":{\"state\":\"active\"}}",
+        json.c_str());
+
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::ethSpiJson(board(), ethExample(), NetworkMode::AUTO,
+                                                                  "standby", "")));
+    TEST_ASSERT_EQUAL_STRING("auto", doc["mode"]);
+    TEST_ASSERT_EQUAL_STRING("standby", doc["status"]["state"]);
+    TEST_ASSERT_TRUE(doc["status"]["reason"].isNull());
+
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::ethSpiJson(board(), ethExample(), NetworkMode::WIFI,
+                                                                  "unused", "")));
+    TEST_ASSERT_EQUAL_STRING("wifi", doc["mode"]);
+    TEST_ASSERT_EQUAL_STRING("unused", doc["status"]["state"]);
+}
+
+static int ethModeStatus(const char* json, const EthSpiSettings& current, NetworkMode current_mode,
+                         EthSpiSettings& next, NetworkMode& next_mode, bool& restart, String& out) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, json));
+    out = "";
+    return WebApiJson::checkEthSpiBody(doc, board(), current, current_mode, next, next_mode, restart, out);
+}
+
+#define ETH_EXAMPLE_PINS "\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,\"irq\":9,\"rst\":14}"
+
+void test_eth_spi_body_mode_change_alone_restarts(void) {
+    EthSpiSettings next;
+    NetworkMode next_mode = NetworkMode::AUTO;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethModeStatus("{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":\"ethernet\"}", ethExample(),
+                                       NetworkMode::AUTO, next, next_mode, restart, out));
+    TEST_ASSERT_TRUE(restart);
+    TEST_ASSERT_TRUE(next_mode == NetworkMode::ETHERNET);
+    TEST_ASSERT_TRUE(next == ethExample());
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":true,\"warnings\":[]}", out.c_str());
+}
+
+void test_eth_spi_body_missing_mode_keeps_it(void) {
+    EthSpiSettings next;
+    NetworkMode next_mode = NetworkMode::AUTO;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethModeStatus("{\"enabled\":true," ETH_EXAMPLE_PINS "}", ethExample(), NetworkMode::WIFI,
+                                       next, next_mode, restart, out));
+    TEST_ASSERT_TRUE(next_mode == NetworkMode::WIFI);
+    TEST_ASSERT_FALSE(restart);
+}
+
+void test_eth_spi_body_same_pins_and_mode_do_not_restart(void) {
+    EthSpiSettings next;
+    NetworkMode next_mode = NetworkMode::AUTO;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethModeStatus("{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":\"wifi\"}", ethExample(),
+                                       NetworkMode::WIFI, next, next_mode, restart, out));
+    TEST_ASSERT_FALSE(restart);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":false,\"warnings\":[]}", out.c_str());
+}
+
+void test_eth_spi_body_invalid_mode(void) {
+    const char* bodies[] = { "{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":\"Auto\"}",
+                             "{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":5}",
+                             "{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":null}",
+                             "{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":\"\"}" };
+    for (const char* json : bodies) {
+        EthSpiSettings next;
+        NetworkMode next_mode = NetworkMode::AUTO;
+        bool restart = true;
+        String out;
+        TEST_ASSERT_EQUAL_MESSAGE(400, ethModeStatus(json, ethExample(), NetworkMode::ETHERNET, next, next_mode,
+                                                     restart, out),
+                                  json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid network mode\"}", out.c_str(), json);
+        TEST_ASSERT_TRUE_MESSAGE(next_mode == NetworkMode::ETHERNET, json);
+        TEST_ASSERT_TRUE_MESSAGE(next == ethExample(), json);
+        TEST_ASSERT_FALSE_MESSAGE(restart, json);
+    }
+}
+
+void test_eth_spi_body_forbidden_pin_wins_over_a_valid_mode(void) {
+    EthSpiSettings next;
+    NetworkMode next_mode = NetworkMode::AUTO;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(400, ethModeStatus("{\"enabled\":true,\"pins\":{\"sck\":19,\"mosi\":11,\"miso\":13,\"cs\":10},"
+                                         "\"mode\":\"ethernet\"}",
+                                         ethSpiDefaults(), NetworkMode::AUTO, next, next_mode, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"GPIO 19 cannot be used for SCK: USB port of the UPS\"}", out.c_str());
+    TEST_ASSERT_TRUE(next_mode == NetworkMode::AUTO);
+}
+
+void test_eth_spi_json_active_without_connection(void) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::ethSpiJson(board(), ethExample(), NetworkMode::ETHERNET,
+                                                                  "active", "no_link")));
+    TEST_ASSERT_EQUAL_STRING("active", doc["status"]["state"]);
+    TEST_ASSERT_EQUAL_STRING("no_link", doc["status"]["reason"]);
+}
+
+void test_eth_spi_body_us126_overload_ignores_the_mode(void) {
+    EthSpiSettings next;
+    bool restart = true;
+    String out;
+    // Same pins: no restart, whatever the mode says (it would not be saved)
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":\"ethernet\"}", ethExample(),
+                                   next, restart, out));
+    TEST_ASSERT_FALSE(restart);
+    // Not a valid mode either: not refused, the key is not part of this contract
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":5}", ethExample(), next,
+                                   restart, out));
+    TEST_ASSERT_FALSE(restart);
+}
+
+void test_network_links_with_w5500(void) {
+    JsonDocument on;
+    WebApiJson::networkLinksJson(on["links"].to<JsonArray>(), board(), true);
+    std::string out;
+    serializeJson(on["links"], out);
+    TEST_ASSERT_EQUAL_STRING("[\"wifi\",\"ethernet\"]", out.c_str());
+
+    JsonDocument off;
+    WebApiJson::networkLinksJson(off["links"].to<JsonArray>(), board(), false);
+    out.clear();
+    serializeJson(off["links"], out);
+    TEST_ASSERT_EQUAL_STRING("[\"wifi\"]", out.c_str());
+}
+
+// ---- Custom variables of the NUT Server page (US-115) ----
+
+static NutOverride makeOverride(const char* key, const char* value, const char* desc = "") {
+    NutOverride o;
+    o.key = key;
+    o.value = value;
+    o.description = desc;
+    return o;
+}
+
+void test_overrides_json_with_ups_values() {
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.data.set("battery.charge.low", "20");
+    std::vector<NutOverride> list = {
+        makeOverride("ups.model", "Studio", "Renamed"),
+        makeOverride("battery.date", "2025-03-01"),
+        makeOverride("device.model", "Rack"),
+        makeOverride("BATTERY.CHARGE.LOW", "30"),
+    };
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::nutOverridesJson(list, &mockHost)));
+    TEST_ASSERT_EQUAL(16, doc["max"].as<int>());
+    TEST_ASSERT_EQUAL(64, doc["max_value_length"].as<int>());
+    TEST_ASSERT_EQUAL(64, doc["max_description_length"].as<int>());
+    JsonArray arr = doc["overrides"].as<JsonArray>();
+    TEST_ASSERT_EQUAL(4, arr.size());
+    TEST_ASSERT_EQUAL_STRING("ups.model", arr[0]["key"]);
+    TEST_ASSERT_EQUAL_STRING("Studio", arr[0]["value"]);
+    TEST_ASSERT_EQUAL_STRING("Renamed", arr[0]["description"]);
+    TEST_ASSERT_EQUAL_STRING("Eaton 3S 700", arr[0]["ups_value"]);
+    // Not reported by the UPS: null, the page shows "Added"
+    TEST_ASSERT_TRUE(arr[1]["ups_value"].isNull());
+    TEST_ASSERT_TRUE(WebApiJson::nutOverridesJson(list, &mockHost).indexOf("\"key\":\"battery.date\",\"value\":\"2025-03-01\",\"description\":\"\",\"ups_value\":null") >= 0);
+    TEST_ASSERT_EQUAL_STRING("", arr[1]["description"]);
+    // The alias device.model replaces the value of ups.model
+    TEST_ASSERT_EQUAL_STRING("Eaton 3S 700", arr[2]["ups_value"]);
+    // Key in another case
+    TEST_ASSERT_EQUAL_STRING("20", arr[3]["ups_value"]);
+}
+
+void test_overrides_json_without_ups() {
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.connected = false;
+    std::vector<NutOverride> list = { makeOverride("ups.model", "Studio") };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::nutOverridesJson(list, &mockHost));
+    TEST_ASSERT_TRUE(doc["overrides"][0]["ups_value"].isNull());
+    deserializeJson(doc, WebApiJson::nutOverridesJson(list, nullptr));
+    TEST_ASSERT_TRUE(doc["overrides"][0]["ups_value"].isNull());
+    deserializeJson(doc, WebApiJson::nutOverridesJson(std::vector<NutOverride>(), nullptr));
+    TEST_ASSERT_EQUAL(0, doc["overrides"].size());
+}
+
+// --- US-146: _realpower_estimate in GET /api/ups-vars ---
+
+static void estimateFrom(float custom_w, float custom_va) {
+    mockHost.data.set("ups.load", "10.4");
+    mockHost.data.setCustomPowerNominals(custom_w, custom_va);
+    mockHost.data.updateRealPower();
+}
+
+void test_ups_vars_estimate_custom_watts() {
+    estimateFrom(980, 0);
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost)));
+    TEST_ASSERT_EQUAL(102, doc["ups.realpower"].as<int>());
+    JsonObject e = doc["_realpower_estimate"];
+    TEST_ASSERT_EQUAL_STRING("custom", e["source"]);
+    TEST_ASSERT_EQUAL_STRING("ups.realpower.nominal", e["key"]);
+    TEST_ASSERT_EQUAL_FLOAT(980.0f, e["nominal"].as<float>());
+    TEST_ASSERT_EQUAL_STRING("W", e["unit"]);
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, e["factor"].as<float>());
+}
+
+void test_ups_vars_estimate_custom_va() {
+    estimateFrom(0, 1500);
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost));
+    JsonObject e = doc["_realpower_estimate"];
+    TEST_ASSERT_EQUAL_STRING("custom", e["source"]);
+    TEST_ASSERT_EQUAL_STRING("ups.power.nominal", e["key"]);
+    TEST_ASSERT_EQUAL_FLOAT(1500.0f, e["nominal"].as<float>());
+    TEST_ASSERT_EQUAL_STRING("VA", e["unit"]);
+    TEST_ASSERT_EQUAL_FLOAT(0.6f, e["factor"].as<float>());
+}
+
+void test_ups_vars_estimate_ups_watts() {
+    mockHost.data.set("ups.realpower.nominal", "900");
+    estimateFrom(0, 0);
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost));
+    JsonObject e = doc["_realpower_estimate"];
+    TEST_ASSERT_EQUAL_STRING("ups", e["source"]);
+    TEST_ASSERT_EQUAL_STRING("ups.realpower.nominal", e["key"]);
+    TEST_ASSERT_EQUAL_FLOAT(900.0f, e["nominal"].as<float>());
+    TEST_ASSERT_EQUAL_STRING("W", e["unit"]);
+}
+
+void test_ups_vars_estimate_ups_va() {
+    mockHost.data.set("ups.power.nominal", "700");
+    estimateFrom(0, 0);
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost));
+    JsonObject e = doc["_realpower_estimate"];
+    TEST_ASSERT_EQUAL_STRING("ups", e["source"]);
+    TEST_ASSERT_EQUAL_STRING("ups.power.nominal", e["key"]);
+    TEST_ASSERT_EQUAL_STRING("VA", e["unit"]);
+    TEST_ASSERT_EQUAL_FLOAT(0.6f, e["factor"].as<float>());
+}
+
+void test_ups_vars_measured_realpower_has_no_estimate() {
+    mockHost.data.markRealPowerMeasured();
+    mockHost.data.set("ups.realpower", "321");
+    estimateFrom(980, 0);
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost));
+    TEST_ASSERT_EQUAL(321, doc["ups.realpower"].as<int>());
+    TEST_ASSERT_TRUE(doc["_realpower_estimate"].isNull());
+}
+
+void test_ups_vars_without_estimate_unchanged() {
+    mockHost.data.set("ups.load", "10.4");
+    String before = WebApiJson::generateUpsVars(&mockHost);
+    mockHost.data.updateRealPower(); // no nominal power: nothing to estimate
+    TEST_ASSERT_EQUAL_STRING(before.c_str(), WebApiJson::generateUpsVars(&mockHost).c_str());
+    TEST_ASSERT_EQUAL(-1, (int)before.indexOf("_realpower_estimate"));
+}
+
+void test_ups_vars_disconnected_has_no_estimate() {
+    estimateFrom(980, 0);
+    mockHost.connected = false;
+    String out = WebApiJson::generateUpsVars(&mockHost);
+    TEST_ASSERT_EQUAL(-1, (int)out.indexOf("_realpower_estimate"));
+}
+
+// --- US-144: custom NUT variables in GET /api/ups-vars ---
+
+void test_ups_vars_overridden_keeps_ups_value() {
+    mockHost.data.set("battery.runtime.low", "120");
+    std::vector<NutOverride> list = { makeOverride("battery.runtime.low", "300", "Shut the NAS down earlier") };
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost, &list)));
+    TEST_ASSERT_EQUAL(120, doc["battery.runtime.low"].as<int>());
+    JsonObject e = doc["_overrides"]["battery.runtime.low"];
+    TEST_ASSERT_EQUAL_STRING("battery.runtime.low", e["key"]);
+    TEST_ASSERT_EQUAL_STRING("300", e["value"]);
+    TEST_ASSERT_EQUAL_STRING("Shut the NAS down earlier", e["description"]);
+    TEST_ASSERT_FALSE(e["added"].as<bool>());
+    TEST_ASSERT_EQUAL(1, doc["_overrides"].size());
+}
+
+void test_ups_vars_added_variable() {
+    mockHost.data.set("battery.charge", "100");
+    std::vector<NutOverride> list = { makeOverride("battery.date", "2025/03/01") };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost, &list));
+    JsonObject e = doc["_overrides"]["battery.date"];
+    TEST_ASSERT_TRUE(e["added"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("2025/03/01", e["value"]);
+    TEST_ASSERT_EQUAL_STRING("", e["description"]);
+    // Only in _overrides: the real values stay what the UPS reports
+    TEST_ASSERT_TRUE(doc["battery.date"].isNull());
+}
+
+void test_ups_vars_override_key_in_another_case() {
+    mockHost.data.set("battery.runtime.low", "120");
+    std::vector<NutOverride> list = { makeOverride("Battery.Runtime.Low", "300") };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost, &list));
+    // Indexed by the UPS row, with the key as saved (upsd ignores the case)
+    JsonObject e = doc["_overrides"]["battery.runtime.low"];
+    TEST_ASSERT_EQUAL_STRING("Battery.Runtime.Low", e["key"]);
+    TEST_ASSERT_FALSE(e["added"].as<bool>());
+    TEST_ASSERT_TRUE(doc["_overrides"]["Battery.Runtime.Low"].isNull());
+}
+
+void test_ups_vars_device_alias_row() {
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.data.set("device.model", "Eaton 3S 700");
+    std::vector<NutOverride> list = { makeOverride("ups.model", "Studio") };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost, &list));
+    TEST_ASSERT_EQUAL_STRING("Studio", doc["_overrides"]["ups.model"]["value"]);
+    TEST_ASSERT_EQUAL_STRING("ups.model", doc["_overrides"]["device.model"]["key"]);
+    TEST_ASSERT_EQUAL_STRING("Studio", doc["_overrides"]["device.model"]["value"]);
+    TEST_ASSERT_FALSE(doc["_overrides"]["device.model"]["added"].as<bool>());
+
+    // Without a device.model row the page gets no alias entry
+    mockHost.data = UPSData();
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost, &list));
+    TEST_ASSERT_TRUE(doc["_overrides"]["device.model"].isNull());
+    TEST_ASSERT_EQUAL(1, doc["_overrides"].size());
+}
+
+void test_ups_vars_device_alias_own_override_wins() {
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.data.set("device.model", "Eaton 3S 700");
+    std::vector<NutOverride> list = {
+        makeOverride("ups.model", "Studio"),
+        makeOverride("device.model", "Rack"),
+    };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost, &list));
+    TEST_ASSERT_EQUAL_STRING("device.model", doc["_overrides"]["device.model"]["key"]);
+    TEST_ASSERT_EQUAL_STRING("Rack", doc["_overrides"]["device.model"]["value"]);
+    TEST_ASSERT_EQUAL_STRING("Studio", doc["_overrides"]["ups.model"]["value"]);
+}
+
+void test_ups_vars_disconnected_has_no_overrides() {
+    mockHost.connected = false;
+    std::vector<NutOverride> list = { makeOverride("battery.date", "2025/03/01") };
+    TEST_ASSERT_EQUAL_STRING("{\"_disconnected\":true,\"ups.status\":\"Disconnected\"}",
+                             WebApiJson::generateUpsVars(&mockHost, &list).c_str());
+}
+
+void test_ups_vars_stale_keeps_overrides() {
+    mockHost.stale = true;
+    mockHost.data.set("battery.charge", "100");
+    std::vector<NutOverride> list = { makeOverride("battery.date", "2025/03/01") };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost, &list));
+    TEST_ASSERT_TRUE(doc["_stale"].as<bool>());
+    TEST_ASSERT_TRUE(doc["_overrides"]["battery.date"]["added"].as<bool>());
+}
+
+void test_ups_vars_without_overrides_unchanged() {
+    mockHost.data.set("ups.mfr", "Eaton");
+    mockHost.data.set("battery.charge", "100");
+    String plain = WebApiJson::generateUpsVars(&mockHost);
+    std::vector<NutOverride> empty;
+    TEST_ASSERT_EQUAL_STRING(plain.c_str(), WebApiJson::generateUpsVars(&mockHost, &empty).c_str());
+    TEST_ASSERT_EQUAL_STRING(plain.c_str(), WebApiJson::generateUpsVars(&mockHost, nullptr).c_str());
+    TEST_ASSERT_EQUAL(-1, plain.indexOf("_overrides"));
+}
+
+void test_overrides_body_valid() {
+    std::vector<NutOverride> next;
+    String out;
+    TEST_ASSERT_EQUAL(0, WebApiJson::checkNutOverridesBody(
+        "{\"overrides\":[{\"key\":\"battery.date\",\"value\":\"2025-03-01\",\"description\":\"Battery replaced\"},"
+        "{\"key\":\"ups.model\",\"value\":\"\"}]}", next, out));
+    TEST_ASSERT_EQUAL(2, (int)next.size());
+    TEST_ASSERT_EQUAL_STRING("battery.date", next[0].key.c_str());
+    TEST_ASSERT_EQUAL_STRING("Battery replaced", next[0].description.c_str());
+    // description missing: empty
+    TEST_ASSERT_EQUAL_STRING("", next[1].description.c_str());
+    TEST_ASSERT_EQUAL_STRING("", next[1].value.c_str());
+    // An empty list clears every override
+    TEST_ASSERT_EQUAL(0, WebApiJson::checkNutOverridesBody("{\"overrides\":[]}", next, out));
+    TEST_ASSERT_EQUAL(0, (int)next.size());
+}
+
+void test_overrides_body_invalid_request() {
+    std::string tooLong = "{\"overrides\":[],\"pad\":\"";
+    tooLong.append(WebApiJson::MAX_OVERRIDES_BODY_LENGTH, 'x');
+    tooLong += "\"}";
+    const char* bodies[] = {
+        "not json",
+        "{}",
+        "{\"overrides\":{}}",
+        "{\"overrides\":[{\"value\":\"1\"}]}",
+        "{\"overrides\":[{\"key\":\"battery.date\"}]}",
+        "{\"overrides\":[{\"key\":\"battery.date\",\"value\":1}]}",
+        "{\"overrides\":[{\"key\":\"battery.date\",\"value\":\"1\",\"description\":2}]}",
+        "{\"overrides\":[\"battery.date\"]}",
+        tooLong.c_str(),
+    };
+    for (const char* body : bodies) {
+        std::vector<NutOverride> next;
+        String out;
+        TEST_ASSERT_EQUAL_MESSAGE(400, WebApiJson::checkNutOverridesBody(body, next, out), body);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid request\"}", out.c_str(), body);
+        TEST_ASSERT_EQUAL_MESSAGE(0, (int)next.size(), body);
+    }
+}
+
+// Rule broken: the message of NutOverrides and the index of the entry
+static void expectOverridesError(const char* body, const char* error, int index) {
+    std::vector<NutOverride> next;
+    String out;
+    TEST_ASSERT_EQUAL_MESSAGE(400, WebApiJson::checkNutOverridesBody(body, next, out), body);
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, out.c_str()));
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(error, doc["error"].as<const char*>(), body);
+    TEST_ASSERT_EQUAL_MESSAGE(index, doc["index"].as<int>(), body);
+    TEST_ASSERT_EQUAL_MESSAGE(0, (int)next.size(), body);
+}
+
+void test_overrides_body_rule_errors() {
+    expectOverridesError("{\"overrides\":[{\"key\":\"battery.date\",\"value\":\"1\"},{\"key\":\"ups.status\",\"value\":\"OB\"}]}",
+                         "ups.status cannot be overridden", 1);
+    expectOverridesError("{\"overrides\":[{\"key\":\"bad \\\"key\",\"value\":\"1\"}]}",
+                         "Invalid key \"bad \"key\": use dot-separated parts of letters, digits, '_' and '-' (e.g. battery.date)", 0);
+    expectOverridesError("{\"overrides\":[{\"key\":\"battery.date\",\"value\":\"a\\tb\"}]}",
+                         "Invalid value for battery.date: printable ASCII only, at most 64 characters", 0);
+    expectOverridesError("{\"overrides\":[{\"key\":\"battery.date\",\"value\":\"1\",\"description\":\"\\u00e8\"}]}",
+                         "Invalid description for battery.date: printable ASCII only, at most 64 characters", 0);
+    expectOverridesError("{\"overrides\":[{\"key\":\"ups.model\",\"value\":\"1\"},{\"key\":\"UPS.MODEL\",\"value\":\"2\"}]}",
+                         "Duplicate key: UPS.MODEL", 1);
+    std::string many = "{\"overrides\":[";
+    for (int i = 0; i < 17; i++) {
+        if (i) many += ",";
+        many += "{\"key\":\"custom.v" + std::to_string(i) + "\",\"value\":\"1\"}";
+    }
+    many += "]}";
+    expectOverridesError(many.c_str(), "At most 16 custom variables", 16);
+}
+
+void test_variables_catalog_marks_overrides() {
+    addWritableVariables();
+    std::vector<NutOverride> list = { makeOverride("Battery.Charge.Low", "30") };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVariables(&mockHost, &list));
+    JsonObject v = findVariable(doc, "battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("30", v["override"]);
+    // The real value stays in "value"
+    TEST_ASSERT_EQUAL_STRING("20", v["value"]);
+    TEST_ASSERT_TRUE(findVariable(doc, "ups.shutdown")["override"].isNull());
+}
+
+void test_set_and_reset_refused_when_overridden() {
+    addWritableVariables();
+    std::vector<NutOverride> list = { makeOverride("battery.charge.low", "30"), makeOverride("ups.delay.shutdown", "90") };
+    String out;
+    bool host_called = true;
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsVariable(&mockHost, "{\"name\":\"battery.charge.low\",\"value\":\"25\"}", out,
+                                                      &host_called, &list));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Variable overridden in the NUT Server tab\"}", out.c_str());
+    TEST_ASSERT_FALSE(host_called);
+    host_called = true;
+    TEST_ASSERT_EQUAL(400, WebApiJson::resetUpsVariable(&mockHost, "{\"name\":\"UPS.DELAY.SHUTDOWN\"}", out, &host_called, &list));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Variable overridden in the NUT Server tab\"}", out.c_str());
+    TEST_ASSERT_FALSE(host_called);
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.resets.size());
+
+    // The variables without an override work as before
+    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsVariable(&mockHost, "{\"name\":\"outlet.1.desc\",\"value\":\"Desk\"}", out,
+                                                      &host_called, &list));
+    TEST_ASSERT_TRUE(host_called);
+    TEST_ASSERT_EQUAL(200, WebApiJson::resetUpsVariable(&mockHost, "{\"name\":\"outlet.1.desc\"}", out, &host_called, &list));
+    // Not connected: 503 first, as for any request
+    mockHost.connected = false;
+    TEST_ASSERT_EQUAL(503, WebApiJson::runUpsVariable(&mockHost, "{\"name\":\"battery.charge.low\",\"value\":\"25\"}", out,
+                                                      &host_called, &list));
+}
+
+// --- Remote logging (US-116) ---
+
+static int checkLog(const char* json, const SyslogSettings& cur, SyslogSettings& next, String& out) {
+    JsonDocument doc;
+    deserializeJson(doc, json);
+    return WebApiJson::checkRemoteLogBody(doc, cur, next, out);
+}
+
+// US-119: stato della lettura su richiesta dell'export, POST e GET /api/usb/dump/read
+static JsonDocument diagRead(DiagReadState state, uint16_t total, uint16_t done, uint16_t read,
+                             uint16_t empty, uint16_t failed) {
+    DiagReadStatus s;
+    s.state = state;
+    s.total = total;
+    s.done = done;
+    s.read = read;
+    s.empty = empty;
+    s.failed = failed;
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::diagReadJson(s).c_str());
+    return doc;
+}
+
+void test_diag_read_json_states(void) {
+    JsonDocument idle = diagRead(DiagReadState::Idle, 0, 0, 0, 0, 0);
+    TEST_ASSERT_EQUAL_STRING("idle", idle["state"].as<const char*>());
+    TEST_ASSERT_EQUAL(0, idle["total"].as<int>());
+    TEST_ASSERT_EQUAL(6, (int)idle.as<JsonObject>().size());
+
+    JsonDocument reading = diagRead(DiagReadState::Reading, 41, 10, 9, 1, 0);
+    TEST_ASSERT_EQUAL_STRING("reading", reading["state"].as<const char*>());
+    TEST_ASSERT_EQUAL(41, reading["total"].as<int>());
+    TEST_ASSERT_EQUAL(10, reading["done"].as<int>());
+
+    JsonDocument done = diagRead(DiagReadState::Done, 41, 41, 39, 1, 1);
+    TEST_ASSERT_EQUAL_STRING("done", done["state"].as<const char*>());
+    TEST_ASSERT_EQUAL(39, done["read"].as<int>());
+    TEST_ASSERT_EQUAL(1, done["empty"].as<int>());
+    TEST_ASSERT_EQUAL(1, done["failed"].as<int>());
+
+    JsonDocument interrupted = diagRead(DiagReadState::Interrupted, 41, 12, 11, 1, 0);
+    TEST_ASSERT_EQUAL_STRING("interrupted", interrupted["state"].as<const char*>());
+    TEST_ASSERT_EQUAL(12, interrupted["done"].as<int>());
+    TEST_ASSERT_EQUAL(11, interrupted["read"].as<int>());
+}
+
+void test_remote_log_json(void) {
+    SyslogSettings s = { true, String("10.0.0.5"), 514, SyslogProtocol::RFC3164, 16, LogLevel::WARN, 10 };
+    SyslogStatus st;
+    st.state = SyslogState::Active;
+    st.target = "10.0.0.5:514";
+    st.error = "";
+    st.stats = { 12, 1, 3, 0 };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::remoteLogJson(s, st).c_str());
+    TEST_ASSERT_TRUE(doc["syslog"]["enabled"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("10.0.0.5", doc["syslog"]["host"].as<const char*>());
+    TEST_ASSERT_EQUAL(514, doc["syslog"]["port"].as<int>());
+    TEST_ASSERT_EQUAL_STRING("rfc3164", doc["syslog"]["protocol"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("local0", doc["syslog"]["facility"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("WARN", doc["syslog"]["min_level"].as<const char*>());
+    TEST_ASSERT_EQUAL(10, doc["syslog"]["rate"].as<int>());
+    TEST_ASSERT_EQUAL_STRING("active", doc["status"]["syslog"]["state"].as<const char*>());
+    TEST_ASSERT_EQUAL(12, doc["status"]["syslog"]["sent"].as<int>());
+    TEST_ASSERT_EQUAL(3, doc["status"]["syslog"]["rate_limited"].as<int>());
+    TEST_ASSERT_EQUAL(2, doc["options"]["protocols"].size());
+    TEST_ASSERT_EQUAL(10, doc["options"]["facilities"].size());
+    TEST_ASSERT_EQUAL_STRING("ERROR", doc["options"]["levels"][2].as<const char*>());
+    TEST_ASSERT_EQUAL(100, doc["options"]["rate_max"].as<int>());
+
+    // Network up and server known, nothing sent yet
+    st.state = SyslogState::Ready;
+    deserializeJson(doc, WebApiJson::remoteLogJson(s, st).c_str());
+    TEST_ASSERT_EQUAL_STRING("ready", doc["status"]["syslog"]["state"].as<const char*>());
+}
+
+void test_remote_log_body_full_update(void) {
+    SyslogSettings cur = syslogDefaults(), next;
+    String out;
+    int st = checkLog("{\"syslog\":{\"enabled\":true,\"host\":\" rsyslog.lan \",\"port\":1514,"
+                      "\"protocol\":\"rfc5424\",\"facility\":\"daemon\",\"min_level\":\"error\",\"rate\":25}}",
+                      cur, next, out);
+    TEST_ASSERT_EQUAL(0, st);
+    TEST_ASSERT_TRUE(next.enabled);
+    TEST_ASSERT_EQUAL_STRING("rsyslog.lan", next.host.c_str());  // trimmed
+    TEST_ASSERT_EQUAL_UINT16(1514, next.port);
+    TEST_ASSERT_TRUE(next.protocol == SyslogProtocol::RFC5424);
+    TEST_ASSERT_EQUAL_UINT8(3, next.facility);
+    TEST_ASSERT_TRUE(next.min_level == LogLevel::ERROR);
+    TEST_ASSERT_EQUAL_UINT16(25, next.rate);
+}
+
+void test_remote_log_body_partial_keeps_the_rest(void) {
+    SyslogSettings cur = { true, String("10.0.0.5"), 514, SyslogProtocol::RFC3164, 16, LogLevel::INFO, 10 }, next;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkLog("{\"syslog\":{\"enabled\":false}}", cur, next, out));
+    TEST_ASSERT_FALSE(next.enabled);
+    TEST_ASSERT_EQUAL_STRING("10.0.0.5", next.host.c_str());
+    TEST_ASSERT_EQUAL_UINT16(514, next.port);
+}
+
+void test_remote_log_body_errors(void) {
+    SyslogSettings cur = syslogDefaults(), next;
+    String out;
+    TEST_ASSERT_EQUAL(400, checkLog("[]", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"enabled\":true}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"enabled\":\"yes\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"host\":\"udp://x\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid server\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"port\":0}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"port\":65536}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"port\":\"514\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid port\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"protocol\":\"tcp\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"facility\":\"kern\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"min_level\":\"DEBUG\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"rate\":0}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"rate\":101}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid rate\"}", out.c_str());
+    // Enabling without a server would only fail
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"enabled\":true}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Server required to enable syslog\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"enabled\":true,\"host\":\"  \"}}", cur, next, out));
+}
+
+void test_remote_log_body_limits(void) {
+    SyslogSettings cur = syslogDefaults(), next;
+    String out;
+    // Server: 63 characters is the limit (SYSLOG_HOST_MAX)
+    std::string host63(63, 'a'), host64(64, 'a');
+    std::string body = "{\"syslog\":{\"host\":\"" + host63 + "\"}}";
+    TEST_ASSERT_EQUAL(0, checkLog(body.c_str(), cur, next, out));
+    TEST_ASSERT_EQUAL(63, (int)next.host.length());
+    body = "{\"syslog\":{\"host\":\"" + host64 + "\"}}";
+    TEST_ASSERT_EQUAL(400, checkLog(body.c_str(), cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid server\"}", out.c_str());
+    // Port 1..65535, rate 1..100
+    TEST_ASSERT_EQUAL(0, checkLog("{\"syslog\":{\"port\":1}}", cur, next, out));
+    TEST_ASSERT_EQUAL(0, checkLog("{\"syslog\":{\"port\":65535}}", cur, next, out));
+    TEST_ASSERT_EQUAL_UINT16(65535, next.port);
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"port\":0}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid port\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"port\":65536}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid port\"}", out.c_str());
+    TEST_ASSERT_EQUAL(0, checkLog("{\"syslog\":{\"rate\":1}}", cur, next, out));
+    TEST_ASSERT_EQUAL(0, checkLog("{\"syslog\":{\"rate\":100}}", cur, next, out));
+    TEST_ASSERT_EQUAL_UINT16(100, next.rate);
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"rate\":0}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid rate\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"rate\":101}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid rate\"}", out.c_str());
+}
+
+void test_remote_log_body_error_messages(void) {
+    SyslogSettings cur = syslogDefaults(), next;
+    String out;
+    TEST_ASSERT_EQUAL(400, checkLog("{\"enabled\":true}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"enabled\":\"yes\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"protocol\":\"tcp\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid protocol\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"facility\":\"kern\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid facility\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"min_level\":\"DEBUG\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid level\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"enabled\":true,\"host\":\"  \"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Server required to enable syslog\"}", out.c_str());
+    // A server already saved is enough to turn syslog on with a partial body
+    SyslogSettings saved = syslogDefaults();
+    saved.host = "10.0.0.5";
+    TEST_ASSERT_EQUAL(0, checkLog("{\"syslog\":{\"enabled\":true}}", saved, next, out));
+    TEST_ASSERT_TRUE(next.enabled);
+    TEST_ASSERT_EQUAL_STRING("10.0.0.5", next.host.c_str());
+}
+
+void test_remote_log_defaults(void) {
+    SyslogSettings d = syslogDefaults();
+    TEST_ASSERT_FALSE(d.enabled);
+    TEST_ASSERT_EQUAL_UINT16(514, d.port);
+    TEST_ASSERT_TRUE(d.protocol == SyslogProtocol::RFC3164);
+    TEST_ASSERT_TRUE(d.min_level == LogLevel::INFO);
+    TEST_ASSERT_EQUAL_UINT16(10, d.rate);
+}
+
+// --- Network time (US-117) ---
+
+static int checkTime(const char* json, const TimeSettings& cur, TimeSettings& next, String& out) {
+    JsonDocument doc;
+    deserializeJson(doc, json);
+    return WebApiJson::checkTimeBody(doc, cur, next, out);
+}
+
+void test_time_json_with_time(void) {
+    TimeSettings s = { true, String("pool.ntp.org"), String("Europe/Rome"), false };
+    TimeStatusView v = { TimeState::Synchronized, true, String("2026-11-05 09:12:03"), String("CET"),
+                         String("2026-11-05T08:12:03Z"), 42 };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(s, v).c_str());
+    TEST_ASSERT_TRUE(doc["time"]["ntp"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("pool.ntp.org", doc["time"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("Europe/Rome", doc["time"]["zone"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("synchronized", doc["status"]["state"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("2026-11-05 09:12:03", doc["status"]["local"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("CET", doc["status"]["abbr"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("2026-11-05T08:12:03Z", doc["status"]["utc"].as<const char*>());
+    TEST_ASSERT_EQUAL(42, doc["status"]["since_sync_s"].as<int>());
+}
+
+void test_time_json_without_time(void) {
+    TimeStatusView v = { TimeState::NoAnswer, false, String(), String(), String(), 0 };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(timeDefaults(), v).c_str());
+    TEST_ASSERT_EQUAL_STRING("no_answer", doc["status"]["state"].as<const char*>());
+    // Without a valid time the fields of the time are missing, not empty
+    TEST_ASSERT_TRUE(doc["status"]["local"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["abbr"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["utc"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["since_sync_s"].isNull());
+
+    TimeSettings off = { false, String(""), String("UTC"), false };
+    v.state = TimeState::Disabled;
+    deserializeJson(doc, WebApiJson::timeJson(off, v).c_str());
+    TEST_ASSERT_FALSE(doc["time"]["ntp"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("", doc["time"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("disabled", doc["status"]["state"].as<const char*>());
+    v.state = TimeState::Waiting;
+    deserializeJson(doc, WebApiJson::timeJson(off, v).c_str());
+    TEST_ASSERT_EQUAL_STRING("waiting", doc["status"]["state"].as<const char*>());
+}
+
+void test_time_json_zones(void) {
+    TimeStatusView v = { TimeState::Waiting, false, String(), String(), String(), 0 };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(timeDefaults(), v).c_str());
+    JsonArrayConst zones = doc["options"]["zones"].as<JsonArrayConst>();
+    TEST_ASSERT_EQUAL((int)timeZoneCount(), (int)zones.size());
+    TEST_ASSERT_EQUAL_STRING("UTC", zones[0].as<const char*>());
+    bool rome = false;
+    for (JsonVariantConst z : zones) {
+        if (strcmp(z.as<const char*>(), "Europe/Rome") == 0) rome = true;
+    }
+    TEST_ASSERT_TRUE(rome);
+}
+
+void test_time_body_full_update(void) {
+    TimeSettings cur = timeDefaults(), next;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"ntp\":true,\"server\":\" ntp.lan \",\"zone\":\"Europe/Rome\"}}", cur,
+                                   next, out));
+    TEST_ASSERT_TRUE(next.ntp);
+    TEST_ASSERT_EQUAL_STRING("ntp.lan", next.server.c_str());  // trimmed
+    TEST_ASSERT_EQUAL_STRING("Europe/Rome", next.zone.c_str());
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"server\":\"192.168.1.1\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", next.server.c_str());
+}
+
+void test_time_body_partial_keeps_the_rest(void) {
+    TimeSettings cur = { true, String("ntp.lan"), String("Europe/Rome"), false }, next;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"zone\":\"America/New_York\"}}", cur, next, out));
+    TEST_ASSERT_TRUE(next.ntp);
+    TEST_ASSERT_EQUAL_STRING("ntp.lan", next.server.c_str());
+    TEST_ASSERT_EQUAL_STRING("America/New_York", next.zone.c_str());
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"ntp\":false}}", cur, next, out));
+    TEST_ASSERT_FALSE(next.ntp);
+    TEST_ASSERT_EQUAL_STRING("ntp.lan", next.server.c_str());
+    TEST_ASSERT_EQUAL_STRING("Europe/Rome", next.zone.c_str());
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("ntp.lan", next.server.c_str());
+}
+
+void test_time_body_error_messages(void) {
+    TimeSettings cur = timeDefaults(), next;
+    String out;
+    TEST_ASSERT_EQUAL(400, checkTime("[]", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"ntp\":true}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"ntp\":\"yes\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"server\":\"bad host!\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid server\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"server\":123}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid server\"}", out.c_str());
+    std::string host64(64, 'a');
+    std::string body = "{\"time\":{\"server\":\"" + host64 + "\"}}";
+    TEST_ASSERT_EQUAL(400, checkTime(body.c_str(), cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid server\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"zone\":\"Mars/Olympus\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid time zone\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"zone\":\"\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid time zone\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"zone\":1}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid time zone\"}", out.c_str());
+}
+
+void test_time_body_server_required_only_with_ntp(void) {
+    TimeSettings cur = timeDefaults(), next;
+    String out;
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"server\":\"  \"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Server required to enable NTP\"}", out.c_str());
+    TimeSettings off = { false, String(""), String("UTC"), false };
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"ntp\":true}}", off, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Server required to enable NTP\"}", out.c_str());
+    // NTP off with an empty server is accepted
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"ntp\":false,\"server\":\"\"}}", cur, next, out));
+    TEST_ASSERT_FALSE(next.ntp);
+    TEST_ASSERT_EQUAL_STRING("", next.server.c_str());
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"zone\":\"Europe/Rome\"}}", off, next, out));
+    TEST_ASSERT_EQUAL_STRING("Europe/Rome", next.zone.c_str());
+}
+
+// --- NTP server from DHCP (US-145) ---
+
+static TimeStatusView dhcpView(TimeState state, const char* server, NtpOrigin origin, DhcpNtpState dhcp,
+                               const char* dhcp_server) {
+    TimeStatusView v = { state, false, String(), String(), String(), 0,
+                         String(server), origin, dhcp, String(dhcp_server) };
+    return v;
+}
+
+void test_time_json_dhcp_in_use(void) {
+    TimeSettings s = { true, String("pool.ntp.org"), String("Europe/Rome"), true };
+    TimeStatusView v =
+        dhcpView(TimeState::Synchronized, "192.168.1.1", NtpOrigin::Dhcp, DhcpNtpState::Used, "192.168.1.1");
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(s, v).c_str());
+    TEST_ASSERT_TRUE(doc["time"]["dhcp"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("pool.ntp.org", doc["time"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", doc["status"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("dhcp", doc["status"]["origin"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("used", doc["status"]["dhcp"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", doc["status"]["dhcp_server"].as<const char*>());
+}
+
+void test_time_json_dhcp_no_answer(void) {
+    TimeSettings s = { true, String("pool.ntp.org"), String("UTC"), true };
+    TimeStatusView v = dhcpView(TimeState::Waiting, "pool.ntp.org", NtpOrigin::Configured, DhcpNtpState::NoAnswer,
+                                "192.168.1.1");
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(s, v).c_str());
+    TEST_ASSERT_EQUAL_STRING("pool.ntp.org", doc["status"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("configured", doc["status"]["origin"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("no_answer", doc["status"]["dhcp"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", doc["status"]["dhcp_server"].as<const char*>());
+}
+
+void test_time_json_dhcp_none_has_no_dhcp_server(void) {
+    TimeSettings s = { true, String("ntp.lan"), String("UTC"), true };
+    TimeStatusView v = dhcpView(TimeState::Waiting, "ntp.lan", NtpOrigin::Configured, DhcpNtpState::None, "");
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(s, v).c_str());
+    TEST_ASSERT_EQUAL_STRING("ntp.lan", doc["status"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("none", doc["status"]["dhcp"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["status"]["dhcp_server"].isNull());
+    // Option off: the lease server is still reported
+    s.dhcp = false;
+    v = dhcpView(TimeState::Synchronized, "ntp.lan", NtpOrigin::Configured, DhcpNtpState::Off, "192.168.1.1");
+    deserializeJson(doc, WebApiJson::timeJson(s, v).c_str());
+    TEST_ASSERT_FALSE(doc["time"]["dhcp"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("off", doc["status"]["dhcp"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("configured", doc["status"]["origin"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", doc["status"]["dhcp_server"].as<const char*>());
+}
+
+void test_time_json_disabled_has_no_server_fields(void) {
+    TimeSettings off = { false, String("pool.ntp.org"), String("UTC"), true };
+    TimeStatusView v =
+        dhcpView(TimeState::Disabled, "pool.ntp.org", NtpOrigin::Configured, DhcpNtpState::Used, "192.168.1.1");
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(off, v).c_str());
+    TEST_ASSERT_TRUE(doc["time"]["dhcp"].as<bool>());  // the saved value
+    TEST_ASSERT_TRUE(doc["status"]["server"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["origin"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["dhcp"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["dhcp_server"].isNull());
+}
+
+void test_time_body_dhcp(void) {
+    TimeSettings cur = timeDefaults(), next;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"dhcp\":true}}", cur, next, out));
+    TEST_ASSERT_TRUE(next.dhcp);
+    TEST_ASSERT_EQUAL_STRING("pool.ntp.org", next.server.c_str());
+    cur.dhcp = true;
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"zone\":\"Europe/Rome\"}}", cur, next, out));
+    TEST_ASSERT_TRUE(next.dhcp);  // missing: the current value
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"dhcp\":false}}", cur, next, out));
+    TEST_ASSERT_FALSE(next.dhcp);
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"dhcp\":\"yes\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid DHCP option\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"dhcp\":1}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid DHCP option\"}", out.c_str());
+    // The server stays required as the fallback
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"dhcp\":true,\"server\":\"\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Server required to enable NTP\"}", out.c_str());
+}
+
+// --- Online firmware update ---
+
+static UpdateStatus updateStatus() {
+    UpdateStatus s;
+    s.current = "v1.16.0";
+    s.latest = "v1.17.0";
+    s.release_url = "https://github.com/maverick1982/esp32-nut/releases/tag/v1.17.0";
+    s.asset_name = "esp32-nut-v1.17.0-esp32-p4-eth-v1-ota.bin";
+    s.asset_size = 3247719;
+    s.asset_verified = true;
+    s.checked = true;
+    s.last_check_ok = true;
+    s.checked_age_s = 120;
+    s.phase = UpdatePhase::Downloading;
+    s.progress = 42;
+    s.auto_check = true;
+    return s;
+}
+
+void test_update_status_json(void) {
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::updateStatusJson(updateStatus()).c_str());
+    TEST_ASSERT_EQUAL_STRING("v1.16.0", doc["current"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("v1.17.0", doc["latest"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["available"].as<bool>());
+    TEST_ASSERT_TRUE(doc["installable"].as<bool>());
+    TEST_ASSERT_TRUE(doc["release_build"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("esp32-nut-v1.17.0-esp32-p4-eth-v1-ota.bin", doc["asset"]["name"].as<const char*>());
+    TEST_ASSERT_EQUAL(3247719, doc["asset"]["size"].as<int>());
+    TEST_ASSERT_TRUE(doc["asset"]["verified"].as<bool>());
+    TEST_ASSERT_EQUAL(120, doc["checked_age_s"].as<int>());
+    TEST_ASSERT_EQUAL_STRING("downloading", doc["phase"].as<const char*>());
+    TEST_ASSERT_EQUAL(42, doc["progress"].as<int>());
+    TEST_ASSERT_TRUE(doc["auto_check"].as<bool>());
+}
+
+void test_update_status_json_never_checked(void) {
+    UpdateStatus s = updateStatus();
+    s.latest = "";
+    s.asset_name = "";
+    s.checked = false;
+    s.phase = UpdatePhase::Idle;
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::updateStatusJson(s).c_str());
+    TEST_ASSERT_FALSE(doc["available"].as<bool>());
+    TEST_ASSERT_FALSE(doc["installable"].as<bool>());
+    TEST_ASSERT_TRUE(doc["checked_age_s"].isNull());
+    TEST_ASSERT_EQUAL_STRING("idle", doc["phase"].as<const char*>());
+
+    UpdateStatus dev = updateStatus();
+    dev.current = "dev";
+    deserializeJson(doc, WebApiJson::updateStatusJson(dev).c_str());
+    TEST_ASSERT_FALSE(doc["available"].as<bool>());
+    TEST_ASSERT_FALSE(doc["installable"].as<bool>());
+    TEST_ASSERT_FALSE(doc["release_build"].as<bool>());
+}
+
+void test_update_summary_json(void) {
+    JsonDocument doc;
+    WebApiJson::updateSummaryJson(doc.to<JsonObject>(), updateStatus());
+    TEST_ASSERT_TRUE(doc["available"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("v1.17.0", doc["latest"].as<const char*>());
+    UpdateStatus same = updateStatus();
+    same.current = "v1.17.0";
+    WebApiJson::updateSummaryJson(doc.to<JsonObject>(), same);
+    TEST_ASSERT_FALSE(doc["available"].as<bool>());
+}
+
+void test_update_settings_body(void) {
+    JsonDocument doc;
+    bool auto_check = true;
+    String out;
+    deserializeJson(doc, "{\"auto_check\":false}");
+    TEST_ASSERT_EQUAL(0, WebApiJson::checkUpdateSettingsBody(doc, auto_check, out));
+    TEST_ASSERT_FALSE(auto_check);
+    deserializeJson(doc, "{\"auto_check\":\"no\"}");
+    TEST_ASSERT_EQUAL(400, WebApiJson::checkUpdateSettingsBody(doc, auto_check, out));
+    deserializeJson(doc, "[]");
+    TEST_ASSERT_EQUAL(400, WebApiJson::checkUpdateSettingsBody(doc, auto_check, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+}
+
+// US-142: POST /api/system/restart is refused only while a firmware update writes the flash
+void test_restart_allowed_when_idle(void) {
+    TEST_ASSERT_NULL(WebApiJson::restartBlockedReason(false, UpdatePhase::Idle));
+    TEST_ASSERT_NULL(WebApiJson::restartBlockedReason(false, UpdatePhase::Checking));
+    TEST_ASSERT_NULL(WebApiJson::restartBlockedReason(false, UpdatePhase::Failed));
+}
+
+void test_restart_blocked_while_downloading(void) {
+    TEST_ASSERT_EQUAL_STRING("A firmware update is in progress",
+                             WebApiJson::restartBlockedReason(false, UpdatePhase::Downloading));
+    TEST_ASSERT_EQUAL_STRING("A firmware update is in progress",
+                             WebApiJson::restartBlockedReason(false, UpdatePhase::Restarting));
+}
+
+void test_restart_blocked_during_upload(void) {
+    TEST_ASSERT_EQUAL_STRING("A firmware update is in progress",
+                             WebApiJson::restartBlockedReason(true, UpdatePhase::Idle));
+    TEST_ASSERT_EQUAL_STRING("A firmware update is in progress",
+                             WebApiJson::restartBlockedReason(true, UpdatePhase::Failed));
 }
 
 int main(int argc, char **argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_overrides_json_with_ups_values);
+    RUN_TEST(test_overrides_json_without_ups);
+    RUN_TEST(test_ups_vars_estimate_custom_watts);
+    RUN_TEST(test_ups_vars_estimate_custom_va);
+    RUN_TEST(test_ups_vars_estimate_ups_watts);
+    RUN_TEST(test_ups_vars_estimate_ups_va);
+    RUN_TEST(test_ups_vars_measured_realpower_has_no_estimate);
+    RUN_TEST(test_ups_vars_without_estimate_unchanged);
+    RUN_TEST(test_ups_vars_disconnected_has_no_estimate);
+    RUN_TEST(test_ups_vars_overridden_keeps_ups_value);
+    RUN_TEST(test_ups_vars_added_variable);
+    RUN_TEST(test_ups_vars_override_key_in_another_case);
+    RUN_TEST(test_ups_vars_device_alias_row);
+    RUN_TEST(test_ups_vars_device_alias_own_override_wins);
+    RUN_TEST(test_ups_vars_disconnected_has_no_overrides);
+    RUN_TEST(test_ups_vars_stale_keeps_overrides);
+    RUN_TEST(test_ups_vars_without_overrides_unchanged);
+    RUN_TEST(test_overrides_body_valid);
+    RUN_TEST(test_overrides_body_invalid_request);
+    RUN_TEST(test_overrides_body_rule_errors);
+    RUN_TEST(test_variables_catalog_marks_overrides);
+    RUN_TEST(test_set_and_reset_refused_when_overridden);
     RUN_TEST(test_api_null_host);
     RUN_TEST(test_api_disconnected_host);
     RUN_TEST(test_api_connected_host_with_data);
+    RUN_TEST(test_api_disconnected_without_unsupported_text);
+    RUN_TEST(test_api_disconnected_with_unsupported_text);
+    RUN_TEST(test_api_connected_ignores_unsupported_text);
+    RUN_TEST(test_ups_status_disconnected);
+    RUN_TEST(test_ups_status_unsupported_qx);
+    RUN_TEST(test_ups_status_connected_with_model);
+    RUN_TEST(test_ups_status_connected_without_model);
+    RUN_TEST(test_ups_status_without_model_shows_manufacturer);
+    RUN_TEST(test_ups_status_model_before_manufacturer);
+    RUN_TEST(test_ups_status_empty_model_falls_back);
+    RUN_TEST(test_ups_status_stale_data);
+    RUN_TEST(test_ups_status_waiting_first_data_is_not_stale);
+    RUN_TEST(test_commands_null_host);
+    RUN_TEST(test_commands_disconnected_host);
+    RUN_TEST(test_commands_catalog);
+    RUN_TEST(test_commands_catalog_without_locked);
+    RUN_TEST(test_run_command_ok);
+    RUN_TEST(test_run_command_invalid_json);
+    RUN_TEST(test_run_command_missing_name);
+    RUN_TEST(test_run_command_unknown);
+    RUN_TEST(test_run_command_destructive_executed);
+    RUN_TEST(test_run_command_shutdown_default_and_delay_executed);
+    RUN_TEST(test_run_command_disconnected);
+    RUN_TEST(test_run_command_write_failed);
+    RUN_TEST(test_run_command_null_host);
+    RUN_TEST(test_run_command_not_supported_by_ups);
+    RUN_TEST(test_run_command_body_too_long);
+    RUN_TEST(test_run_command_extra_fields_ignored);
+    RUN_TEST(test_run_command_load_off_delay_uses_configured_delay);
+    RUN_TEST(test_run_command_shutdown_default_runs_fallback);
+    RUN_TEST(test_run_command_destructive_null_host);
+    RUN_TEST(test_variables_catalog_payload);
+    RUN_TEST(test_variables_description_fallback_and_missing_value);
+    RUN_TEST(test_variables_enum_max_length_driver_side);
+    RUN_TEST(test_variables_confirm_flag);
+    RUN_TEST(test_variables_disconnected_or_null_host);
+    RUN_TEST(test_variables_empty_catalog);
+    RUN_TEST(test_set_variable_invalid_request);
+    RUN_TEST(test_set_variable_invalid_request_null_host);
+    RUN_TEST(test_set_variable_control_chars_rejected);
+    RUN_TEST(test_set_variable_not_writable);
+    RUN_TEST(test_set_variable_invalid_aux);
+    RUN_TEST(test_set_variable_too_long);
+    RUN_TEST(test_set_variable_invalid_enum);
+    RUN_TEST(test_set_variable_conversion_failed);
+    RUN_TEST(test_set_variable_unknown);
+    RUN_TEST(test_set_variable_disconnected);
+    RUN_TEST(test_set_variable_null_host);
+    RUN_TEST(test_set_variable_stale);
+    RUN_TEST(test_set_variable_not_connected_from_host);
+    RUN_TEST(test_set_variable_failed);
+    RUN_TEST(test_set_variable_ok);
+    RUN_TEST(test_set_variable_ok_returns_stored_value);
+    RUN_TEST(test_set_variable_canonical_name);
+    RUN_TEST(test_set_variable_ok_escapes_value);
+    RUN_TEST(test_set_variable_extra_fields_ignored);
+    RUN_TEST(test_reset_variable_invalid_request);
+    RUN_TEST(test_reset_variable_not_driver_side);
+    RUN_TEST(test_reset_variable_unknown_from_host);
+    RUN_TEST(test_reset_variable_disconnected_and_stale);
+    RUN_TEST(test_reset_variable_not_connected_from_host);
+    RUN_TEST(test_reset_variable_failed);
+    RUN_TEST(test_reset_variable_ok);
+    RUN_TEST(test_reset_variable_canonical_name);
+    RUN_TEST(test_set_and_reset_variable_ok_then_disconnected);
+    RUN_TEST(test_ups_name_from_config);
+    RUN_TEST(test_nut_config_body_check);
+    RUN_TEST(test_nut_config_applied_json);
+    RUN_TEST(test_nut_config_keeps_the_saved_password);
+    RUN_TEST(test_nut_config_both_or_neither);
+    RUN_TEST(test_nut_config_remove_credentials);
+    RUN_TEST(test_nut_config_from_body_checks_the_ups_name);
+    RUN_TEST(test_needs_confirmation_spec_names);
+    RUN_TEST(test_needs_confirmation_other_names);
+    RUN_TEST(test_board_json_s3);
+    RUN_TEST(test_board_json_two_ports_no_led);
+    RUN_TEST(test_board_body_led);
+    RUN_TEST(test_board_body_invalid_level);
+    RUN_TEST(test_board_body_usb_port);
+    RUN_TEST(test_board_body_no_led);
+    RUN_TEST(test_board_json_auto_shutdown);
+    RUN_TEST(test_board_body_auto_shutdown);
+    RUN_TEST(test_board_body_auto_shutdown_refused);
+    RUN_TEST(test_board_json_without_qx_has_no_qx_object);
+    RUN_TEST(test_board_json_with_qx);
+    RUN_TEST(test_board_body_qx_protocol_accepts_known_and_empty);
+    RUN_TEST(test_board_body_qx_protocol_rejects_unknown);
+    RUN_TEST(test_board_body_qx_novendor);
+    RUN_TEST(test_network_status_wifi_connected);
+    RUN_TEST(test_network_status_wifi_connecting);
+    RUN_TEST(test_network_status_access_point);
+    RUN_TEST(test_network_status_ethernet_connected);
+    RUN_TEST(test_network_status_ethernet_down);
+    RUN_TEST(test_network_status_no_link);
+    RUN_TEST(test_network_links_from_board_profile);
+    RUN_TEST(test_hostname_body_valid_name);
+    RUN_TEST(test_hostname_body_empty_means_default);
+    RUN_TEST(test_hostname_body_missing_or_not_a_string);
+    RUN_TEST(test_hostname_body_invalid_name);
+    RUN_TEST(test_hostname_json);
+    RUN_TEST(test_eth_spi_json_off);
+    RUN_TEST(test_eth_spi_json_active);
+    RUN_TEST(test_eth_spi_json_fallback_with_reason);
+    RUN_TEST(test_eth_spi_body_valid_enables_and_restarts);
+    RUN_TEST(test_eth_spi_body_same_values_do_not_restart);
+    RUN_TEST(test_eth_spi_body_invalid_requests);
+    RUN_TEST(test_eth_spi_body_forbidden_pin);
+    RUN_TEST(test_eth_spi_body_duplicate_and_required);
+    RUN_TEST(test_eth_spi_body_strapping_warning);
+    RUN_TEST(test_eth_spi_body_optional_pins_null);
+    RUN_TEST(test_eth_spi_json_with_mode);
+    RUN_TEST(test_eth_spi_body_mode_change_alone_restarts);
+    RUN_TEST(test_eth_spi_body_missing_mode_keeps_it);
+    RUN_TEST(test_eth_spi_body_same_pins_and_mode_do_not_restart);
+    RUN_TEST(test_eth_spi_body_invalid_mode);
+    RUN_TEST(test_eth_spi_body_forbidden_pin_wins_over_a_valid_mode);
+    RUN_TEST(test_eth_spi_json_active_without_connection);
+    RUN_TEST(test_eth_spi_body_us126_overload_ignores_the_mode);
+    RUN_TEST(test_network_links_with_w5500);
+    RUN_TEST(test_remote_log_json);
+    RUN_TEST(test_remote_log_body_full_update);
+    RUN_TEST(test_remote_log_body_partial_keeps_the_rest);
+    RUN_TEST(test_remote_log_body_errors);
+    RUN_TEST(test_remote_log_body_limits);
+    RUN_TEST(test_remote_log_body_error_messages);
+    RUN_TEST(test_remote_log_defaults);
+    RUN_TEST(test_time_json_with_time);
+    RUN_TEST(test_time_json_without_time);
+    RUN_TEST(test_time_json_zones);
+    RUN_TEST(test_time_body_full_update);
+    RUN_TEST(test_time_body_partial_keeps_the_rest);
+    RUN_TEST(test_time_body_error_messages);
+    RUN_TEST(test_time_body_server_required_only_with_ntp);
+    RUN_TEST(test_time_json_dhcp_in_use);
+    RUN_TEST(test_time_json_dhcp_no_answer);
+    RUN_TEST(test_time_json_dhcp_none_has_no_dhcp_server);
+    RUN_TEST(test_time_json_disabled_has_no_server_fields);
+    RUN_TEST(test_time_body_dhcp);
+    RUN_TEST(test_diag_read_json_states);
+    RUN_TEST(test_update_status_json);
+    RUN_TEST(test_update_status_json_never_checked);
+    RUN_TEST(test_update_summary_json);
+    RUN_TEST(test_update_settings_body);
+    RUN_TEST(test_restart_allowed_when_idle);
+    RUN_TEST(test_restart_blocked_while_downloading);
+    RUN_TEST(test_restart_blocked_during_upload);
     return UNITY_END();
 }

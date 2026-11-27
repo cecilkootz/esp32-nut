@@ -3,6 +3,8 @@
 #include <esp_app_desc.h>
 #include "build_config_json.h"
 #include "core/app_logger.h"
+#include "NUTServer.h"
+#include "WebApiJson.h"
 #include "core/build_config.h"
 #include "core/device_id.h"
 
@@ -22,7 +24,8 @@ static void mergeBuildConfig(JsonDocument& doc) {
 
 bool ConfigManager::begin() {
     is_valid = false;
-    
+    bool migrate_ups_name = false;
+
     preferences.begin("nutos", false);
     String config_json = preferences.getString("config_json", "");
 
@@ -52,7 +55,7 @@ bool ConfigManager::begin() {
     JsonObjectConst nut = doc["nut"];
     nut_config.username = nut["username"] | "";
     nut_config.password = nut["password"] | "";
-    nut_config.ups_name = nut["ups_name"] | "";
+    nut_config.ups_name = WebApiJson::upsNameFromConfig(nut["ups_name"], &migrate_ups_name);
 
     JsonObjectConst mqtt = doc["mqtt"];
     mqtt_config.host = mqtt["host"] | "";
@@ -62,6 +65,7 @@ bool ConfigManager::begin() {
 
     if (apply_build && save()) {
         preferences.putString("config_image", image);
+        migrate_ups_name = false;
     }
     
     // Saving the NUT form before Wi-Fi stores an empty SSID, which station mode can't use.
@@ -71,9 +75,18 @@ bool ConfigManager::begin() {
         return false;
     }
 
+    if (migrate_ups_name) {
+        // Saved before US-082 by the first Wi-Fi setup: the NUT server needs a name
+        AppLogger::log("WARN", "[CONFIG] Empty UPS name, using \"%s\"", nut_config.ups_name.c_str());
+    }
+
     is_valid = true;
-    
+
     AppLogger::log("INFO", "[CONFIG] Configuration successfully loaded from NVS.");
+
+    // One-time migration: the default name is written back, so the WARN does not
+    // come back at every boot
+    if (migrate_ups_name) save();
     
     return true;
 }
@@ -113,6 +126,9 @@ bool ConfigManager::save() {
     wifi["ssid"] = wifi_config.ssid;
     wifi["password"] = wifi_config.password;
     
+    // Never an empty UPS name, also for the first Wi-Fi setup from the AP (US-082)
+    nut_config.ups_name = NUTServer::normalizeUpsName(nut_config.ups_name);
+
     JsonObject nut = doc["nut"].to<JsonObject>();
     nut["username"] = nut_config.username;
     nut["password"] = nut_config.password;

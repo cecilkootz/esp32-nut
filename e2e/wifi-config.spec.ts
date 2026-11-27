@@ -1,12 +1,17 @@
-import { test, expect } from './fixtures';
+import { test, expect } from '@playwright/test';
+import { serveIndex } from './support/webui';
 
 test.describe('Wi-Fi Configuration UI', () => {
+  test.beforeEach(async ({ page }) => {
+    await serveIndex(page);
+  });
+
   test('renders the main interface correctly', async ({ page }) => {
-    await page.goto('/');
-    await page.click('button[data-target=\"wifi\"]');
+    await page.goto('http://esp32.local/');
+    await page.click('button[data-target=\"network\"]');
     
-    // Verify title and headers
-    await expect(page.locator('h1')).toHaveText('Wi-Fi Config');
+    // Verify title and headers (US-112: the Wi-Fi settings live in the Network page)
+    await expect(page.locator('h1')).toHaveText('Network');
     await expect(page.locator('#wifi-form')).toBeVisible();
     await expect(page.locator('#ssid')).toBeVisible();
   });
@@ -23,8 +28,8 @@ test.describe('Wi-Fi Configuration UI', () => {
       window.alert = () => {};
     });
 
-    await page.goto('/');
-    await page.click('button[data-target=\"wifi\"]');
+    await page.goto('http://esp32.local/');
+    await page.click('button[data-target=\"network\"]');
     
     // Fill SSID and password manually
     await page.fill('#ssid', 'MyNetwork');

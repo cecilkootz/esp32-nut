@@ -1,13 +1,33 @@
 #ifndef WEB_CONFIG_SERVER_H
 #define WEB_CONFIG_SERVER_H
 
+#include <functional>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include "core/config_manager.h"
+#include "IUpsSource.h"
 #include "USBHostUPS.h"
+#include "AuthPolicy.h"
+#include "AuthService.h"
+#include "CredentialStore.h"
+#include "LoginThrottle.h"
+#include "SessionTable.h"
+#include "RecoveryWindow.h"
+#include "DiagnosticLED.h"
+#include "core/board_settings_store.h"
+#include "core/auto_shutdown.h"
+#include "core/hostname_store.h"
+#include "core/eth_spi_store.h"
+#include "core/nut_override_store.h"
+#include "NUTServer.h"
+#include "network/auth_platform.h"
+#include "network/network_manager.h"
+#include "network/syslog_output.h"
+#include "core/update_service.h"
+#include "core/log_settings_store.h"
+#include "core/time_settings_store.h"
+#include "network/ntp_clock.h"
 
-class AppNetworkManager;
-class NUTServer;
 class MqttBridge;
 
 class WebConfigServer {
@@ -16,33 +36,140 @@ public:
     void begin(bool isAPMode);
     void loop();
     void setUPS(USBHostUPS* ups);
+    // Active network link: captive portal address, status text, MAC (US-090)
     void setNetwork(AppNetworkManager* network);
-    void setNUT(NUTServer* nut);
+    // Double reset on a board without Wi-Fi: new web credentials without the current
+    // password for 10 minutes (US-091, PDR 0002 D5)
+    void openRecoveryWindow(uint32_t now);
+    // Board page (US-094): settings loaded at boot, and the LED to apply changes at once
+    void setBoardSettings(BoardSettingsStore* store, const BoardSettings& settings);
+    void setStatusLed(DiagnosticLED* led);
+    // Automatic shutdown on low battery (US-114): turned on and off from the Board page
+    void setAutoShutdown(AutoShutdown* auto_shutdown);
+    // Hostname of the Network page (US-113): store and name loaded at boot ("" = default)
+    void setHostnameStore(HostnameStore* store, const String& saved);
+    // W5500 of the Network page (US-126): store, settings and link mode (US-127) loaded at boot
+    void setEthSpi(EthSpiStore* store, const EthSpiSettings& settings, NetworkMode mode);
+    // Custom variables of the NUT Server page (US-115): the list the NUT server reads,
+    // replaced after it is saved, in the same task as the NUT server
+    void setNutOverrides(NvsNutOverrideStore* store, std::vector<NutOverride>* list);
+    // NUT server that takes UPS name and credentials at once when they are saved (US-124):
+    // same task as the web server, no lock
+    void setNutServer(NUTServer* server);
+    // Remote logging of the System Logs page (US-116): settings in NVS, applied live to
+    // the syslog output
+    void setRemoteLog(LogSettingsStore* store, SyslogOutput* syslog);
+    void setUpdateService(UpdateService* updates);
+    // Network time of Board Settings (US-117): settings in NVS, applied live to the clock
+    void setTime(TimeSettingsStore* store, NtpClock* clock);
+    // Home Assistant MQTT bridge: closed before a restart, forgotten when its host is cleared
     void setMqtt(MqttBridge* mqtt);
 
 private:
     WebServer server;
     DNSServer dnsServer;
     ConfigManager& config_mgr;
+    AppNetworkManager* network = nullptr;
     bool is_ap_mode;
+
+    // Autenticazione della Web UI (ADR 0009); l'ordine di dichiarazione è quello di costruzione
+    EspAuthCrypto auth_crypto;
+    NvsAuthStorage auth_storage;
+    CredentialStore credentials;
+    LoginThrottle throttle;
+    // failures() del throttle all'ultimo WARN 429: un solo log per finestra di attesa
+    uint32_t throttle_logged_failures = 0;
+    SessionTable sessions;
+    AuthService auth;
+    RecoveryWindow recovery;
+    BoardSettingsStore* board_store = nullptr;
+    BoardSettings board_settings = {};
+    DiagnosticLED* status_led = nullptr;
+    AutoShutdown* auto_shutdown = nullptr;
+    HostnameStore* hostname_store = nullptr;
+    String saved_hostname;
+    EthSpiStore* eth_spi_store = nullptr;
+    EthSpiSettings eth_spi = { false, -1, -1, -1, -1, -1, -1 };
+    NetworkMode eth_mode = NetworkMode::AUTO;
+    void handleGetEthSpi();
+    void handleSetEthSpi();
+    NvsNutOverrideStore* nut_override_store = nullptr;
+    std::vector<NutOverride>* nut_overrides = nullptr;
+    NUTServer* nut_server = nullptr;
+    LogSettingsStore* log_store = nullptr;
+    SyslogOutput* syslog_output = nullptr;
+    UpdateService* update_service = nullptr;
+    void handleGetUpdate();
+    void handleUpdateCheck();
+    void handleUpdateInstall();
+    void handleUpdateSettings();
+    void handleGetLogging();
+    void handleSetLogging();
+    TimeSettingsStore* time_store = nullptr;
+    NtpClock* ntp_clock = nullptr;
+    void handleGetTime();
+    void handleSetTime();
 
     void handleConnect();
     void handleLogs();
     void handleNutConfig();
     void handleMqttConfig();
+    void handleGetNutOverrides();
+    void handleSetNutOverrides();
+    void handleGetBoard();
+    void handleSetBoard();
+    // US-114: UPS connected and offering shutdown.default
+    AutoShutdownAvailability autoShutdownAvailability() const;
+    void handleSetHostname();
     void handleGetConfig();
     void handleUpsVars();
     void handleSystemStatus();
-    void handleBeeper();
-    
+    void handleSystemRestart();
+    void handleUpsCommands();
+    void handleUpsCommand();
+    void handleUpsVariables();
+    void handleUpsVariable();
+    void handleUpsVariableReset();
+    // Chi ha inviato la richiesta, per il log: in AP non c'è sessione, quindi "(AP mode)"
+    String webUiUser();
+    // WARN per una scrittura o un reset rifiutati prima di arrivare all'host (with_value: scrittura)
+    void logVariableRejected(const String& body, bool with_value, const String& response);
+
+    void handleLoginPage();
+    void handleAuthLogin();
+    void handleAuthStatus();
+    void handleAuthCredentials();
+    void handleAuthLogout();
+    void handleAuthLogoutAll();
+
     void handleOTAPage();
     void handleOTAUpload();
 
+    // Guard: ogni rotta registrata passa da qui (nessun server.on() diretto)
+    WebServer::THandlerFunction guarded(WebServer::THandlerFunction handler);
+    // Valore del cookie di sessione della richiesta corrente
+    String sessionToken();
+    // Decisione per la richiesta corrente (uri e metodo), senza inviare risposte
+    AuthDecision evaluateRequest();
+    // false se ha già risposto (302 verso /login o 401 JSON)
+    bool authorize();
+    // Stessa decisione di authorize() senza risposta (callback di upload OTA)
+    bool authorizedQuiet();
+    // 415 se il Content-Type non è application/json (anti-CSRF); false se ha risposto
+    bool requireJson();
+    void sendAuth(const AuthResponse& res);
+
     bool should_restart = false;
     unsigned long restart_request_time = 0;
+    // Upload OTA rifiutato a UPLOAD_FILE_START: chunk e fine sono ignorati (il guard risponde 401)
+    bool ota_rejected = false;
+    // Un upload multipart autorizzato è partito: senza, il handler finale non dichiara successo
+    bool ota_upload_started = false;
+    // millis() a UPLOAD_FILE_START: durata dell'upload nel log di successo (US-085)
+    uint32_t ota_start_ms = 0;
+    // Dati, stato e comandi dell'UPS; usb_ups resta solo per l'export della diagnostica USB
+    IUpsSource* ups_source = nullptr;
     USBHostUPS* usb_ups = nullptr;
-    AppNetworkManager* network_mgr = nullptr;
-    NUTServer* nut_server = nullptr;
     MqttBridge* mqtt_bridge = nullptr;
 };
 

@@ -11,6 +11,12 @@ epics:
     title: Server NUT
   - code: EP-004
     title: CI/CD e Automazione
+  - code: EP-005
+    title: Supporto multi-scheda (ESP32-P4, Ethernet)
+  - code: EP-006
+    title: 'Architettura modulare: sorgente UPS e trasporto'
+  - code: EP-007
+    title: Supporto UPS Q* (nutdrv_qx)
 order:
   - US-000
   - US-001
@@ -58,10 +64,97 @@ order:
   - US-044
   - US-045
   - US-040
-  - US-048
   - US-049
   - US-050
   - US-051
+  - US-048
   - US-052
   - US-053
+  - US-055
   - US-054
+  - US-056
+  - US-057
+  - US-058
+  - US-059
+  - US-060
+  - US-061
+  - US-062
+  - US-063
+  - US-064
+  - US-065
+  - US-071
+  - US-070
+  - US-066
+  - US-067
+  - US-068
+  - US-080
+  - US-082
+  - US-069
+  - US-083
+  - US-085
+  - US-084
+  - US-086
+  - US-087
+  - US-088
+  - US-081
+  - US-093
+  - US-095
+  - US-096
+  - US-097
+  - US-090
+  - US-091
+  - US-094
+  - US-089
+  - US-098
+  - US-101
+  - US-103
+  - US-104
+  - US-105
+  - US-092
+  - US-102
+  - US-073
+  - US-074
+  - US-107
+  - US-075
+  - US-076
+  - US-077
+  - US-078
+  - US-106
+  - US-079
+  - US-108
+  - US-072
+  - US-109
+  - US-110
+  - US-112
+  - US-113
+  - US-114
+  - US-111
+  - US-115
+  - US-116
+  - US-117
+  - US-118
+  - US-119
+  - US-120
+  - US-121
+  - US-122
+  - US-123
+  - US-139
+  - US-126
+  - US-127
+  - US-131
+  - US-132
+  - US-133
+  - US-134
+  - US-135
+  - US-136
+  - US-137
+  - US-138
+  - US-124
+  - US-125
+  - US-142
+  - US-143
+  - US-141
+  - US-144
+  - US-145
+  - US-146
+  - US-147

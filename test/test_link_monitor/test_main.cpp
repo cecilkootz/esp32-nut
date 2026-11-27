@@ -23,7 +23,7 @@ void test_healthy_link_never_acts(void) {
 }
 
 void test_quiet_link_without_failures_never_acts(void) {
-    // Devices with QUIRK_NO_GET_REPORT never issue control requests
+    // A device that issues no control request never fails
     LinkMonitor m(testConfig());
     m.reset(0);
     TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(3600000));
@@ -122,36 +122,34 @@ void test_millis_wraparound(void) {
     TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == m.tick(near_wrap + 60000));
 }
 
-// Review A1: no device attached means nothing current to serve
-void test_stale_without_device(void) {
-    const uint32_t grace = 15000;
-    // Boot: the UPS is still enumerating
-    TEST_ASSERT_FALSE(LinkMonitor::isStaleWithoutDevice(false, 0, grace));
-    TEST_ASSERT_FALSE(LinkMonitor::isStaleWithoutDevice(false, 14999, grace));
-    // No UPS showed up in time
-    TEST_ASSERT_TRUE(LinkMonitor::isStaleWithoutDevice(false, 15000, grace));
-    // A UPS was attached and went away (e.g. USB reset on a blackout): stale at once,
-    // even inside the boot grace
-    TEST_ASSERT_TRUE(LinkMonitor::isStaleWithoutDevice(true, 5000, grace));
-    TEST_ASSERT_TRUE(LinkMonitor::isStaleWithoutDevice(true, 3600000, grace));
+// Issue #60: a timed-out transfer still held by the USB stack. An interface restart
+// cannot free EP0, so the monitor goes straight to the restart, 3 s after the first
+// failure, before the data turns stale.
+void test_stuck_control_transfer_restarts_directly(void) {
+    LinkMonitor m(testConfig());
+    m.reset(0);
+    m.onAlive(1000);
+    m.onLinkFailure(9000); // the last answer was 8 s earlier: the wait starts here
+    m.onLinkFailure(9500);
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(11999, true));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RESTART == m.tick(12000, true));
+    TEST_ASSERT_EQUAL_UINT8(0, m.recoveries());
+    TEST_ASSERT_FALSE(m.isStale(12000));
 }
 
-// QUIRK_NO_GET_REPORT: the data comes only from INPUT reports. A string request that
-// times out must not make it stale nor restart the board.
-void test_control_pipe_without_data_never_escalates(void) {
+void test_stuck_flag_without_failures_never_acts(void) {
     LinkMonitor m(testConfig());
-    m.setCarriesData(false);
+    m.reset(0);
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(3600000, true));
+}
+
+// The late callback arrived: the pipe is free again and the normal ladder applies
+void test_unstuck_pipe_uses_recovery_ladder(void) {
+    LinkMonitor m(testConfig());
     m.reset(0);
     m.onLinkFailure(1000);
-    TEST_ASSERT_FALSE(m.canPoll(1500)); // still backs off the remaining requests
-    TEST_ASSERT_FALSE(m.isStale(1000 + 3600000));
-    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(1000 + 3600000));
-    // A reset (new device) keeps the setting
-    m.reset(5000);
-    TEST_ASSERT_FALSE(m.carriesData());
-    m.setCarriesData(true);
-    m.onLinkFailure(6000);
-    TEST_ASSERT_TRUE(m.isStale(6000 + 20000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(31000, false));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == m.tick(60000, false));
 }
 
 // Review A2: watchdog on the INPUT pipe
@@ -242,6 +240,17 @@ void test_input_not_enough_samples_never_acts(void) {
     TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(last + 3600000));
 }
 
+// US-108: a watchdog never fed is never periodic and never acts, the case of QUIRK_NO_INTERRUPT_PIPE
+// (APC 5G), where USBHostUPS drops the INPUT reports before onInput()
+void test_input_never_fed_never_acts(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    TEST_ASSERT_FALSE(wd.isPeriodic());
+    TEST_ASSERT_FALSE(wd.isStale(600000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(600000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(3600000));
+}
+
 void test_input_jitter_tolerated(void) {
     InputWatchdog wd;
     wd.reset(0);
@@ -253,6 +262,86 @@ void test_input_jitter_tolerated(void) {
         wd.onInput(t);
     }
     TEST_ASSERT_TRUE(wd.isPeriodic());
+}
+
+// US-123 (issue #111): the MGE Protection Center sends one INPUT report a minute, every value
+// of which the poll also requests. A silence freezes nothing: no stale data, no recovery, no
+// restart, even after a day.
+void test_input_values_polled_silence_never_acts(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    uint32_t last = feedBursts(wd, 0, 9, 60000);
+    TEST_ASSERT_TRUE(wd.isPeriodic());
+    TEST_ASSERT_EQUAL_UINT32(300000, wd.silenceThresholdMs());
+    wd.setValuesPolled(true);
+    TEST_ASSERT_TRUE(wd.valuesPolled());
+
+    const uint32_t later[] = {300000, 360000, 420000, 3600000, 86400000};
+    for (uint32_t d : later) {
+        TEST_ASSERT_FALSE(wd.isStale(last + d));
+        TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(last + d));
+    }
+    TEST_ASSERT_EQUAL_UINT8(0, wd.recoveries());
+    // The period is still known, for the export
+    TEST_ASSERT_TRUE(wd.isPeriodic());
+    TEST_ASSERT_EQUAL_UINT32(60000, wd.periodMs());
+}
+
+// US-123: one notice per silence, armed again by the next INPUT report
+void test_input_values_polled_notice_once_per_silence(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    uint32_t last = feedBursts(wd, 0, 9, 60000);
+    wd.setValuesPolled(true);
+
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(last + 299999));
+    TEST_ASSERT_TRUE(wd.takeSilenceNotice(last + 300000));
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(last + 400000));
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(last + 3600000));
+
+    // The reports come back, then stop again
+    uint32_t back = last + 3600000;
+    wd.onInput(back);
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(back + 1000));
+    TEST_ASSERT_TRUE(wd.takeSilenceNotice(back + 300000));
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(back + 300001));
+
+    // Values not polled: no notice, the ladder acts instead
+    InputWatchdog plain;
+    plain.reset(0);
+    last = feedBursts(plain, 0, 9, 60000);
+    TEST_ASSERT_FALSE(plain.takeSilenceNotice(last + 300000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == plain.tick(last + 300000));
+}
+
+// US-123: a new device starts with unknown coverage, so the ladder of review A2 applies
+void test_input_values_polled_reset_by_new_device(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    wd.setValuesPolled(true);
+    wd.reset(1000);
+    TEST_ASSERT_FALSE(wd.valuesPolled());
+
+    uint32_t last = feedBursts(wd, 1000, 9, 3000);
+    TEST_ASSERT_TRUE(wd.isStale(last + 30000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == wd.tick(last + 30000));
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(last + 30000));
+}
+
+// US-123: a change-driven device is never periodic, so no notice either
+void test_input_change_driven_polled_no_notice(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    wd.setValuesPolled(true);
+    const uint32_t gaps[] = {1000, 7000, 2000, 30000, 5000, 1500, 60000, 4000, 9000, 2500};
+    uint32_t t = 0;
+    for (uint32_t g : gaps) {
+        t += g;
+        wd.onInput(t);
+    }
+    TEST_ASSERT_FALSE(wd.isPeriodic());
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(t + 3600000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(t + 3600000));
 }
 
 #ifdef PIO_UNIT_TESTING
@@ -267,14 +356,20 @@ int main(int argc, char **argv) {
     RUN_TEST(test_escalation_recover_then_restart);
     RUN_TEST(test_answer_after_recovery_resets_escalation);
     RUN_TEST(test_millis_wraparound);
-    RUN_TEST(test_stale_without_device);
-    RUN_TEST(test_control_pipe_without_data_never_escalates);
+    RUN_TEST(test_stuck_control_transfer_restarts_directly);
+    RUN_TEST(test_stuck_flag_without_failures_never_acts);
+    RUN_TEST(test_unstuck_pipe_uses_recovery_ladder);
     RUN_TEST(test_input_periodic_silence_recovers_then_restarts);
     RUN_TEST(test_input_resume_clears_stale_and_keeps_period);
     RUN_TEST(test_input_long_period_scales_threshold);
     RUN_TEST(test_input_change_driven_device_never_acts);
     RUN_TEST(test_input_not_enough_samples_never_acts);
+    RUN_TEST(test_input_never_fed_never_acts);
     RUN_TEST(test_input_jitter_tolerated);
+    RUN_TEST(test_input_values_polled_silence_never_acts);
+    RUN_TEST(test_input_values_polled_notice_once_per_silence);
+    RUN_TEST(test_input_values_polled_reset_by_new_device);
+    RUN_TEST(test_input_change_driven_polled_no_notice);
     return UNITY_END();
 }
 #else
@@ -288,14 +383,20 @@ void setup() {
     RUN_TEST(test_escalation_recover_then_restart);
     RUN_TEST(test_answer_after_recovery_resets_escalation);
     RUN_TEST(test_millis_wraparound);
-    RUN_TEST(test_stale_without_device);
-    RUN_TEST(test_control_pipe_without_data_never_escalates);
+    RUN_TEST(test_stuck_control_transfer_restarts_directly);
+    RUN_TEST(test_stuck_flag_without_failures_never_acts);
+    RUN_TEST(test_unstuck_pipe_uses_recovery_ladder);
     RUN_TEST(test_input_periodic_silence_recovers_then_restarts);
     RUN_TEST(test_input_resume_clears_stale_and_keeps_period);
     RUN_TEST(test_input_long_period_scales_threshold);
     RUN_TEST(test_input_change_driven_device_never_acts);
     RUN_TEST(test_input_not_enough_samples_never_acts);
+    RUN_TEST(test_input_never_fed_never_acts);
     RUN_TEST(test_input_jitter_tolerated);
+    RUN_TEST(test_input_values_polled_silence_never_acts);
+    RUN_TEST(test_input_values_polled_notice_once_per_silence);
+    RUN_TEST(test_input_values_polled_reset_by_new_device);
+    RUN_TEST(test_input_change_driven_polled_no_notice);
     UNITY_END();
 }
 void loop() {}

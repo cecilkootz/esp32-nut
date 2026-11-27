@@ -1,6 +1,11 @@
-import { test, expect } from './fixtures';
+import { test, expect } from '@playwright/test';
+import { serveIndex } from './support/webui';
 
 test.describe('Config Auto-populate', () => {
+  test.beforeEach(async ({ page }) => {
+    await serveIndex(page);
+  });
+
     test('should pre-populate SSID and NUT username from /api/config', async ({ page }) => {
         // Mock the /api/config response
         await page.route('**/api/config', async route => {
@@ -17,8 +22,8 @@ test.describe('Config Auto-populate', () => {
         });
 
         // Navigate to the app
-        await page.goto('/');
-    await page.click('button[data-target=\"wifi\"]');
+        await page.goto('http://esp32.local/');
+    await page.click('button[data-target=\"network\"]');
 
         // Verify SSID field is populated
         const ssidInput = page.locator('#ssid');
@@ -48,8 +53,8 @@ test.describe('Config Auto-populate', () => {
         });
 
         // Navigate to the app
-        await page.goto('/');
-    await page.click('button[data-target=\"wifi\"]');
+        await page.goto('http://esp32.local/');
+    await page.click('button[data-target=\"network\"]');
 
         // The NUT username shows the config was applied, so the empty SSID is not a race
         await expect(page.locator('#nut-username')).toHaveValue('mockadmin');

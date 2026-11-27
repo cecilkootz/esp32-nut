@@ -1,0 +1,349 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/nutdrv_qx.c:
+ *   Copyright (C) 2013 Daniele Pezzini <hyouko@gmail.com>
+ *                 2016 Eaton
+ *   Based on:
+ *    usbhid-ups.c - Copyright (C)
+ *      2003-2012 Arnaud Quette <arnaud.quette@gmail.com>
+ *      2005      John Stamp <kinsayder@hotmail.com>
+ *      2005-2006 Peter Selinger <selinger@users.sourceforge.net>
+ *      2007-2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *    blazer.c - Copyright (C)
+ *      2008-2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *      2012      Arnaud Quette <ArnaudQuette@Eaton.com>
+ *    blazer_ser.c - Copyright (C)
+ *      2008      Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *    blazer_usb.c - Copyright (C)
+ *      2003-2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *      2011-2012 Arnaud Quette <arnaud.quette@free.fr>
+ *    Masterguard additions
+ *      2020-2021 Edgar Fuß, Mathematisches Institut der Universität Bonn <ef@math.uni-bonn.de>
+ *    Armac (Richcomm-variant) additions
+ *      2021      Tomasz Fortuna <bla@thera.be>
+ */
+
+#include "QxDriver.h"
+#include <stdio.h>
+#include <string.h>
+#include "QxControl.h"
+
+// The host side of nutdrv_qx (US-136): upsdrv_initups()/upsdrv_initinfo()/upsdrv_updateinfo()
+// of nut_repo/drivers/nutdrv_qx.c run one Q* command per poll step, on a shadow of the data.
+
+namespace {
+
+// Holds the host lock for a scope
+class HostLock {
+public:
+    explicit HostLock(const IQxHostPort& h) : _h(h) { _h.lock(); }
+    ~HostLock() { _h.unlock(); }
+private:
+    const IQxHostPort& _h;
+};
+
+} // namespace
+
+QxDriver::QxDriver(std::unique_ptr<QxUsbTransport> transport, IQxHostPort& host, uint16_t vid, uint16_t pid,
+                   const QxSubdriver* const* list)
+    : _transport(std::move(transport)), _host(host), _vid(vid), _pid(pid), _recorder(*this),
+      _prober(_recorder, list, &QxDriver::logThunk, this) {
+    // The defaults upsdrv_initups() picks by USB ID once the device is open (US-141)
+    _transport->setDevice(vid, pid);
+}
+
+QxDriver::~QxDriver() = default;
+
+void QxDriver::logThunk(void* ctx, const char* level, const char* text) {
+    static_cast<QxDriver*>(ctx)->_host.log(level, text);
+}
+
+const IUpsControl& QxDriver::control() const {
+    return QxControl::instance();
+}
+
+int QxDriver::Recorder::command(const char* cmd, size_t cmdlen, char* buf, size_t buflen) {
+    // No lock during the command (ADR 0008): the exchange is recorded afterwards
+    const uint32_t start = _d._transport->nowMs();
+    int ret = _d._transport->command(cmd, cmdlen, buf, buflen);
+    const uint32_t duration = _d._transport->nowMs() - start;
+    size_t len = cmdlen > 0 ? cmdlen : (cmd ? strlen(cmd) : 0);
+    {
+        HostLock lock(_d._host);
+        _d._exchanges.add(cmd, len, reinterpret_cast<const uint8_t*>(buf), ret, start, duration,
+                          _d._transport->lastError());
+    }
+    // upslogx() of the USB subdriver (cypress stale data, US-141)
+    if (const char* notice = _d._transport->takeNotice()) _d._host.log("INFO", notice);
+    // qx_command(): the host resets the device on QX_USB_ERR_DESYNC (US-141)
+    _d._host.transportResult(ret);
+    // Issue #91: once per attach, when the transport switched to langid_fix by itself
+    if (!_d._langidFixLogged && _d._transport->langidFix()) {
+        _d._langidFixLogged = true;
+        char line[160];
+        snprintf(line, sizeof(line),
+                 "[Q*] The UPS answers only with LANGID 0x%04X: langid_fix = 0x%04X applied, as in NUT's ups.conf",
+                 (unsigned)_d._transport->langidFix(), (unsigned)_d._transport->langidFix());
+        _d._host.log("INFO", line);
+    }
+    return ret;
+}
+
+void QxDriver::setup() {
+    _prober.restart();
+    _engine.reset();
+    _state = State::Probing;
+    _firstWalkDone = false;
+    _walkStarted = false;
+    _started = false;
+    {
+        HostLock lock(_host);
+        _commands.clear();
+    }
+    // driver.name as the HID drivers publish it (GenericDriver), ups.vendorid/productid as
+    // upsdrv_initups() (nutdrv_qx.c:3920-3921)
+    char id[8];
+    _shadow.set("driver.name", getDriverName());
+    snprintf(id, sizeof(id), "%04x", (unsigned)_vid);
+    _shadow.set("ups.vendorid", id);
+    snprintf(id, sizeof(id), "%04x", (unsigned)_pid);
+    _shadow.set("ups.productid", id);
+}
+
+void QxDriver::poll(UPSData& data, uint32_t now) {
+    if (_host.pollingPaused()) return;
+    _started = true;
+    switch (_state) {
+    case State::Probing:
+        if (_prober.step(_shadow, now) == QxProber::Step::Claimed) {
+            // The values of another protocol must not stay published to the NUT clients
+            const QxSubdriver* c = _prober.claimed();
+            if (c && _lastProtocol && strcmp(_lastProtocol, c->name) != 0) dropProtocolValues(_lastProtocol, c->name);
+            if (c) _lastProtocol = c->name;
+            _engine = _prober.takeEngine();
+            // End of upsdrv_initups() after the matcher
+            if (_engine) {
+                _engine->initUps();
+                _state = State::Init;
+            }
+        }
+        break;
+
+    case State::Init: {
+        QxEngine::Phase p = _engine->initInfoStep(_shadow, now);
+        if (p == QxEngine::Phase::Ok) {
+            std::vector<const UPSCommandInfo*> cmds = QxControl::commandsOf(*_engine);
+            {
+                HostLock lock(_host);
+                _commands = std::move(cmds);
+            }
+            _state = State::Polling;
+            _walkStarted = false;
+        } else if (p == QxEngine::Phase::Failed) {
+            // fatalx(EXIT_FAILURE, "Can't initialise data") of upsdrv_initinfo(): here the
+            // protocol is detected again after a pause
+            char line[96];
+            snprintf(line, sizeof(line), "[Q*] Can't initialise data, new probe in %u s",
+                     (unsigned)(INIT_RETRY_MS / 1000));
+            _host.log("ERROR", line);
+            _engine.reset();
+            _state = State::Held;
+            _heldUntil = now + INIT_RETRY_MS;
+        }
+        break;
+    }
+
+    case State::Polling:
+        stepPolling(now);
+        break;
+
+    case State::Held:
+        if ((int32_t)(now - _heldUntil) >= 0) {
+            _prober.restart();
+            _state = State::Probing;
+        }
+        break;
+    }
+
+    publish(data);
+}
+
+void QxDriver::stepPolling(uint32_t now) {
+    if (!_engine->walkPending()) {
+        // upsdrv_updateinfo() every poll interval (main.c of NUT), from the start of the
+        // previous walk; the first one right after the init
+        if (_walkStarted && (uint32_t)(now - _walkStartedAt) < QxEngine::DEFAULT_POLLINTERVAL_S * 1000UL) return;
+        _walkStarted = true;
+        _walkStartedAt = now;
+    }
+
+    switch (_engine->updateInfoStep(_shadow, now)) {
+    case QxEngine::Update::Pending:
+        break;
+    case QxEngine::Update::Ok:
+        _firstWalkDone = true;
+        if (_engine->reestablished()) {
+            _host.log("INFO", "[Q*] Communications with the UPS re-established");
+        }
+        _stale = false;
+        break;
+    case QxEngine::Update::Failed:
+        break;
+    case QxEngine::Update::Stale:
+        // dstate_datastale(); upstream logs the loss at debug level only
+        if (!_stale) _host.log("WARN", "[Q*] Communications with the UPS lost: status read failed, data stale");
+        _stale = true;
+        break;
+    }
+}
+
+void QxDriver::dropValuesExceptIdentity() {
+    // remove() and not a new UPSData: remove() counts in writes(), so publish() drops the
+    // keys from the host data too; a new object would restart writes() and publish() could
+    // skip the change
+    std::vector<String> gone;
+    for (const auto& p : _shadow.getAll()) {
+        if (p.key == "driver.name" || p.key == "ups.vendorid" || p.key == "ups.productid") continue;
+        gone.push_back(p.key);
+    }
+    for (const auto& k : gone) _shadow.remove(k);
+}
+
+void QxDriver::dropProtocolValues(const char* from, const char* to) {
+    dropValuesExceptIdentity();
+    char line[128];
+    snprintf(line, sizeof(line), "[Q*] Protocol changed from %s to %s: previous values dropped", from, to);
+    _host.log("INFO", line);
+}
+
+void QxDriver::configure(const char* protocol, const QxOptions& options) {
+    {
+        // Under the host lock: fillDiagnostics() and claimedProtocol() read these fields from
+        // other tasks. No USB transfer here (ADR 0008 forbids the lock only around transfers)
+        HostLock lock(_host);
+        _options = options;
+        _prober.configure(protocol, options); // restart(): first protocol, nothing claimed
+        _transport->setOptions(options);
+    }
+    if (!_started) return;
+
+    // Settings changed while running (US-138): as a restart of the NUT driver with the new
+    // ups.conf, the protocol is detected again and nothing of the previous one stays published
+    _engine.reset();
+    _state = State::Probing;
+    _firstWalkDone = false;
+    _stale = false;
+    _walkStarted = false;
+    _lastProtocol = nullptr;
+    {
+        HostLock lock(_host);
+        _commands.clear();
+    }
+    dropValuesExceptIdentity();
+    char line[128];
+    snprintf(line, sizeof(line), "[Q*] Settings changed (protocol: %s, novendor: %s): detecting the protocol again",
+             (protocol && *protocol) ? protocol : "auto", options.novendor ? "on" : "off");
+    _host.log("INFO", line);
+}
+
+const char* QxDriver::claimedProtocol() const {
+    const QxSubdriver* c = _prober.claimed();
+    return c ? c->name : "";
+}
+
+void QxDriver::publish(UPSData& data) {
+    if (_shadow.writes() == _publishedWrites) return;
+    HostLock lock(_host);
+    // A protocol that reports ups.realpower owns it: no estimate (US-146)
+    if (_shadow.find("ups.realpower") && !data.realPowerMeasured()) data.markRealPowerMeasured();
+    for (const auto& p : _shadow.getAll()) {
+        if (!data.valueEquals(p.key.c_str(), p.value)) data.set(p.key, p.value);
+    }
+    // Keys the shadow no longer has (delinfo() of the engine). The ups.realpower estimate
+    // lives only in the host data, never in the shadow (US-146)
+    std::vector<String> gone;
+    for (const auto& p : data.getAll()) {
+        if (_shadow.find(p.key.c_str())) continue;
+        if (data.realPowerEstimated() && p.key == "ups.realpower") continue;
+        gone.push_back(p.key);
+    }
+    for (const auto& k : gone) data.remove(k);
+    _publishedWrites = _shadow.writes();
+    // From ups.load and the nominal powers, as the HID drivers do; removed when the load goes
+    data.updateRealPower();
+}
+
+CommandResult QxDriver::runCommand(UPSData& data, const char* name, const char* param) {
+    if (_state != State::Polling || !_engine) return CommandResult::NOT_SUPPORTED;
+    _engine->abortWalk();
+    CommandResult r = QxControl::runCommand(*_engine, _shadow, name, param);
+    publish(data);
+    return r;
+}
+
+NutTable::SetStatus QxDriver::runSetVariable(UPSData& data, const char* name, const char* value) {
+    if (_state != State::Polling || !_engine) return NutTable::SetStatus::UNKNOWN;
+    _engine->abortWalk();
+    NutTable::SetStatus st = QxControl::runSetVariable(*_engine, _shadow, name, value);
+    publish(data);
+    return st;
+}
+
+void QxDriver::fillDiagnostics(UsbDiagQx& out) const {
+    out.present = true;
+    out.transport = _transport->name();
+    const QxSubdriver* claimed = _prober.claimed();
+    out.protocol = claimed ? claimed->name : "";
+    // Held: protocol recognised but "Can't initialise data", waiting for the next attempt
+    if (_state == State::Held) out.probe = "waiting";
+    else if (!claimed && _prober.backingOff()) out.probe = "not_supported";
+    else if (claimed) out.probe = "claimed";
+    else out.probe = "probing";
+    out.tries = (uint8_t)_prober.tryCount();
+    out.failed_cycles = _prober.failedCycles();
+    out.retry_ms = _prober.retryDelayMs();
+    out.forced_protocol = _prober.protocol();
+    out.novendor = _options.novendor;
+    // Issue #91
+    if (const uint16_t fix = _transport->langidFix()) {
+        char hex[8];
+        snprintf(hex, sizeof(hex), "0x%04X", (unsigned)fix);
+        out.langid_fix = hex;
+    } else {
+        out.langid_fix = "";
+    }
+    const QxStringFailure& sf = _transport->stringFailure();
+    out.string_failure = sf.present;
+    if (sf.present) {
+        out.sf_index = sf.index;
+        out.sf_result = sf.result;
+        out.sf_langids_length = sf.langidsLength;
+        size_t n = sf.langidsLength > 0 ? (size_t)sf.langidsLength : 0;
+        if (n > QxStringFailure::BYTES_MAX) n = QxStringFailure::BYTES_MAX;
+        out.sf_langids.assign(sf.langids, sf.langids + n);
+        out.sf_answer_asked = sf.answerAsked;
+        out.sf_answer_length = sf.answerLength;
+        n = sf.answerLength > 0 ? (size_t)sf.answerLength : 0;
+        if (n > QxStringFailure::BYTES_MAX) n = QxStringFailure::BYTES_MAX;
+        out.sf_answer.assign(sf.answer, sf.answer + n);
+    }
+    out.exchanges.clear();
+    out.exchanges.reserve(_exchanges.size());
+    for (size_t i = 0; i < _exchanges.size(); i++) {
+        const QxExchange& e = _exchanges.at(i);
+        UsbDiagQxExchange x;
+        x.command = e.command;
+        x.answer.assign(e.answer, e.answer + e.answerLen);
+        x.length = e.result;
+        x.uptime_ms = e.atMs;
+        x.duration_ms = e.durationMs;
+        x.truncated = e.truncated;
+        x.error = e.error;
+        out.exchanges.push_back(std::move(x));
+    }
+}

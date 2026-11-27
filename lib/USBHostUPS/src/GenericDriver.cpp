@@ -1,9 +1,33 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code and data derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/usbhid-ups.c:
+ *   Copyright (C) 2003-2022 Arnaud Quette <arnaud.quette@gmail.com>
+ *                 2005 John Stamp <kinsayder@hotmail.com>
+ *                 2005-2006 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2007-2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *                 2016 Eaton / Arnaud Quette <ArnaudQuette@Eaton.com>
+ *                 2020-2026 Jim Klimov <jimklimov+nut@gmail.com>
+ *
+ * drivers/libhid.c:
+ *   Copyright (C) 2003 - 2007 Arnaud Quette <arnaud.quette@free.fr> && <arnaud.quette@mgeups.com>
+ *                 John Stamp <kinsayder@hotmail.com>
+ *                 Peter Selinger <selinger@users.sourceforge.net>
+ *                 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ */
+
 #include "GenericDriver.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
+#include "HidControl.h"
 #include "HIDParser.h"
 #include "HIDUsages.h"
 #include "Quirks.h"
 #include <algorithm>
+#include <string.h>
 #include <cmath>
 
 #ifndef FIRMWARE_VERSION
@@ -22,21 +46,50 @@
  */
 
 GenericDriver::GenericDriver() :
-    _batteryDateStringIndex(0),
+    _own_rows(0),
+    _beeper_row(false),
+    _beeper_indexed(false),
     _lists_built(false),
+    _lists_pruned(false),
+    _input_values_polled(false),
+    _active_power_checked(false),
+    _input_twin{},
+    _static_report{},
+    _decoded_report{},
+    _semi_static{},
+    _semi_classified(false),
+    _semi_undecided(false),
+    _semi_count(0),
+    _data_changed(false),
+    _cycle_rereads(false),
     _queue_pos(0),
     _step_now(false),
     _cycle_full(false),
     _strings_rechecked(false),
+    _first_full_done(false),
     _last_quick(0),
     _last_full(0),
-    _last_step(0) {
+    _last_step(0),
+    _nut_bound(false),
+    _nut_init_done(false),
+    _nut_has_realpower(false),
+    _nut_usage_count(0) {
+}
+
+const IUpsControl& GenericDriver::control() const {
+    return HidControl::instance();
 }
 
 void GenericDriver::setup() {
     _active_beeper = "";
-    _generic_map.invalidate();
+    _own_rows = 0;
+    _beeper_row = false;
+    _beeper_usages.clear();
+    _beeper_indexed = false;
     _lists_built = false;
+    _lists_pruned = false;
+    _input_values_polled = false;
+    _active_power_checked = false;
     _quick.clear();
     _full.clear();
     _queue.clear();
@@ -44,10 +97,27 @@ void GenericDriver::setup() {
     _step_now = false;
     _cycle_full = false;
     _strings_rechecked = false;
+    _first_full_done = false;
     _cycle_strings.clear();
+    memset(_input_twin, 0, sizeof(_input_twin));
+    memset(_static_report, 0, sizeof(_static_report));
+    memset(_decoded_report, 0, sizeof(_decoded_report));
+    memset(_semi_static, 0, sizeof(_semi_static));
+    _semi_classified = false;
+    _semi_undecided = false;
+    _semi_count = 0;
+    _data_changed = false;
+    _cycle_rereads = false;
     _last_quick = 0;
     _last_full = 0;
     _last_step = 0;
+    _nut_rows.clear();
+    _nut_bound = false;
+    _nut_init_done = false;
+    _nut_has_realpower = false;
+    _nut_usage_count = 0;
+    _nut_ctx = NutTable::Context();
+    _absent_overrides.clear(); // the host sets the saved values again right after setup()
 }
 
 bool GenericDriver::isStatusUsage(const HIDUsageDef& u) {
@@ -69,10 +139,139 @@ bool GenericDriver::isStatusUsage(const HIDUsageDef& u) {
     }
 }
 
-void GenericDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
+bool GenericDriver::isDynamicUsage(const HIDUsageDef& u) {
+    if (isStatusUsage(u)) return true;
+    uint32_t page = u.usage & 0xFFFF0000;
+    uint16_t id = u.usage & 0xFFFF;
+    if (page == 0x00840000) {
+        if (id >= 0x30 && id <= 0x37) return true; // Voltage ... Humidity
+        if (id >= 0x55 && id <= 0x58) return true; // DelayBeforeReboot/Startup/Shutdown, Test
+        if (id == 0x5a) return true;                // AudibleAlarmControl
+        if (id >= 0x60 && id <= 0x7f) return true; // status flags
+    } else if (page == 0x00850000) {
+        if (id >= 0x40 && id <= 0x4f) return true; // status flags
+        if (id >= 0x66 && id <= 0x6b) return true; // RemainingCapacity ... CycleCount
+        if (id >= 0xd0 && id <= 0xdf) return true; // ACPresent, BatteryPresent, ...
+    }
+    // Vendor usages known by name: APCDelayBefore*, APCStatusFlag, APCLineFailCause
+    return strstr(u.path, "Delay") != nullptr || strstr(u.path, "Status") != nullptr ||
+           strstr(u.path, "LineFailCause") != nullptr;
+}
+
+// A usage of a HU_FLAG_QUICK_POLL status row of the driver's table (US-073): the internal
+// and BOOL rows and battery.charger.status (ABM, Charger.Mode/Status), refreshed by the quick
+// update upstream. The other HU_FLAG_QUICK_POLL rows (ups.timer.*, ...) keep the full poll.
+bool GenericDriver::isQuickPollStatusUsage(const HIDUsageDef& u) const {
+    size_t n = 0;
+    const NutTable::HidInfo* table = hid2nut(n);
+    for (size_t i = 0; i < n; i++) {
+        const NutTable::HidInfo& row = table[i];
+        if (!(row.hidflags & NutTable::HU_FLAG_QUICK_POLL)) continue;
+        if (!NutTable::isInternalRow(row) && row.conv != NutTable::Conv::AbmStatus) continue;
+        if (NutTable::rowMatches(u, row)) return true;
+    }
+    return false;
+}
+
+void GenericDriver::pollSoon(const PollItem& item) {
+    for (size_t i = _queue_pos; i < _queue.size(); i++) {
+        if (_queue[i].report_type == item.report_type && _queue[i].id == item.id) return;
+    }
+    _queue.insert(_queue.begin() + _queue_pos, item);
+}
+
+uint8_t GenericDriver::featureReportOf(const std::vector<HIDUsageDef>& usages, const NutTable::HidInfo& row) {
+    for (const auto& u : usages) {
+        if (u.report_type == 3 && u.report_id != 0 && NutTable::rowMatches(u, row)) return u.report_id;
+    }
+    return 0;
+}
+
+// What hid_ups_walk() reads (usbhid-ups.c:2232-2340): the INIT walk reads every bound row but
+// the HU_FLAG_ABSENT ones (command rows too, to see whether they exist), and drops the later
+// rows of a variable already set (DEAD here); the full update skips HU_FLAG_ABSENT and the
+// command rows. libhid asks for the report of each row read, so a report no row reads is never
+// requested (issue #123: APC report 227, a vendor field answered empty).
+void GenericDriver::featureReportsRead(IHidTransport* host, uint32_t out[8]) const {
+    if (!_nut_bound) {
+        for (int w = 0; w < 8; w++) out[w] = 0xFFFFFFFFu;
+        return;
+    }
+    for (int w = 0; w < 8; w++) out[w] = 0;
+    const auto& usages = host->getUsages();
+    auto mark = [&](const HIDUsageDef& u) {
+        if (u.report_type == 3) out[u.report_id / 32] |= 1u << (u.report_id % 32);
+    };
+    for (const auto& b : _nut_rows) {
+        if (b.info->hidflags & NutTable::HU_FLAG_ABSENT) continue;
+        if (_nut_init_done && (NutTable::isCommandRow(*b.info) || b.role == NutTable::Bound::Role::DEAD)) continue;
+        for (int idx : { b.idx, b.twin_idx }) {
+            if (idx >= 0 && (size_t)idx < usages.size()) mark(usages[idx]);
+        }
+    }
+    // The active beeper decoded outside the rows (decodeBeeperStatus()), as classifySemiStatic()
+    String beeper = _beeper_row ? String("") : host->getActiveBeeperPath();
+    for (const auto& u : usages) {
+        if ((beeper.length() > 0 && strcmp(u.path, beeper.c_str()) == 0) || readsFieldOutsideRows(u)) mark(u);
+    }
+}
+
+// US-123 (issue #111): does the poll request every value the driver reads from the INPUT
+// reports? The readers are those of featureReportsRead(): the fields (usage and twin) of each
+// bound row, the active beeper decoded outside the rows, readsFieldOutsideRows(). A reader with
+// an INPUT field depends on the interrupt pipe when none of its fields, INPUT or FEATURE, is in
+// a report of _quick or _full: then a silence freezes it, and the INPUT watchdog must act.
+// The lists count, not the skipping of the semi-static (US-072) and static reports
+// (pollStaticReportsOnce()): those values do not change at run time, so they do not freeze.
+void GenericDriver::computeInputCoverage(IHidTransport* host) {
+    _input_values_polled = false;
+    if (!host || !_nut_bound) return; // nothing known: the watchdog stays active
+
+    std::vector<std::pair<uint8_t, uint8_t>> polled; // (type, id)
+    for (const auto* list : { &_quick, &_full }) {
+        for (const auto& p : *list) {
+            if (p.report_type == 1 || p.report_type == 3) polled.push_back({ p.report_type, p.id });
+        }
+    }
+    auto isPolled = [&](const HIDUsageDef& u) {
+        return std::find(polled.begin(), polled.end(), std::make_pair(u.report_type, u.report_id)) != polled.end();
+    };
+
+    const auto& usages = host->getUsages();
+    // A group of fields read together: true when it has an INPUT field and nothing polled
+    auto dependsOnInput = [&](const std::vector<int>& group) {
+        bool has_input = false;
+        for (int idx : group) {
+            if (idx < 0 || (size_t)idx >= usages.size()) continue;
+            const HIDUsageDef& u = usages[idx];
+            if (u.report_type != 1 && u.report_type != 3) continue;
+            if (isPolled(u)) return false;
+            if (u.report_type == 1) has_input = true;
+        }
+        return has_input;
+    };
+
+    for (const auto& b : _nut_rows) {
+        if (b.info->hidflags & NutTable::HU_FLAG_ABSENT) continue;
+        if (_nut_init_done && (NutTable::isCommandRow(*b.info) || b.role == NutTable::Bound::Role::DEAD)) continue;
+        if (dependsOnInput({ b.idx, b.twin_idx })) return;
+    }
+    String beeper = _beeper_row ? String("") : host->getActiveBeeperPath();
+    std::vector<int> beeper_group;
+    for (size_t i = 0; i < usages.size(); i++) {
+        if (beeper.length() > 0 && strcmp(usages[i].path, beeper.c_str()) == 0) beeper_group.push_back((int)i);
+        if (readsFieldOutsideRows(usages[i]) && dependsOnInput({ (int)i })) return;
+    }
+    if (dependsOnInput(beeper_group)) return;
+    _input_values_polled = true;
+}
+
+void GenericDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
     quick.clear();
     full.clear();
     const auto& usages = host->getUsages();
+    uint32_t read[8];
+    featureReportsRead(host, read);
 
     // Reports in order of first appearance. Report ID 0 is kept (review M4): a device
     // without report IDs has only that one.
@@ -81,20 +280,24 @@ void GenericDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& qui
     for (const auto& u : usages) {
         if (u.report_type != 1 && u.report_type != 3) continue; // OUTPUT reports are not read
         if (!acceptPollReport(u.report_type, u.report_id)) continue;
+        bool status = isStatusUsage(u) || isQuickPollStatusUsage(u);
         bool found = false;
         for (auto& r : reports) {
             if (r.type == u.report_type && r.id == u.report_id) {
-                r.status = r.status || isStatusUsage(u);
+                r.status = r.status || status;
                 found = true;
                 break;
             }
         }
-        if (!found) reports.push_back(Report{u.report_type, u.report_id, isStatusUsage(u)});
+        if (!found) reports.push_back(Report{u.report_type, u.report_id, status});
     }
 
+    // QUIRK_NO_INTERRUPT_PIPE (APC 5G, US-108): upstream reads every value with a FEATURE
+    // GET_REPORT (libusb1.c:1079), so a report that is only INPUT is never requested
+    bool no_interrupt_pipe = (host->getQuirks() & QUIRK_NO_INTERRUPT_PIPE) != 0;
     for (const auto& r : reports) {
         if (r.type == 1) {
-            if (!pollInputReports()) continue;
+            if (!pollInputReports() || no_interrupt_pipe) continue;
             // The FEATURE report with the same ID carries the same values
             bool has_feature = false;
             for (const auto& f : reports) {
@@ -102,20 +305,196 @@ void GenericDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& qui
             }
             if (has_feature) continue;
         }
-        full.push_back(PollItem{r.type, r.id, 0});
+        // A FEATURE report nothing reads stays out of the full poll (US-120). The quick poll and
+        // the INPUT check above are unchanged: an INPUT report whose FEATURE twin is left out is
+        // still not requested.
+        bool unread = r.type == 3 && !(read[r.id / 32] & (1u << (r.id % 32)));
+        if (!unread) full.push_back(PollItem{r.type, r.id, 0});
         if (r.status) quick.push_back(PollItem{r.type, r.id, 0});
     }
 }
 
-void GenericDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const {
+// A FEATURE report is an INPUT twin when every one of its usages is also in the INPUT
+// report with the same ID: the INPUT report then already refreshes all its values.
+// libhid.c keeps one buffer per report ID for both (issue #60, APC Back-UPS BX).
+void GenericDriver::findInputTwins(IHidTransport* host) {
+    memset(_input_twin, 0, sizeof(_input_twin));
+    uint32_t mismatch[8] = {};
+    const auto& usages = host->getUsages();
+    for (const auto& f : usages) {
+        if (f.report_type != 3) continue;
+        bool in_input = false;
+        for (const auto& i : usages) {
+            if (i.report_type == 1 && i.report_id == f.report_id && strcmp(i.path, f.path) == 0) {
+                in_input = true;
+                break;
+            }
+        }
+        uint32_t bit = 1u << (f.report_id % 32);
+        if (in_input) _input_twin[f.report_id / 32] |= bit;
+        else mismatch[f.report_id / 32] |= bit;
+    }
+    for (int w = 0; w < 8; w++) _input_twin[w] &= ~mismatch[w];
+}
+
+// A report is static when none of its usages is dynamic
+void GenericDriver::findStaticReports(IHidTransport* host) {
+    memset(_static_report, 0, sizeof(_static_report));
+    uint32_t dynamic[2][8] = {};
+    for (const auto& u : host->getUsages()) {
+        if (u.report_type != 1 && u.report_type != 3) continue;
+        uint32_t bit = 1u << (u.report_id % 32);
+        uint8_t slot = typeSlot(u.report_type);
+        if (!isStaticUsage(u)) dynamic[slot][u.report_id / 32] |= bit;
+        else _static_report[slot][u.report_id / 32] |= bit;
+    }
+    for (int t = 0; t < 2; t++) {
+        for (int w = 0; w < 8; w++) _static_report[t][w] &= ~dynamic[t][w];
+    }
+}
+
+bool GenericDriver::isStaticAndKnown(const PollItem& item) const {
+    if (!pollStaticReportsOnce()) return false;
+    if (item.report_type != 1 && item.report_type != 3) return false;
+    uint8_t slot = typeSlot(item.report_type);
+    uint32_t bit = 1u << (item.id % 32);
+    return (_static_report[slot][item.id / 32] & bit) && (_decoded_report[slot][item.id / 32] & bit);
+}
+
+// A semi-static report (US-072): every field a row reads in it (the row's usage or its twin)
+// belongs to a HU_FLAG_STATIC / HU_FLAG_SEMI_STATIC row, as hid_ups_walk() of usbhid-ups.c:2343-2362
+// skips those rows in the full update. Command rows, HU_FLAG_ABSENT rows and the rows the INIT
+// rule dropped (DEAD) are not read upstream; a report with only such rows, or with no row at
+// all, is not in the full poll anyway (US-120). The active beeper read outside the rows
+// (decodeBeeperStatus()) makes its report dynamic. STATIC and SEMI_STATIC rows go together:
+// both are read again after a change (deviation: upstream reads only the SEMI_STATIC ones).
+// A row still undecided (no value yet, deferred until the conversion inputs are known, as the
+// Eaton nominal values before mge_type, or PENDING behind such a row) makes its report
+// dynamic too: only another read decides it. Upstream knows mge_type before its INIT walk.
+// The full poll classifies again until no static row is undecided (_semi_undecided).
+void GenericDriver::classifySemiStatic(IHidTransport* host) {
+    memset(_semi_static, 0, sizeof(_semi_static));
+    uint32_t dynamic[2][8] = {};
+    const auto& usages = host->getUsages();
+    auto mark = [&](const HIDUsageDef& u, bool is_static) {
+        if (u.report_type != 1 && u.report_type != 3) return;
+        uint32_t bit = 1u << (u.report_id % 32);
+        uint8_t slot = typeSlot(u.report_type);
+        if (is_static) _semi_static[slot][u.report_id / 32] |= bit;
+        else dynamic[slot][u.report_id / 32] |= bit;
+    };
+    _semi_undecided = false;
+    for (const auto& b : _nut_rows) {
+        if (NutTable::isCommandRow(*b.info) || (b.info->hidflags & NutTable::HU_FLAG_ABSENT)) continue;
+        if (b.role == NutTable::Bound::Role::DEAD) continue;
+        // A value already published stays decided: a StringId row defers at every read of
+        // its report until the string comes, which is requested without the report
+        bool undecided = (b.deferred && !b.has) || b.role == NutTable::Bound::Role::PENDING;
+        bool static_flag = (b.info->hidflags & (NutTable::HU_FLAG_STATIC | NutTable::HU_FLAG_SEMI_STATIC)) != 0;
+        // Only a static row can make its report semi-static once decided
+        if (undecided && static_flag) _semi_undecided = true;
+        bool is_static = !undecided && static_flag;
+        for (int idx : { b.idx, b.twin_idx }) {
+            if (idx >= 0 && (size_t)idx < usages.size()) mark(usages[idx], is_static);
+        }
+    }
+    if (!_beeper_row && _active_beeper != "" && _active_beeper != "none") {
+        for (const auto& u : usages) {
+            if (strcmp(u.path, _active_beeper.c_str()) == 0) mark(u, false);
+        }
+    }
+    for (int t = 0; t < 2; t++) {
+        for (int w = 0; w < 8; w++) _semi_static[t][w] &= ~dynamic[t][w];
+    }
+    bool first = !_semi_classified;
+    _semi_classified = true;
+
+    size_t semi = 0;
+    for (const auto& item : _full) {
+        if (item.report_type == 1 || item.report_type == 3) {
+            if (_semi_static[typeSlot(item.report_type)][item.id / 32] & (1u << (item.id % 32))) semi++;
+        }
+    }
+    if (!first && semi == _semi_count) return; // classified again with nothing new to say
+    _semi_count = semi;
+    host->logDebug("[" + String(getDriverName()) + "] Semi-static reports: " + String((int)semi) +
+                   " of " + String((int)_full.size()) + " in the full poll, read again after SET/INSTCMD");
+}
+
+bool GenericDriver::isSemiStaticAndKnown(const PollItem& item) const {
+    if (!_semi_classified) return false;
+    if (item.report_type != 1 && item.report_type != 3) return false;
+    uint8_t slot = typeSlot(item.report_type);
+    uint32_t bit = 1u << (item.id % 32);
+    return (_semi_static[slot][item.id / 32] & bit) && (_decoded_report[slot][item.id / 32] & bit);
+}
+
+void GenericDriver::invalidateReport(uint8_t report_type, uint8_t report_id) {
+    if (report_type == 1 || report_type == 3) {
+        _decoded_report[typeSlot(report_type)][report_id / 32] &= ~(1u << (report_id % 32));
+    }
+}
+
+bool GenericDriver::isFreshFromInput(IHidTransport* host, const PollItem& item, uint32_t now) const {
+    if (item.report_type == 3) {
+        if (!(_input_twin[item.id / 32] & (1u << (item.id % 32)))) return false;
+    } else if (item.report_type != 1) {
+        return false;
+    }
+    return host->inputReportAgeMs(item.id, now) < maxReportAgeMs();
+}
+
+// The report of the active beeper field (INPUT or FEATURE) has been decoded (US-109)
+bool GenericDriver::beeperFieldRead(const IHidTransport* host) const {
+    if (!host) return false;
+    String path = host->getActiveBeeperPath();
+    if (path.length() == 0) return false;
+    for (const auto& u : host->getUsages()) {
+        if ((u.report_type != 1 && u.report_type != 3) || strcmp(u.path, path.c_str()) != 0) continue;
+        if (_decoded_report[typeSlot(u.report_type)][u.report_id / 32] & (1u << (u.report_id % 32))) return true;
+    }
+    return false;
+}
+
+// An INPUT report arrives on the interrupt endpoint (never with QUIRK_NO_INTERRUPT_PIPE,
+// US-108), a FEATURE report only if it is polled
+bool GenericDriver::isReportRead(IHidTransport* host, const HIDUsageDef& u) const {
+    if (u.report_type == 1) return !(host->getQuirks() & QUIRK_NO_INTERRUPT_PIPE);
+    return u.report_type == 3 && acceptPollReport(u.report_type, u.report_id);
+}
+
+// The ActivePower usages mapped to ups.realpower, in a report the driver reads
+bool GenericDriver::readsActivePower(IHidTransport* host) const {
+    for (const auto& u : host->getUsages()) {
+        if (strcmp(u.path, "UPS.Output.ActivePower") != 0 &&
+            strcmp(u.path, "UPS.PowerConverter.Output.ActivePower") != 0) continue;
+        if (isReportRead(host, u)) return true;
+    }
+    return false;
+}
+
+void GenericDriver::collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const {
     if (!data.hasKey("ups.mfr") && host->_iManufacturer > 0) out.push_back(host->_iManufacturer);
     if (!data.hasKey("ups.model") && host->_iProduct > 0) out.push_back(host->_iProduct);
     if (!data.hasKey("ups.serial") && host->_iSerialNumber > 0) out.push_back(host->_iSerialNumber);
-    if (!data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) out.push_back(_batteryDateStringIndex);
+    // requestTableStrings() is about the driver's own rows: the battery date of the generic
+    // tail is asked for anyway, as before US-079
+    collectTableStringRequests(out, requestTableStrings(host));
+}
+
+// Table rows with stringid_conversion still waiting for their text (US-073)
+void GenericDriver::collectTableStringRequests(std::vector<uint8_t>& out, bool own_rows) const {
+    for (size_t i = own_rows ? 0 : _own_rows; i < _nut_rows.size(); i++) {
+        const NutTable::Bound& b = _nut_rows[i];
+        if (b.info->conv == NutTable::Conv::StringId && b.string_index > 0 && !b.has &&
+            b.role != NutTable::Bound::Role::DEAD) {
+            out.push_back(b.string_index);
+        }
+    }
 }
 
 // Queues the missing strings not requested yet in this cycle
-void GenericDriver::appendNewStrings(IUSBHostUPS* host, const UPSData& data) {
+void GenericDriver::appendNewStrings(IHidTransport* host, const UPSData& data) {
     std::vector<uint8_t> strings;
     collectStringRequests(host, data, strings);
     for (uint8_t idx : strings) {
@@ -125,17 +504,27 @@ void GenericDriver::appendNewStrings(IUSBHostUPS* host, const UPSData& data) {
     }
 }
 
-void GenericDriver::startCycle(IUSBHostUPS* host, const UPSData& data, bool full, uint32_t now) {
+void GenericDriver::startCycle(IHidTransport* host, const UPSData& data, bool full, uint32_t now) {
     _queue.clear();
     _queue_pos = 0;
     _cycle_full = full;
     _strings_rechecked = false;
     _cycle_strings.clear();
     if (full) appendNewStrings(host, data);
-    // Devices that reject GET_REPORT only send INPUT reports on the interrupt endpoint
-    if (!(host->getQuirks() & QUIRK_NO_GET_REPORT)) {
-        const auto& reports = full ? _full : _quick;
-        _queue.insert(_queue.end(), reports.begin(), reports.end());
+    if (full) {
+        // After a SET VAR or an INSTCMD the full poll reads the semi-static reports too (US-072)
+        _cycle_rereads = _data_changed.exchange(false);
+        // Rows decided since the last classification may make more reports semi-static
+        if (_semi_classified && _semi_undecided) classifySemiStatic(host);
+    }
+    // Without the interrupt pipe (QUIRK_NO_INTERRUPT_PIPE, "pollonly") every full poll reads the
+    // semi-static reports too: usbhid-ups.c:2352, 2360 skip the STATIC / SEMI_STATIC rows only
+    // with use_interrupt_pipe, and use their reads to detect stale data otherwise
+    bool skip_semi_static = full && !_cycle_rereads && !(host->getQuirks() & QUIRK_NO_INTERRUPT_PIPE);
+    const auto& reports = full ? _full : _quick;
+    for (const auto& r : reports) {
+        if (skip_semi_static && isSemiStaticAndKnown(r)) continue;
+        _queue.push_back(r);
     }
 
     uint32_t stamp = now != 0 ? now : 1;
@@ -151,16 +540,60 @@ void GenericDriver::publishDriverInfo(UPSData& data) const {
     data.set("driver.version.data", getDriverName());
 }
 
-void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
+void GenericDriver::pruneFullPoll(IHidTransport* host) {
+    _lists_pruned = true;
+    buildPollLists(host, _quick, _full);
+    computeInputCoverage(host);
+    // Logged once: the FEATURE reports of the descriptor that nothing reads and the full poll
+    // does not request (the reports acceptPollReport() refuses are not counted)
+    uint32_t read[8];
+    featureReportsRead(host, read);
+    uint32_t seen[8] = {};
+    String left;
+    int n = 0;
+    for (const auto& u : host->getUsages()) {
+        if (u.report_type != 3) continue;
+        uint32_t bit = 1u << (u.report_id % 32);
+        if ((seen[u.report_id / 32] & bit) || (read[u.report_id / 32] & bit)) continue;
+        seen[u.report_id / 32] |= bit;
+        if (!acceptPollReport(u.report_type, u.report_id)) continue;
+        bool polled = false;
+        for (const auto& f : _full) {
+            if (f.report_type == 3 && f.id == u.report_id) { polled = true; break; }
+        }
+        if (polled) continue;
+        left += " " + String((int)u.report_id);
+        n++;
+    }
+    if (n == 0) return;
+    host->logDebug("[" + String(getDriverName()) + "] Full poll: " + String(n) +
+                   " FEATURE reports left out (no NUT row reads them):" + left);
+}
+
+void GenericDriver::loop(IHidTransport* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
     host->lock();
     publishDriverInfo(data);
+    // A device that measures ups.realpower gets no estimate, not even before its first read
+    if (!_active_power_checked) {
+        _active_power_checked = true;
+        if (readsActivePower(host)) data.markRealPowerMeasured();
+    }
     onLoop(host, data);
     host->unlock();
 
     if (!_lists_built) {
+        // The rows depend only on the usages: bound before the lists, which keep only the
+        // FEATURE reports they read (US-120). decodeReport() would bind them at the first report.
+        bindNutTable(host);
+        host->lock(); // it may remove an estimate from the data the other tasks read
+        markOwnedRealPower(data);
+        host->unlock();
         buildPollLists(host, _quick, _full);
+        computeInputCoverage(host);
+        findInputTwins(host);
+        findStaticReports(host);
         _lists_built = true;
     }
 
@@ -170,9 +603,19 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
         _strings_rechecked = true;
         appendNewStrings(host, data);
     }
+    if (_queue_pos >= _queue.size() && _cycle_full && _strings_rechecked) _first_full_done = true;
+    // End of the INIT walk (finishInit()): the full update no longer reads the command rows and
+    // the rows the INIT rule dropped, so their reports leave the full poll (US-120). The running
+    // cycle keeps its own copy (_queue).
+    if (_lists_built && _nut_bound && _nut_init_done && !_lists_pruned) pruneFullPoll(host);
+    // Once the INIT rule has dropped the rows never read (finishInit() at the first report
+    // after the first full poll), the semi-static reports are known
+    if (_first_full_done && _nut_bound && _nut_init_done && !_semi_classified) classifySemiStatic(host);
 
     if (_queue_pos >= _queue.size()) {
-        bool full_due= _last_full == 0 || (now - _last_full) >= fullPollMs();
+        // A change (noteDataChanged()) makes the next cycle a full poll right away, as
+        // upsdrv_updateinfo() of usbhid-ups.c:1534-1543
+        bool full_due = _last_full == 0 || (now - _last_full) >= fullPollMs() || _data_changed;
         bool quick_due = quickPollMs() > 0 && (now - _last_quick) >= quickPollMs();
         if (!full_due && !quick_due) return;
         startCycle(host, data, full_due, now);
@@ -182,6 +625,13 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (host->isPollingPaused()) return; // the cycle resumes where it stopped
     if (!_step_now && (now - _last_step) < stepSpacingMs()) return;
 
+    // Skipped reports cost no request, so they take no step either
+    while (_queue_pos < _queue.size() &&
+           (isFreshFromInput(host, _queue[_queue_pos], now) || isStaticAndKnown(_queue[_queue_pos]))) {
+        _queue_pos++;
+    }
+    if (_queue_pos >= _queue.size()) return;
+
     const PollItem item = _queue[_queue_pos++];
     _last_step = now;
     _step_now = false;
@@ -190,184 +640,75 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
         host->requestStringDescriptor(item.id);
     } else {
         uint16_t len = item.length ? item.length : host->getHIDParser()->getExpectedLength(item.id, item.report_type);
-        host->requestReport(item.id, item.report_type, len);
+        host->requestReport(item.id, item.report_type, requestLength(item.report_type, item.id, len));
     }
 }
 
-void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
-    if (length == 0 || data == NULL || !host) return;
+// beeper_info of usbhid-ups (1 disabled, 2 enabled, 3 muted); a 1-bit field is on/off
+void GenericDriver::decodeBeeperStatus(UPSData& data, double v, const HIDUsageDef& def) {
+    const char* status = nullptr;
+    if (def.bit_size == 1) status = (v != 0) ? "enabled" : "disabled";
+    else if (v == 1) status = "disabled";
+    else if (v == 2) status = "enabled";
+    else if (v == 3) status = "muted";
+    if (status && !data.valueEquals("ups.beeper.status", status)) data.set("ups.beeper.status", status);
+}
 
-    typedef UsageMapIndex<GenericDriver>::Mapping Mapping;
-    static const Mapping mappings[] = {
-        { "UPS.PowerSummary.PresentStatus.ACPresent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.ac_present", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.ACPresent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.ac_present", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.Discharging", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.discharging", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.Discharging", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.discharging", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.Charging", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.charging", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.Charging", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.charging", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.battery_low", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.BelowRemainingCapacityLimit", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.battery_low", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.NeedReplacement", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.replace_battery", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.NeedReplacement", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.replace_battery", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.Overload", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.overload", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.Overload", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.overload", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.ShutdownImminent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.shutdown_imminent", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.ShutdownImminent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.shutdown_imminent", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.CommunicationLost", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.comm_lost", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.CommunicationLost", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.comm_lost", v != 0 ? "1" : "0"); } },
-        // Standard PresentStatus flags rendered by computeUPSStatusString().
-        // BatteryPresent is inverted, as upstream nobattery_info.
-        { "UPS.PowerSummary.PresentStatus.BatteryPresent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.no_battery", v == 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.remaining_time_limit_expired", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.FullyCharged", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.fully_charged", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.FullyDischarged", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.depleted", v != 0 ? "1" : "0"); } },
-        
-        { "UPS.PowerConverter.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
-        { "UPS.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
-        { "UPS.Flow.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
-        
-        { "UPS.PowerConverter.Input.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency", String(v, 1)); } },
-        { "UPS.Input.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency", String(v, 1)); } },
-        { "UPS.Flow.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency", String(v, 1)); } },
-        
-        { "UPS.PowerConverter.Output.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage", String(v, 1)); } },
-        { "UPS.Output.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage", String(v, 1)); } },
-        
-        { "UPS.PowerConverter.Output.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.frequency", String(v, 1)); } },
-        { "UPS.Output.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.frequency", String(v, 1)); } },
-        
-        { "UPS.PowerConverter.Output.ActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower", String((int)v)); } },
-        { "UPS.Output.ActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower", String((int)v)); } },
-        
-        { "UPS.PowerConverter.Output.ApparentPower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.power", String((int)v)); } },
-        { "UPS.Output.ApparentPower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.power", String((int)v)); } },
-        
-        { "UPS.PowerSummary.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage", String(v, 2)); } },
-        { "UPS.BatterySystem.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage", String(v, 2)); } },
-        { "UPS.Battery.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage", String(v, 2)); } },
-        
-        { "UPS.PowerSummary.RemainingCapacity", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.charge", String((int)(v > 100 ? 100 : v))); } },
-        { "UPS.PowerSummary.RemainingCapacityLimit", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.charge.low", String((int)v)); } },
-        { "UPS.PowerSummary.RunTimeToEmpty", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.runtime", String((int)v)); } },
-        { "UPS.Battery.RunTimeToEmpty", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.runtime", String((int)v)); } },
-        
-        { "UPS.PowerSummary.PercentLoad", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("ups.load", String((int)v));
-            d.updateRealPower();
-        }},
-        { "UPS.PowerSummary.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            if (v <= 0) return;
-            long date = (long)v;
-            long year = 1980 + (date >> 9);
-            long month = (date >> 5) & 0x0F;
-            long day = date & 0x1F;
-            char buf[20];
-            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
-            d.set("ups.mfr.date", String(buf));
-        }},
-        { "UPS.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            if (v <= 0) return;
-            long date = (long)v;
-            long year = 1980 + (date >> 9);
-            long month = (date >> 5) & 0x0F;
-            long day = date & 0x1F;
-            char buf[20];
-            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
-            d.set("ups.mfr.date", String(buf));
-        }},
-        { "UPS.Battery.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            if (v <= 0) return;
-            long date = (long)v;
-            long year = 1980 + (date >> 9);
-            long month = (date >> 5) & 0x0F;
-            long day = date & 0x1F;
-            char buf[20];
-            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
-            d.set("battery.mfr.date", String(buf));
-        }},
-        { "UPS.BatterySystem.Battery.Date", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
-            if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
-        }},
-        { "UPS.Battery.Date", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
-            if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
-        }},
-        { "UPS.PowerSummary.Temperature", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("ups.temperature", String((v > 200.0) ? (v - 273.15) : v, 1));
-        }},
-        { "UPS.Battery.Temperature", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("battery.temperature", String((v > 200.0) ? (v - 273.15) : v, 1));
-        }},
-        
-        { "UPS.PowerConverter.Output.PercentLoad", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
-            d.set("ups.load", String((int)v)); 
-            d.updateRealPower(); 
-        }},
-        { "UPS.Output.PercentLoad", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
-            d.set("ups.load", String((int)v)); 
-            d.updateRealPower(); 
-        }},
-        
-        { "UPS.BatterySystem.Battery.DesignCapacity", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.capacity", String((int)(v / 3600.0))); } },
-        { "UPS.BatterySystem.Battery.FullChargeCapacity", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.capacity.full", String((int)(v / 3600.0))); } },
-        
-        { "UPS.Flow.ConfigActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower.nominal", String((int)v)); d.updateRealPower(); } },
-        { "UPS.PowerConverter.ConfigActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower.nominal", String((int)v)); d.updateRealPower(); } },
-        { "UPS.Output.ConfigActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower.nominal", String((int)v)); d.updateRealPower(); } },
-        
-        { "UPS.Flow.ConfigApparentPower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.power.nominal", String((int)v)); d.updateRealPower(); } },
-        
-        // Tensione nominale della batteria, non della rete: così in tutti i sottodriver NUT
-        // (apc-hid, cps-hid, mge-hid, ...). Issue 48: su un APC scriveva 12 in input.voltage.nominal.
-        // Arrotondata come il "%.0f" di mge-hid/cps-hid/powercom-hid (lrint: pari sui .5, come printf),
-        // non troncata (issue 67); i driver il cui sottodriver NUT usa "%.1f" la riscrivono con un decimale.
-        { "UPS.PowerSummary.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String(lrint(v))); } },
-        { "UPS.Battery.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String(lrint(v))); } },
-        { "UPS.Flow.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage.nominal", String((int)v)); } },
-        { "UPS.Input.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage.nominal", String((int)v)); } },
-        
-        { "UPS.PowerConverter.Output.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage.nominal", String((int)v)); } },
-        { "UPS.Output.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage.nominal", String((int)v)); } },
-        
-        { "UPS.PowerConverter.Output.HighVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.high", String((int)v)); } },
-        { "UPS.PowerConverter.Output.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },
-        
-        { "UPS.PowerSummary.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
-            if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
-            else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
-        } },
-        { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
-            if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
-            else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
-        } },
-        { "UPS.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
-            if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
-            else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
-        } },
-        
-        { "UPS.PowerSummary.DelayBeforeShutdown", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.delay.shutdown", String((int)v)); d.set("ups.timer.shutdown", String((int)v)); } },
-        
-        { "UPS.Output.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },
-        { "UPS.Input.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },
-        { "UPS.Output.HighVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.high", String((int)v)); } },
-        { "UPS.Input.HighVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.high", String((int)v)); } }
-    };
+// Every value comes from the rows (postDecode()); here only what is not a row: the decoded
+// report bitmap of the poll and ups.beeper.status of the active beeper (US-079)
+void GenericDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+    if (length == 0 || data == NULL || !host) return;
+    if (report_type == 1 || report_type == 3) {
+        _decoded_report[typeSlot(report_type)][report_id / 32] |= 1u << (report_id % 32);
+    }
 
     if (_active_beeper == "") {
         _active_beeper = host->getActiveBeeperPath();
         if (_active_beeper == "") _active_beeper = "none";
     }
+    bindNutTable(host);
+    if (_beeper_row) return;
 
-    _generic_map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
+    const auto& usages = host->getUsages();
+    if (!_beeper_indexed) {
+        _beeper_usages.clear();
+        for (size_t i = 0; i < usages.size(); i++) {
+            if (strcmp(usages[i].path, _active_beeper.c_str()) == 0) _beeper_usages.push_back(i);
+        }
+        _beeper_indexed = true;
+    }
+    for (size_t i : _beeper_usages) {
+        if (i >= usages.size()) continue;
+        const HIDUsageDef& u = usages[i];
+        if (u.report_id != report_id || u.report_type != report_type) continue;
+        decodeBeeperStatus(ups_data, HIDParser::extractUsage(&u, report_id, data, length), u);
+    }
 }
 
-void GenericDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void GenericDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length < 2 || data[1] != 0x03) return;
+    String str = decodeStringDescriptor(host, data, length);
+    if (index == host->_iManufacturer) { ups_data.set("ups.mfr", str); }
+    else if (index == host->_iProduct) { ups_data.set("ups.model", str); }
+    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) { ups_data.set("ups.serial", str); }
+
+    // Table rows whose value is this string (stringid_conversion, US-073)
+    bool any = false;
+    for (size_t i = 0; i < _nut_rows.size(); i++) {
+        const NutTable::Bound& b = _nut_rows[i];
+        if (b.info->conv != NutTable::Conv::StringId || b.string_index != index) continue;
+        if (!any && str.length() > 19) {
+            // stringid_conversion_fun (usbhid-ups.c:598-603) reads the string into
+            // static char buf[20]: at most 19 characters
+            str = str.substring(0, 19);
+        }
+        NutTable::onString(_nut_rows, i, str);
+        any = true;
+    }
+    if (any) publishNutRows(ups_data);
+}
+
+String GenericDriver::decodeStringDescriptor(IHidTransport* host, const uint8_t *data, size_t length) {
     uint8_t str_len = data[0];
     String str = "";
     
@@ -392,9 +733,328 @@ void GenericDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, cons
             str += c;
         }
     }
-    if (index == host->_iManufacturer) { ups_data.set("ups.mfr", str); }
-    else if (index == host->_iProduct) { ups_data.set("ups.model", str); }
-    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) { ups_data.set("ups.serial", str); }
-    else if (_batteryDateStringIndex > 0 && index == _batteryDateStringIndex) { ups_data.set("battery.mfr.date", str); }
+    // libhid.c HIDGetIndexString() ends with str_rtrim(buf, '\n'). The trailing '\r' goes
+    // too (deviation): the Phoenixtec iDeviceChemistry string is "PbAc\r\n" (issue #96), and
+    // a line break inside a value would split the NUT protocol line. Spaces stay: some
+    // serial numbers are only spaces.
+    while (str.length() > 0 && (str.endsWith("\n") || str.endsWith("\r"))) {
+        str = str.substring(0, str.length() - 1);
+    }
+    return str;
 }
 
+
+// Binds the driver's NUT table to the usages of the attached device (US-066), then the rows
+// of genericHid2Nut() the driver does not supersede (US-079): the INIT rule of resolve()
+// gives the driver's rows the precedence over a generic row with the same name. The usages
+// only change with a new device, which also calls setup(); the count guards a list
+// replaced in place.
+void GenericDriver::bindNutTable(IHidTransport* host) {
+    const auto& usages = host->getUsages();
+    if (_nut_bound && _nut_usage_count == usages.size()) return;
+    size_t n = 0;
+    const NutTable::HidInfo* table = hid2nut(n);
+    _nut_rows.clear();
+    NutTable::bindRows(_nut_rows, table, n, usages);
+    _own_rows = _nut_rows.size();
+    size_t n_generic = 0;
+    const NutTable::HidInfo* generic = NutTable::genericHid2Nut(n_generic);
+    if (table != generic) {
+        size_t n_skip = 0;
+        const char* const* skip = supersededGenericPaths(n_skip);
+        NutTable::bindRows(_nut_rows, generic, n_generic, usages, skip, n_skip);
+    }
+    NutTable::resolve(_nut_rows);
+    _beeper_row = false;
+    for (size_t i = 0; i < _own_rows; i++) {
+        if (strcmp(_nut_rows[i].info->info_type, "ups.beeper.status") == 0) _beeper_row = true;
+    }
+    _beeper_indexed = false;
+    _nut_bound = true;
+    _semi_classified = false; // other rows: classified again (US-072)
+    // A ups.realpower row owns the value only when its report is read (same rule as
+    // readsActivePower()): rows bound in a report the driver never requests (CyberPower vendor
+    // layouts, issue #40) leave the estimate (US-075). eaton_compute_realpower_info ignores its
+    // HID value and is computed again at each ups.load, wherever its report is.
+    _nut_has_realpower = false;
+    for (const auto& b : _nut_rows) {
+        if (strcmp(b.info->info_type, "ups.realpower") != 0) continue;
+        if (b.info->conv == NutTable::Conv::EatonComputeRealpower) _nut_has_realpower = true;
+        for (int idx : { b.idx, b.twin_idx }) {
+            if (idx >= 0 && (size_t)idx < usages.size() && isReportRead(host, usages[idx])) _nut_has_realpower = true;
+        }
+    }
+    _nut_init_done = false;
+    _lists_pruned = false; // other rows: the lists are built again after their INIT (US-120)
+    _nut_usage_count = usages.size();
+    // bind() gives the HU_FLAG_ABSENT rows their dfl: the values set since win
+    for (const auto& o : _absent_overrides) applyAbsentOverride(o.first, o.second);
+}
+
+void GenericDriver::applyAbsentOverride(const String& name, const String& value) {
+    for (auto& b : _nut_rows) {
+        if (!(b.info->hidflags & NutTable::HU_FLAG_ABSENT)) continue;
+        if (strcmp(b.info->info_type, name.c_str()) != 0) continue;
+        b.value = value;
+        b.has = true;
+    }
+}
+
+void GenericDriver::setDriverSideValue(const char* name, const char* value) {
+    if (!name || !value) return;
+    bool found = false;
+    for (auto& o : _absent_overrides) {
+        if (o.first == name) {
+            o.second = value;
+            found = true;
+            break;
+        }
+    }
+    if (!found) _absent_overrides.push_back(std::make_pair(String(name), String(value)));
+    applyAbsentOverride(String(name), String(value));
+}
+
+// The active row of the variable takes the host's value until the next read of its report
+void GenericDriver::noteHostValue(const char* name, const char* value) {
+    if (!name || !value) return;
+    for (auto& b : _nut_rows) {
+        if (b.role != NutTable::Bound::Role::ACTIVE || NutTable::isInternalRow(*b.info)) continue;
+        if (strcmp(b.info->info_type, name) != 0) continue;
+        b.value = value;
+        b.has = true;
+    }
+}
+
+bool GenericDriver::resetDriverSideValue(const char* name, String& value) {
+    if (!name) return false;
+    // Forgotten first: the next bind gives the rows their dfl, as bind() does
+    for (auto it = _absent_overrides.begin(); it != _absent_overrides.end(); ++it) {
+        if (it->first == name) {
+            _absent_overrides.erase(it);
+            break;
+        }
+    }
+    bool found = false;
+    for (auto& b : _nut_rows) {
+        if (!(b.info->hidflags & NutTable::HU_FLAG_ABSENT)) continue;
+        if (strcmp(b.info->info_type, name) != 0) continue;
+        b.value = b.info->dfl;
+        b.has = true;
+        if (!found) value = b.info->dfl;
+        found = true;
+    }
+    return found;
+}
+
+void GenericDriver::completeInitialPoll() {
+    _first_full_done = true;
+    if (!_nut_init_done) {
+        NutTable::finishInit(_nut_rows);
+        _nut_init_done = true;
+    }
+}
+
+void GenericDriver::postDecode(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+    if (!host) return;
+    bindNutTable(host);
+    markOwnedRealPower(ups_data);
+    if (_nut_rows.empty()) {
+        publishAlarms(ups_data);
+        return;
+    }
+
+    const auto& usages = host->getUsages();
+    if (length > 0 && data != NULL) {
+        for (size_t i = 0; i < _nut_rows.size(); i++) {
+            const NutTable::Bound& b = _nut_rows[i];
+            if (NutTable::isCommandRow(*b.info)) continue; // written by commands, never read
+            // The row's usage, or its twin in the other report type (libhid keeps one
+            // buffer per report ID, so either refreshes the value)
+            int pick = -1;
+            for (int idx : { b.idx, b.twin_idx }) {
+                if (idx < 0 || (size_t)idx >= usages.size()) continue;
+                const HIDUsageDef& u = usages[idx];
+                if (u.report_id == report_id && u.report_type == report_type) { pick = idx; break; }
+            }
+            if (pick < 0) continue;
+            double v = HIDParser::extractUsage(&usages[pick], report_id, data, length);
+            NutTable::onValue(_nut_rows, i, v, _nut_ctx, &ups_data);
+            // Published right away, as dstate_setinfo() in the upstream walk: a later row of
+            // the same report may read it (eaton_compute_realpower_info, US-074)
+            publishRow(_nut_rows[i], ups_data);
+        }
+    }
+
+    // The first full poll is the end of upstream's INIT walk
+    if (!_nut_init_done && _first_full_done) {
+        NutTable::finishInit(_nut_rows);
+        _nut_init_done = true;
+    }
+
+    // Every status row in table order, as one upstream walk: the reports of the BOOL rows
+    // arrive one at a time
+    NutTable::walkInternalRows(_nut_rows, _nut_ctx, &ups_data);
+    publishNutRows(ups_data);
+    publishAlarms(ups_data);
+}
+
+// After the internal ups.status.* keys, as ups_alarm_set() and ups_status_set() after the
+// walk. Recomputed at every report: upstream rebuilds ups.alarm at the full update only
+// (US-107 planning)
+void GenericDriver::publishAlarms(UPSData& ups_data) {
+    String vendor;
+    NutTable::vendorAlarms(_nut_rows, vendor);
+    ups_data.applyAlarmVariables(vendor);
+}
+
+// One row: its value when it differs from ups_data, or the removal of a CLEAR. Each key has
+// one source, its row (US-079); the last value kept in the row (Bound::value) is what makes
+// the write happen only on a change, since read-only rows would otherwise allocate Strings at
+// every report (ADR 0007, US-073). The estimate follows the load and the nominal powers unless
+// a table row owns ups.realpower (eaton_compute_realpower_info, US-074; ActivePower, US-075).
+void GenericDriver::publishRow(NutTable::Bound& b, UPSData& ups_data) {
+    if (NutTable::isInternalRow(*b.info) || NutTable::isCommandRow(*b.info)) return;
+    const char* name = b.info->info_type;
+    if (b.cleared) {
+        // dstate_delinfo() of an upstream function (battery.charger.status)
+        b.cleared = false;
+        if (ups_data.find(name)) ups_data.remove(name);
+        return;
+    }
+    if (b.role != NutTable::Bound::Role::ACTIVE || !b.has) return;
+    if (ups_data.valueEquals(name, b.value)) return;
+    ups_data.set(name, b.value);
+    if (!_nut_has_realpower) {
+        // The estimate follows the load and the nominal powers it is computed from (US-075)
+        if (strcmp(name, "ups.load") == 0 || strcmp(name, "ups.power.nominal") == 0 ||
+            strcmp(name, "ups.realpower.nominal") == 0)
+            ups_data.updateRealPower();
+        return;
+    }
+    if (strcmp(name, "ups.load") != 0) return;
+    // eaton_compute_realpower_info ignores its HID value and reads ups.load: computed again at
+    // each new load instead of waiting for the next full poll of Flow.[4] (deviation: the
+    // upstream walk recomputes it with the full update only)
+    for (size_t i = 0; i < _nut_rows.size(); i++) {
+        if (_nut_rows[i].info->conv != NutTable::Conv::EatonComputeRealpower) continue;
+        if (_nut_rows[i].role == NutTable::Bound::Role::DEAD) continue; // also a row deferred before the load
+        NutTable::onValue(_nut_rows, i, 0, _nut_ctx, &ups_data);
+        publishRow(_nut_rows[i], ups_data);
+    }
+}
+
+void GenericDriver::publishNutRows(UPSData& ups_data) {
+    // Rows that changed role since (INIT rule, strings) or whose key was written by the host
+    // (SET VAR read back, a key removed)
+    for (auto& b : _nut_rows) publishRow(b, ups_data);
+    // Internal ups.status.* keys from the BOOL rows; nothing for drivers without them
+    NutTable::StatusBits status = _nut_ctx.status;
+    filterStatus(status);
+    NutTable::statusKeys(status, [&ups_data](const char* key, const char* value) {
+        const String* current = ups_data.find(key);
+        if (!value) {
+            if (current) ups_data.remove(key);
+        } else if (!current || !(*current == value)) {
+            ups_data.set(key, value);
+        }
+    });
+}
+
+void GenericDriver::writableVariables(const UPSData& data, std::vector<NutTable::RWVariable>& out) const {
+    out.clear();
+    for (const auto& b : _nut_rows) {
+        if (b.role != NutTable::Bound::Role::ACTIVE) continue;
+        if (!(b.info->info_flags & NutTable::ST_FLAG_RW)) continue;
+        if (!data.hasKey(b.info->info_type)) continue;
+        // driver_side: HU_FLAG_ABSENT rows (outlet.*.desc) and any ups.delay.* row
+        bool driver_side = (b.info->hidflags & NutTable::HU_FLAG_ABSENT) ||
+                           strncmp(b.info->info_type, "ups.delay.", 10) == 0;
+        out.push_back({ b.info->info_type, b.info->info_len, NutTable::enumValues(*b.info, _nut_ctx), driver_side });
+    }
+    // ups.delay.*: driver-side variables set by NutTable::applyDefaultDelays
+    static const char* const delays[] = { "ups.delay.shutdown", "ups.delay.start" };
+    for (const char* name : delays) {
+        if (!data.hasKey(name)) continue;
+        bool listed = false;
+        for (const auto& v : out) {
+            if (strcmp(v.name, name) == 0) { listed = true; break; }
+        }
+        if (!listed) out.push_back({ name, delayAux(), {}, true });
+    }
+    // upsd keeps variables in a tree ordered with strcasecmp (common/state.c)
+    std::sort(out.begin(), out.end(), [](const NutTable::RWVariable& a, const NutTable::RWVariable& b) {
+        return NutTable::compareIgnoreCase(a.name, b.name) < 0;
+    });
+}
+
+// setvar() of usbhid-ups.c:1167-1245, without the write: the host runs the plan (US-067)
+NutTable::SetStatus GenericDriver::planSet(const UPSData& data, const std::vector<HIDUsageDef>& usages,
+                                           const char* name, const char* value, NutTable::SetPlan& plan) const {
+    using NutTable::SetStatus;
+    if (!name || !*name) return SetStatus::UNKNOWN;
+
+    // find_nut_info(): the row that owns the name (hiddata != NULL), strcasecmp
+    const NutTable::Bound* row = nullptr;
+    for (const auto& b : _nut_rows) {
+        if (b.role == NutTable::Bound::Role::ACTIVE && NutTable::equalsIgnoreCase(b.info->info_type, name)) {
+            row = &b;
+            break;
+        }
+    }
+
+    if (!row) {
+        // ups.delay.*: driver-side variables outside the table (applyDefaultDelays). Only an
+        // integer >= 0, as the commands read it (deviation: upstream keeps any string)
+        static const char* const delays[] = { "ups.delay.shutdown", "ups.delay.start" };
+        for (const char* d : delays) {
+            if (!NutTable::equalsIgnoreCase(d, name) || !data.hasKey(d)) continue;
+            int32_t v;
+            if (!NutTable::parseDelayParam(value, v) || v < 0) return SetStatus::CONVERSION_FAILED;
+            plan.kind = NutTable::SetPlan::Kind::DRIVER_SIDE;
+            plan.name = d;
+            plan.def = HIDUsageDef();
+            plan.raw = 0;
+            plan.value = String(v); // "007" and "-0" kept as the number they are
+            return SetStatus::OK;
+        }
+        return SetStatus::UNKNOWN;
+    }
+    const NutTable::HidInfo& info = *row->info;
+    if (!(info.info_flags & NutTable::ST_FLAG_RW)) return SetStatus::UNKNOWN;
+
+    // Server side variable: dstate_setinfo() with the value as it is
+    if (info.hidflags & NutTable::HU_FLAG_ABSENT) {
+        if (!value) return SetStatus::CONVERSION_FAILED;
+        plan.kind = NutTable::SetPlan::Kind::DRIVER_SIDE;
+        plan.name = info.info_type;
+        plan.def = HIDUsageDef();
+        plan.raw = 0;
+        plan.value = value;
+        return SetStatus::OK;
+    }
+
+    // hu_find_valinfo() / atol(), stricter (NutTable::encode)
+    double physical;
+    if (NutTable::encode(info, value, _nut_ctx, data, physical) != NutTable::EncodeResult::OK) {
+        return SetStatus::CONVERSION_FAILED;
+    }
+
+    // HIDSetDataValue() writes a FEATURE report: the row's usage or its twin. A row bound
+    // to an INPUT usage only cannot be written (deviation: upstream tries and fails)
+    int pick = -1;
+    for (int idx : { row->idx, row->twin_idx }) {
+        if (idx < 0 || (size_t)idx >= usages.size()) continue;
+        if (usages[idx].report_type == 3) { pick = idx; break; }
+    }
+    if (pick < 0) return SetStatus::FAILED;
+
+    int32_t raw;
+    if (!HIDParser::toLogical(usages[pick], physical, raw)) return SetStatus::CONVERSION_FAILED;
+
+    plan.kind = NutTable::SetPlan::Kind::HID;
+    plan.name = info.info_type;
+    plan.def = usages[pick];
+    plan.raw = raw;
+    plan.value = value;
+    return SetStatus::OK;
+}

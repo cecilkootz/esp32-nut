@@ -1,37 +1,38 @@
 #include "core/system_status.h"
 #include <WiFi.h>
 #include <esp_timer.h>
+#include "IUpsSource.h"
 #include "NUTServer.h"
-#include "USBHostUPS.h"
+#include "WebApiJson.h"
 #include "core/crash_diag.h"
 #include "core/device_id.h"
 #include "core/memory_stats.h"
+#include "core/update_service.h"
 #include "core/version.h"
 #include "network/mqtt_bridge.h"
 #include "network/network_manager.h"
 
 void fillSystemStatus(JsonDocument& doc, const SystemStatusSources& src) {
     doc["version"] = FIRMWARE_VERSION;
-    doc["device_id"] = getDeviceId();
-    doc["hostname"] = WiFi.getHostname();
-    doc["mac"] = getMacAddress();
-    // millis() wraps after 49.7 days
-    doc["uptime_s"] = (uint32_t)(esp_timer_get_time() / 1000000);
-
-    // Wi-Fi status
-    wl_status_t wifi_status = WiFi.status();
-    bool wifi_connected = !src.ap_mode && wifi_status == WL_CONNECTED;
-    String wifi_status_str = "Disconnected";
-    if (src.ap_mode) {
-        wifi_status_str = "AP Mode Active";
-    } else if (wifi_connected) {
-        wifi_status_str = WiFi.SSID();
+    if (src.network) {
+        // The MAC of the active link: boards without Wi-Fi have no station MAC
+        uint8_t mac[6] = {0};
+        src.network->macAddress(mac);
+        char dev_id[32];
+        snprintf(dev_id, sizeof(dev_id), "%s-%02X%02X%02X", ESP.getChipModel(), mac[3], mac[4], mac[5]);
+        doc["device_id"] = String(dev_id);
+        doc["hostname"] = src.network->hostname();
     } else {
-        wifi_status_str = "Connecting";
+        doc["device_id"] = getDeviceId();
     }
+    doc["mac"] = getMacAddress();
+    // esp_timer is 64-bit: millis() wraps after 49.7 days
+    doc["uptime_s"] = (uint64_t)(esp_timer_get_time() / 1000000LL);
+
+    // "AP Mode Active", the SSID or "Connecting"; connected and the rest are for other clients
     JsonObject wifi = doc["wifi"].to<JsonObject>();
-    // The web UI shows status; connected and ssid are for other clients
-    wifi["status"] = wifi_status_str;
+    wifi["status"] = src.network ? src.network->statusText() : String("Disconnected");
+    bool wifi_connected = (WiFi.getMode() & WIFI_MODE_STA) && WiFi.status() == WL_CONNECTED;
     wifi["connected"] = wifi_connected;
     if (wifi_connected) {
         wifi["ssid"] = WiFi.SSID();
@@ -40,7 +41,7 @@ void fillSystemStatus(JsonDocument& doc, const SystemStatusSources& src) {
         wifi["bssid"] = WiFi.BSSIDstr();
         wifi["channel"] = WiFi.channel();
     }
-    if (src.network && !src.ap_mode) {
+    if (src.network) {
         uint32_t disconnects = src.network->disconnectCount();
         wifi["disconnects"] = disconnects;
         if (disconnects > 0) {
@@ -48,28 +49,20 @@ void fillSystemStatus(JsonDocument& doc, const SystemStatusSources& src) {
             wifi["last_disconnect_code"] = src.network->lastDisconnectReason();
             wifi["last_disconnect_ms"] = src.network->lastDisconnectMillis();
         }
+        NetLinkInfo link_info;
+        src.network->linkInfo(link_info);
+        WebApiJson::networkStatusJson(doc["network"].to<JsonObject>(), link_info);
     }
 
-    // UPS status
+    // Model, "Disconnected" or "Not supported yet"; connected and stale always present
+    // for the Home Assistant binary sensors
     JsonObject ups = doc["ups"].to<JsonObject>();
-    bool ups_connected = src.ups && src.ups->isConnected();
-    ups["connected"] = ups_connected;
-    if (ups_connected) {
-        auto data = src.ups->getUPSData();
-        if (data->hasKey("ups.model")) {
-            String model = data->get("ups.model");
-            ups["model"] = model;
-            ups["status"] = model;
-        } else {
-            ups["status"] = "Unknown Model";
-        }
-    } else {
-        ups["status"] = "Disconnected";
-    }
-    // A missing UPS is already "Disconnected": stale is for an attached one
-    ups["stale"] = ups_connected && src.ups->isDataStale();
+    WebApiJson::upsStatusJson(ups, src.ups);
+    ups["connected"] = src.ups && src.ups->isConnected();
+    if (!ups["stale"].is<bool>()) ups["stale"] = false;
 
     CrashDiag::fillJson(doc["diagnostics"].to<JsonObject>());
+    if (src.update) WebApiJson::updateSummaryJson(doc["update"].to<JsonObject>(), src.update->status());
 
     if (src.nut) {
         const NUTServer::Stats& stats = src.nut->stats();

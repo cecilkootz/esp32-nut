@@ -1,6 +1,7 @@
 #include <unity.h>
 #include "NUTServer.h"
 #include "IUSBHostUPS.h"
+#include "BeeperLogic.h"
 #include "CyberPowerDriver.h"
 #include <sstream>
 #include <algorithm>
@@ -53,10 +54,27 @@ public:
         return statusString;
     }
 
+    bool setBeeperOk = true;
     bool setBeeper(bool enable) override {
+        if (!setBeeperOk) return false;
         beeperState = enable;
         data.set("ups.beeper.status", enable ? "enabled" : "disabled");
         return true;
+    }
+    // As GenericDriver (US-079): the commands of the genericHid2Nut() rows, the beeper written
+    // on the field of the beeper.enable / beeper.disable row
+    const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::genericHid2Nut(n); }
+    bool setBeeperField(const HIDUsageDef&, bool enable) override { return setBeeper(enable); }
+
+    // Writes requested by executeCommand(): {path, value}, failed ones included.
+    // failPaths: fields whose write fails (US-058)
+    bool writeOk = true;
+    std::vector<std::string> failPaths;
+    std::vector<std::pair<std::string, uint32_t>> writes;
+    bool writeUsage(const HIDUsageDef& def, uint32_t value) override {
+        writes.push_back({def.path, value});
+        if (std::find(failPaths.begin(), failPaths.end(), def.path) != failPaths.end()) return false;
+        return writeOk;
     }
 
     bool isConnected() const override {
@@ -65,7 +83,27 @@ public:
 
     bool stale = false;
     bool isDataStale() const override { return stale; }
+
+    // US-132: recognised but unsupported device (Q*), never read by the NUT server
+    String unsupported;
+    String unsupportedDevice() const override { return unsupported; }
+
+    // Writable variables reported to LIST RW / GET TYPE / LIST ENUM (US-066)
+    std::vector<NutTable::RWVariable> rw;
+    std::vector<NutTable::RWVariable> getWritableVariables() const override { return rw; }
     bool supportsBeeperToggle() const override { return beeperToggleSupported; }
+
+    // SET VAR requests that passed the checks of the server, {name, value}, and the
+    // outcome returned for them (US-067)
+    NutTable::SetStatus setResult = NutTable::SetStatus::OK;
+    std::vector<std::pair<std::string, std::string>> sets;
+    // Opt-in: an OK write lands in data, as the real host does after the read-back
+    bool storeOnSet = false;
+    NutTable::SetStatus setVariable(const char* name, const char* value) override {
+        sets.push_back({name, value});
+        if (storeOnSet && setResult == NutTable::SetStatus::OK) data.set(name, value);
+        return setResult;
+    }
 
     std::vector<HIDUsageDef> _mockUsages;
     HIDParser _hid_parser;
@@ -83,39 +121,28 @@ static NUTServer server;
 static MockUSBHost mockHost;
 static MemoryPrinter printer;
 
-// Each write() stands for one NetworkClient::write, which blocks for up to 10 s
-// once the peer stops reading.
-class SocketPrinter : public MemoryPrinter {
-public:
-    int writes = 0;
-    int writesUnderLock = 0;
-
-    size_t write(uint8_t c) override {
-        record();
-        return MemoryPrinter::write(c);
-    }
-
-    size_t write(const uint8_t *b, size_t size) override {
-        record();
-        return MemoryPrinter::write(b, size);
-    }
-
-private:
-    void record() {
-        writes++;
-        if (mockHost.lockDepth > 0) writesUnderLock++;
-    }
-};
-
-static std::vector<std::pair<std::string, std::string>> logged;
-
+// System Log lines of the server, clock and random source of TRACKING (US-067)
+static std::vector<std::string> logLines;
 static void captureLog(const char* level, const char* msg) {
-    logged.push_back({level, msg});
+    logLines.push_back(std::string(level) + " " + msg);
+}
+static uint32_t fakeNow = 0;
+static uint32_t fakeClock() { return fakeNow; }
+static uint32_t fakeSeed = 1;
+static uint32_t fakeRandom() {
+    fakeSeed = fakeSeed * 1664525u + 1013904223u;
+    return fakeSeed;
 }
 
 void setUp(void) {
+    logLines.clear();
+    fakeNow = 1000;
+    server.setLogCallback(captureLog);
+    server.setClock(fakeClock);
+    server.setRandom(fakeRandom);
+    server.clearTracking();
+    server.resetSessions();
     printer.clear();
-    logged.clear();
     mockHost.data = UPSData();
     mockHost.statusString = "OL";
     mockHost.beeperState = true;
@@ -123,14 +150,34 @@ void setUp(void) {
     mockHost.connected = true;
     mockHost.stale = false;
     mockHost.lockDepth = 0;
+    mockHost.unsupported = "";
+    mockHost._mockUsages.clear();
+    // The beeper field of getActiveBeeperPath(): the beeper commands come from the rows of
+    // genericHid2Nut(), which need the field in the descriptor (US-079)
+    HIDUsageDef beeper;
+    beeper.usage = 0x0084005a;
+    beeper.report_type = 0x03;
+    beeper.report_id = 0x20;
+    beeper.bit_size = 8;
+    beeper.logical_min = 1;
+    beeper.logical_max = 3;
+    beeper.found = true;
+    strncpy(beeper.path, "UPS.PowerSummary.AudibleAlarmControl", sizeof(beeper.path) - 1);
+    mockHost._mockUsages.push_back(beeper);
+    mockHost.setBeeperOk = true;
+    mockHost.writeOk = true;
+    mockHost.writes.clear();
+    mockHost.failPaths.clear();
+    mockHost.rw.clear();
+    mockHost.setResult = NutTable::SetStatus::OK;
+    mockHost.sets.clear();
+    mockHost.storeOnSet = false;
 
     NUTServerConfig config;
     config.username = "admin";
     config.password = "secret";
     config.ups_name = "testups";
 
-    // Sessions, counters and the log callback must not leak between tests.
-    server = NUTServer();
     server.begin(config, &mockHost, 3493);
 }
 
@@ -334,21 +381,90 @@ void test_disconnected_is_stale(void) {
     TEST_ASSERT_TRUE(printer.getOutput().find("UPS testups ") != std::string::npos);
 }
 
+// Issue #60: OMV and Android clients read device.model, which NUT drivers copy from
+// ups.model (main.c), with device.type "ups"
+void test_device_aliases(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data = UPSData();
+    mockHost.data.set("ups.mfr", "American Power Conversion");
+    mockHost.data.set("ups.model", "Back-UPS BX750MI");
+    mockHost.stale = false;
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups device.model");
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.model \"Back-UPS BX750MI\"\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups device.type");
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.type \"ups\"\n", printer.getOutput().c_str());
+    // No ups.serial: no device.serial either
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups device.serial");
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST VAR testups");
+    std::string out = printer.getOutput();
+    TEST_ASSERT_TRUE(out.find("VAR testups device.type \"ups\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups device.mfr \"American Power Conversion\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups device.model \"Back-UPS BX750MI\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("device.serial") == std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups ups.model \"Back-UPS BX750MI\"\n") != std::string::npos);
+}
+
+// US-081: get_var() of upsd finds the variable ignoring case (state_tree_find(),
+// strcasecmp) and repeats the name as the client sent it
+void test_get_var_echoes_client_var_name(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("battery.charge", "100");
+    mockHost.data.set("ups.model", "Back-UPS BX750MI");
+    mockHost.statusString = "OL";
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups Battery.Charge");
+    TEST_ASSERT_EQUAL_STRING("VAR testups Battery.Charge \"100\"\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups Device.Model");
+    TEST_ASSERT_EQUAL_STRING("VAR testups Device.Model \"Back-UPS BX750MI\"\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups UPS.Status");
+    TEST_ASSERT_EQUAL_STRING("VAR testups UPS.Status \"OL\"\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups Device.Type");
+    TEST_ASSERT_EQUAL_STRING("VAR testups Device.Type \"ups\"\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR TestUPS Battery.Charge");
+    TEST_ASSERT_EQUAL_STRING("VAR TestUPS Battery.Charge \"100\"\n", printer.getOutput().c_str());
+
+    // Lower case: unchanged
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups battery.charge");
+    TEST_ASSERT_EQUAL_STRING("VAR testups battery.charge \"100\"\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups No.Such.Var");
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", printer.getOutput().c_str());
+    // Alias without its source (no ups.serial)
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups Device.Serial");
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", printer.getOutput().c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 void test_list_client_terminates(void) {
-    // LIST CLIENT must be answered with a BEGIN/END pair. A bare "ERR" is what
+    // LIST CLIENT <ups> must be answered with a BEGIN/END pair. A bare "ERR" is what
     // breaks go.nut: it treats every "LIST " command as multi-line and only ends
     // its read loop on "END LIST ...", so a single error line blocks the client
-    // until i/o timeout instead of failing fast.
+    // until i/o timeout instead of failing fast. The same happens against upsd; go.nut
+    // always sends the UPS name, so the ERR without it below does not reach it.
     server.processCommand(printer, 0, "LIST CLIENT testups");
     TEST_ASSERT_EQUAL_STRING("BEGIN LIST CLIENT testups\nEND LIST CLIENT testups\n",
                              printer.getOutput().c_str());
 
-    // Unknown UPS names still fall through to the shared handler, not an error.
+    // Without the UPS name INVALID-ARGUMENT, as net_list() of upsd (US-082): the UPS name
+    // is never empty, so clients always send it
     printer.clear();
     server.processCommand(printer, 0, "LIST CLIENT");
-    TEST_ASSERT_EQUAL_STRING("BEGIN LIST CLIENT testups\nEND LIST CLIENT testups\n",
-                             printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", printer.getOutput().c_str());
 }
 
 void test_list_cmd_unaffected_by_client(void) {
@@ -366,6 +482,453 @@ void test_list_cmd_unaffected_by_client(void) {
     printer.clear();
     server.processCommand(printer, 0, "LIST CLIENT testups");
     TEST_ASSERT_TRUE(printer.getOutput().find("beeper") == std::string::npos);
+}
+
+static HIDUsageDef featureUsage(const char* path, uint32_t usage) {
+    HIDUsageDef d;
+    d.usage = usage;
+    d.report_type = 0x03;
+    d.found = true;
+    strncpy(d.path, path, sizeof(d.path) - 1);
+    return d;
+}
+
+// US-056: LIST CMD publishes the commands derived from the HID descriptor
+void test_list_cmd_from_descriptor(void) {
+    mockHost.data.set("ups.beeper.status", "enabled");
+    mockHost._mockUsages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057));
+    mockHost._mockUsages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeStartup", 0x00840056));
+
+    server.processCommand(printer, 0, "LIST CMD testups");
+    std::string out = printer.getOutput();
+    TEST_ASSERT_TRUE(out.find("BEGIN LIST CMD testups\n") == 0);
+    TEST_ASSERT_TRUE(out.find("CMD testups beeper.toggle\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("CMD testups shutdown.return\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("CMD testups load.off\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("test.battery") == std::string::npos);
+    TEST_ASSERT_TRUE(out.find("END LIST CMD testups\n") != std::string::npos);
+}
+
+void test_list_cmd_empty_when_disconnected(void) {
+    mockHost.data.set("ups.beeper.status", "enabled");
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+    mockHost.connected = false;
+
+    server.processCommand(printer, 0, "LIST CMD testups");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST CMD testups\nEND LIST CMD testups\n", printer.getOutput().c_str());
+}
+
+// US-132: a Q* UPS recognised but not supported yet is "no UPS" for NUT clients: the same
+// answers as test_disconnected_is_stale and test_list_cmd_empty_when_disconnected
+void test_unsupported_ups_answers_as_no_ups(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data = UPSData();
+    mockHost.statusString = "UNKNOWN";
+    mockHost.connected = false;
+    mockHost.stale = true;
+    mockHost.unsupported = "Q* UPS (USB transport: hunnox)";
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups ups.status");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST CMD testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    // Within the boot grace (not stale yet), as test_list_cmd_empty_when_disconnected
+    mockHost.stale = false;
+    printer.clear();
+    server.processCommand(printer, 0, "LIST CMD testups");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST CMD testups\nEND LIST CMD testups\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST UPS");
+    TEST_ASSERT_TRUE(printer.getOutput().find("UPS testups ") != std::string::npos);
+}
+
+// Beeper not controllable (e.g. EcoFlow): the other commands are still listed
+void test_list_cmd_without_controllable_beeper(void) {
+    mockHost.data.set("ups.beeper.status", "enabled");
+    mockHost.beeperToggleSupported = false;
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    server.processCommand(printer, 0, "LIST CMD testups");
+    std::string out = printer.getOutput();
+    TEST_ASSERT_TRUE(out.find("beeper") == std::string::npos);
+    TEST_ASSERT_TRUE(out.find("CMD testups test.battery.start.quick\n") != std::string::npos);
+}
+
+void test_cmddesc_known_and_unknown(void) {
+    server.processCommand(printer, 0, "GET CMDDESC testups test.battery.start.quick");
+    TEST_ASSERT_EQUAL_STRING("CMDDESC testups test.battery.start.quick \"Start a quick battery test\"\n",
+                             printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET CMDDESC testups foo.bar");
+    // upsd's fallback text (netget.c:130), US-066
+    TEST_ASSERT_EQUAL_STRING("CMDDESC testups foo.bar \"Description unavailable\"\n", printer.getOutput().c_str());
+}
+
+// US-057: test commands go through executeCommand() and write the Test usage
+void test_instcmd_battery_test_writes_value(void) {
+    server.setAuthenticated(0, true);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.start.quick");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(1, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING("UPS.BatterySystem.Battery.Test", mockHost.writes[0].first.c_str());
+    TEST_ASSERT_EQUAL_UINT32(1, mockHost.writes[0].second);
+
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.stop");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL_UINT32(3, mockHost.writes.back().second);
+}
+
+void test_instcmd_not_in_catalog(void) {
+    server.setAuthenticated(0, true);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    server.processCommand(printer, 0, "INSTCMD testups test.panel.start");
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_instcmd_driver_not_connected(void) {
+    server.setAuthenticated(0, true);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+    mockHost.connected = false;
+
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.start.quick");
+    TEST_ASSERT_EQUAL_STRING("ERR DRIVER-NOT-CONNECTED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_instcmd_write_failed(void) {
+    server.setAuthenticated(0, true);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+    mockHost.writeOk = false;
+
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.start.deep");
+    TEST_ASSERT_EQUAL_STRING("ERR INSTCMD-FAILED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL_UINT32(2, mockHost.writes.back().second);
+}
+
+void test_instcmd_requires_login(void) {
+    server.setClientUsername(0, "");
+    server.setAuthenticated(0, false);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    // check_command(), FLAG_USER: USERNAME, then PASSWORD, before the arguments
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.start.quick");
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "USERNAME admin");
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD");
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", printer.getOutput().c_str());
+    printer.clear();
+    // Sent but wrong: user_checkinstcmd()
+    server.processCommand(printer, 0, "PASSWORD wrong");
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.start.quick");
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+static std::string request(int slot, const char* line);
+
+// LOGIN is FLAG_USER too; net_login() checks the UPS name, then the credentials
+void test_login_requires_credentials(void) {
+    server.setClientUsername(0, "");
+    server.setAuthenticated(0, false);
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "LOGIN testups").c_str());
+    request(0, "USERNAME admin");
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "LOGIN wrongups").c_str());
+    request(0, "PASSWORD wrong");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "LOGIN wrongups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "LOGIN testups").c_str());
+    request(0, "PASSWORD secret");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "LOGIN testups").c_str());
+
+    // Without NUT credentials configured nothing is required, as before
+    NUTServer open;
+    NUTServerConfig config;
+    config.ups_name = "testups";
+    open.begin(config, &mockHost, 3493);
+    printer.clear();
+    open.processCommand(printer, 0, "LOGIN testups");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+}
+
+// US-058: delay fields of the mock, 16 bits wide like the Eaton 3S
+#define P_SD "UPS.PowerSummary.DelayBeforeShutdown"
+#define P_ST "UPS.PowerSummary.DelayBeforeStartup"
+#define P_RB "UPS.PowerSummary.DelayBeforeReboot"
+
+static void addDelayUsages(bool shutdown, bool startup, bool reboot) {
+    auto add = [](const char* path, uint32_t usage) {
+        HIDUsageDef d = featureUsage(path, usage);
+        d.report_id = 0x11;
+        d.bit_size = 16;
+        mockHost._mockUsages.push_back(d);
+    };
+    if (shutdown) add(P_SD, 0x00840057);
+    if (startup) add(P_ST, 0x00840056);
+    if (reboot) add(P_RB, 0x00840055);
+    // As USBHostUPS at connection: ups.delay.* with the NUT defaults
+    NutTable::applyDefaultDelays(mockHost.data, mockHost._mockUsages, 20, 30, true, NutTable::genericDelayPaths());
+}
+
+// Writes recorded by the mock as "path=value" joined by spaces, values as signed
+static std::string writesStr() {
+    std::string out;
+    for (const auto& w : mockHost.writes) {
+        if (!out.empty()) out += " ";
+        out += w.first + "=" + std::to_string((int32_t)w.second);
+    }
+    return out;
+}
+
+static std::string instcmd(const char* line) {
+    printer.clear();
+    mockHost.writes.clear();
+    server.processCommand(printer, 0, line);
+    return printer.getOutput();
+}
+
+// US-058: each load.* / shutdown.* command writes the usbhid-ups sequence, in order.
+// ups.delay.* are not set in the mock data: the NUT defaults 20/30 apply.
+void test_instcmd_shutdown_sequences(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, true);
+    struct Case { const char* line; const char* writes; };
+    const Case cases[] = {
+        { "INSTCMD testups load.off",            P_SD "=0" },
+        { "INSTCMD testups load.on",             P_ST "=0" },
+        { "INSTCMD testups load.off.delay",      P_SD "=20" },
+        { "INSTCMD testups load.off.delay 30",   P_SD "=30" },
+        { "INSTCMD testups load.on.delay",       P_ST "=30" },
+        { "INSTCMD testups load.on.delay 5",     P_ST "=5" },
+        { "INSTCMD testups shutdown.return",     P_ST "=30 " P_SD "=20" },
+        { "INSTCMD testups shutdown.stayoff",    P_ST "=-1 " P_SD "=20" },
+        { "INSTCMD testups shutdown.stop",       P_SD "=-1" },
+        { "INSTCMD testups shutdown.reboot",     P_RB "=10" },
+        { "INSTCMD testups shutdown.reboot 5",   P_RB "=5" },
+        // The value is ignored by the commands that take none
+        { "INSTCMD testups load.off 99",         P_SD "=0" },
+    };
+    for (const auto& c : cases) {
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("OK\n", instcmd(c.line).c_str(), c.line);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(c.writes, writesStr().c_str(), c.line);
+    }
+}
+
+// -1 reaches writeUsage() as (uint32_t)-1 and becomes the field's two's complement
+void test_instcmd_stayoff_writes_minus_one_as_twos_complement(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, false);
+
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.stayoff").c_str());
+    TEST_ASSERT_EQUAL(2, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING(P_ST, mockHost.writes[0].first.c_str());
+    TEST_ASSERT_EQUAL_HEX32(0xFFFFFFFF, mockHost.writes[0].second);
+
+    // What USBHostUPS::writeUsageLocked() puts in the report: 16-bit field = 0xFFFF
+    const HIDUsageDef& st = mockHost._mockUsages[1];
+    uint8_t report[4] = { 0x11, 0x00, 0x00, 0xAA };
+    TEST_ASSERT_EQUAL(3, BeeperLogic::writeField(st, mockHost.writes[0].second, report, 3));
+    TEST_ASSERT_EQUAL_HEX8(0x11, report[0]);
+    TEST_ASSERT_EQUAL_HEX8(0xFF, report[1]);
+    TEST_ASSERT_EQUAL_HEX8(0xFF, report[2]);
+    TEST_ASSERT_EQUAL_HEX8(0xAA, report[3]);
+}
+
+// The configured ups.delay.* (set at connection) drive the sequences
+void test_instcmd_uses_configured_delays(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, false);
+    mockHost.data.set("ups.delay.shutdown", "60");
+    mockHost.data.set("ups.delay.start", "120");
+
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.return").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_ST "=120 " P_SD "=60", writesStr().c_str());
+}
+
+// Without configured ups.delay.* nothing is guessed: no write, the command is refused
+void test_instcmd_without_configured_delays(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, false);
+    mockHost.data.remove("ups.delay.shutdown");
+    mockHost.data.set("ups.delay.start", "abc");
+
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", instcmd("INSTCMD testups shutdown.return").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", instcmd("INSTCMD testups load.off.delay").c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups load.off.delay 45").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_SD "=45", writesStr().c_str());
+}
+
+// 65536 on a 16-bit field would be truncated to 0, an immediate shutdown
+void test_instcmd_param_too_large_for_field(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, false);
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", instcmd("INSTCMD testups load.off.delay 65536").c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_instcmd_invalid_argument(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, true);
+
+    const char* lines[] = {
+        "INSTCMD testups load.off.delay abc",
+        "INSTCMD testups load.on.delay -5",
+        "INSTCMD testups shutdown.reboot 12x",
+    };
+    for (const char* line : lines) {
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("ERR INVALID-ARGUMENT\n", instcmd(line).c_str(), line);
+        TEST_ASSERT_EQUAL_MESSAGE(0, mockHost.writes.size(), line);
+    }
+}
+
+// The second write of a sequence is not sent when the first fails
+void test_instcmd_sequence_stops_at_first_failed_write(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, false);
+    mockHost.failPaths.push_back(P_ST);
+
+    TEST_ASSERT_EQUAL_STRING("ERR INSTCMD-FAILED\n", instcmd("INSTCMD testups shutdown.return").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_ST "=30", writesStr().c_str());
+}
+
+void test_instcmd_shutdown_requires_login(void) {
+    server.setClientUsername(0, "admin");
+    server.setAuthenticated(0, false);
+    addDelayUsages(true, true, true);
+
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", instcmd("INSTCMD testups shutdown.return").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", instcmd("INSTCMD testups load.off.delay 30").c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+// shutdown.default tries shutdown.return, shutdown.reboot, load.off.delay, shutdown.stayoff
+// (upsdrv_shutdown() order) and stops at the first that succeeds
+void test_instcmd_shutdown_default_fallback(void) {
+    server.setAuthenticated(0, true);
+
+    // All groups: shutdown.return
+    addDelayUsages(true, true, true);
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_ST "=30 " P_SD "=20", writesStr().c_str());
+    TEST_ASSERT_EQUAL_STRING("shutdown.return", mockHost.lastDefaultShutdown().c_str());
+
+    // shutdown.return fails on its first write: shutdown.reboot
+    mockHost.failPaths = { P_ST };
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_ST "=30 " P_RB "=10", writesStr().c_str());
+    TEST_ASSERT_EQUAL_STRING("shutdown.reboot", mockHost.lastDefaultShutdown().c_str());
+
+    // No Startup (shutdown.return not supported): shutdown.reboot
+    mockHost.failPaths.clear();
+    mockHost._mockUsages.clear();
+    addDelayUsages(true, false, true);
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_RB "=10", writesStr().c_str());
+    TEST_ASSERT_EQUAL_STRING("shutdown.reboot", mockHost.lastDefaultShutdown().c_str());
+
+    // Reboot fails and no Startup: load.off.delay
+    mockHost.failPaths = { P_RB };
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_RB "=10 " P_SD "=20", writesStr().c_str());
+    TEST_ASSERT_EQUAL_STRING("load.off.delay", mockHost.lastDefaultShutdown().c_str());
+
+    // The value of INSTCMD is not passed on to the fallback commands
+    mockHost.failPaths.clear();
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.default 5").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_RB "=10", writesStr().c_str());
+}
+
+void test_instcmd_shutdown_default_all_fail(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, true);
+    mockHost.failPaths = { P_SD, P_ST, P_RB };
+
+    TEST_ASSERT_EQUAL_STRING("ERR INSTCMD-FAILED\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    // return (Startup), reboot, load.off.delay, stayoff (Startup): one failed write each
+    TEST_ASSERT_EQUAL_STRING(P_ST "=30 " P_RB "=10 " P_SD "=20 " P_ST "=-1", writesStr().c_str());
+    TEST_ASSERT_EQUAL_STRING("", mockHost.lastDefaultShutdown().c_str());
+}
+
+void test_instcmd_shutdown_default_without_groups(void) {
+    server.setAuthenticated(0, true);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_list_cmd_includes_shutdown_default(void) {
+    addDelayUsages(false, false, true);
+    std::string out = instcmd("LIST CMD testups");
+    TEST_ASSERT_TRUE(out.find("CMD testups shutdown.reboot\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("CMD testups shutdown.default\n") != std::string::npos);
+
+    mockHost._mockUsages.clear();
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+    out = instcmd("LIST CMD testups");
+    TEST_ASSERT_TRUE(out.find("shutdown.default") == std::string::npos);
+}
+
+void test_instcmd_beeper_failure_and_toggle(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("ups.beeper.status", "enabled");
+
+    server.processCommand(printer, 0, "INSTCMD testups beeper.toggle");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+
+    mockHost.setBeeperOk = false;
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD testups beeper.enable");
+    TEST_ASSERT_EQUAL_STRING("ERR INSTCMD-FAILED\n", printer.getOutput().c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+}
+
+// beeper.mute writes 3 on the beeper field; toggling a muted beeper disables it
+void test_instcmd_beeper_mute_and_toggle_from_muted(void) {
+    server.setAuthenticated(0, true);
+    HIDUsageDef beeper = featureUsage("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a);
+    beeper.bit_size = 8;
+    beeper.logical_min = 1;
+    beeper.logical_max = 3;
+    mockHost._mockUsages.push_back(beeper);
+    mockHost.data.set("ups.beeper.status", "enabled");
+
+    server.processCommand(printer, 0, "INSTCMD testups beeper.mute");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(1, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.AudibleAlarmControl", mockHost.writes[0].first.c_str());
+    TEST_ASSERT_EQUAL_UINT32(3, mockHost.writes[0].second);
+
+    mockHost.data.set("ups.beeper.status", "muted");
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD testups beeper.toggle");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD testups beeper.toggle");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
 }
 
 void test_get_upsdesc_and_numlogins(void) {
@@ -386,9 +949,120 @@ void test_get_upsdesc_and_numlogins(void) {
     TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
 }
 
+// --- Writable variables (US-066): netlist.c list_rw/list_enum, netget.c get_type/get_desc ---
+
+static void setupWritable() {
+    mockHost.data.set("battery.charge.low", "20");
+    mockHost.data.set("input.sensitivity", "normal");
+    mockHost.rw = {
+        { "battery.charge.low", 10, {} },
+        { "input.sensitivity", 10, { "low", "normal", "high" } },
+    };
+}
+
+void test_list_rw_with_values(void) {
+    setupWritable();
+    server.processCommand(printer, 0, "LIST RW testups");
+    TEST_ASSERT_EQUAL_STRING(
+        "BEGIN LIST RW testups\n"
+        "RW testups battery.charge.low \"20\"\n"
+        "RW testups input.sensitivity \"normal\"\n"
+        "END LIST RW testups\n",
+        printer.getOutput().c_str());
+}
+
+void test_list_rw_errors_and_empty(void) {
+    setupWritable();
+    server.processCommand(printer, 0, "LIST RW wrongups");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
+
+    printer.clear();
+    mockHost.stale = true;
+    server.processCommand(printer, 0, "LIST RW testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    mockHost.stale = false;
+    mockHost.rw.clear();
+    server.processCommand(printer, 0, "LIST RW testups");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST RW testups\nEND LIST RW testups\n", printer.getOutput().c_str());
+}
+
+void test_get_type_of_writable_variables(void) {
+    setupWritable();
+    server.processCommand(printer, 0, "GET TYPE testups battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("TYPE testups battery.charge.low RW STRING:10\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET TYPE testups input.sensitivity");
+    TEST_ASSERT_EQUAL_STRING("TYPE testups input.sensitivity RW ENUM STRING:10\n", printer.getOutput().c_str());
+
+    // Read-only variables keep the previous answer (US-071 will align them)
+    printer.clear();
+    mockHost.data.set("battery.charge", "100");
+    server.processCommand(printer, 0, "GET TYPE testups battery.charge");
+    TEST_ASSERT_EQUAL_STRING("TYPE testups battery.charge STRING:64\n", printer.getOutput().c_str());
+}
+
+void test_list_enum_and_range(void) {
+    setupWritable();
+    server.processCommand(printer, 0, "LIST ENUM testups input.sensitivity");
+    TEST_ASSERT_EQUAL_STRING(
+        "BEGIN LIST ENUM testups input.sensitivity\n"
+        "ENUM testups input.sensitivity \"low\"\n"
+        "ENUM testups input.sensitivity \"normal\"\n"
+        "ENUM testups input.sensitivity \"high\"\n"
+        "END LIST ENUM testups input.sensitivity\n",
+        printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST ENUM testups battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST ENUM testups battery.charge.low\nEND LIST ENUM testups battery.charge.low\n",
+                             printer.getOutput().c_str());
+
+    // usbhid-ups adds no ranges
+    printer.clear();
+    server.processCommand(printer, 0, "LIST RANGE testups battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST RANGE testups battery.charge.low\nEND LIST RANGE testups battery.charge.low\n",
+                             printer.getOutput().c_str());
+
+    // An unknown variable is an error, as in list_enum()
+    printer.clear();
+    server.processCommand(printer, 0, "LIST ENUM testups no.such.var");
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST ENUM wrongups input.sensitivity");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
+
+    printer.clear();
+    mockHost.stale = true;
+    server.processCommand(printer, 0, "LIST RANGE testups battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+}
+
+void test_get_desc_of_table_variables(void) {
+    // Texts from nut_repo/data/cmdvartab
+    server.processCommand(printer, 0, "GET DESC testups battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("DESC testups battery.charge.low \"Remaining battery level when UPS switches to LB (percent)\"\n",
+                             printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET DESC testups ups.delay.start");
+    TEST_ASSERT_EQUAL_STRING("DESC testups ups.delay.start \"Interval to wait before (re)starting the load (seconds)\"\n",
+                             printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET DESC testups no.such.var");
+    TEST_ASSERT_EQUAL_STRING("DESC testups no.such.var \"Description unavailable\"\n", printer.getOutput().c_str());
+}
+
 void test_get_desc_and_type(void) {
     server.processCommand(printer, 0, "GET DESC testups ups.status");
-    TEST_ASSERT_EQUAL_STRING("DESC testups ups.status \"Unavailable\"\n",
+    // Not a variable of the NUT table, whose descriptions are the only cmdvartab texts the
+    // bridge carries so far: upsd's fallback text (netget.c:98). upsd with the full
+    // cmdvartab answers "UPS status" (US-071).
+    TEST_ASSERT_EQUAL_STRING("DESC testups ups.status \"Description unavailable\"\n",
                              printer.getOutput().c_str());
 
     printer.clear();
@@ -396,12 +1070,12 @@ void test_get_desc_and_type(void) {
     std::string typeOut = printer.getOutput();
     TEST_ASSERT_EQUAL_STRING("TYPE testups ups.status STRING:64\n", typeOut.c_str());
     // Clients read the token after "RW" as the type, so a bare RW would crash
-    // them. Nothing this bridge exposes is writeable.
+    // them. ups.status is not writable.
     TEST_ASSERT_TRUE(typeOut.find("RW") == std::string::npos);
 
     printer.clear();
     server.processCommand(printer, 0, "GET CMDDESC testups beeper.enable");
-    TEST_ASSERT_EQUAL_STRING("CMDDESC testups beeper.enable \"Unavailable\"\n",
+    TEST_ASSERT_EQUAL_STRING("CMDDESC testups beeper.enable \"Enable the UPS beeper\"\n",
                              printer.getOutput().c_str());
 
     printer.clear();
@@ -459,58 +1133,1395 @@ void test_gonut_newups_sequence(void) {
     }
 }
 
-void test_list_var_full_output(void) {
-    // The computed status leads, the ups.status.* flags it is derived from stay
-    // internal, and every other variable follows in insertion order.
-    mockHost.statusString = "OL CHRG";
-    mockHost.data.set("ups.mfr", "CPS");
-    mockHost.data.set("ups.status.ac_present", "1");
-    mockHost.data.set("ups.model", "Back-UPS RS 900MI");
-    mockHost.data.set("ups.status.charging", "1");
-    mockHost.data.set("battery.charge", "95");
-    mockHost.data.set("ups.serial", "");
+// --- SET VAR, SET/GET TRACKING (US-067): netset.c set_var/net_set, netget.c net_get,
+// upsd.c tracking_get/nut_uuid_v4, clients/upsrw.c do_set ---
 
-    server.processCommand(printer, 0, "LIST VAR testups");
-    TEST_ASSERT_EQUAL_STRING("BEGIN LIST VAR testups\n"
-                             "VAR testups ups.status \"OL CHRG\"\n"
-                             "VAR testups ups.mfr \"CPS\"\n"
-                             "VAR testups ups.model \"Back-UPS RS 900MI\"\n"
-                             "VAR testups battery.charge \"95\"\n"
-                             "VAR testups ups.serial \"\"\n"
-                             "END LIST VAR testups\n",
-                             printer.getOutput().c_str());
+static std::string request(int slot, const char* line) {
+    printer.clear();
+    server.processCommand(printer, slot, line);
+    return printer.getOutput();
 }
 
-void test_quoted_values_are_escaped(void) {
-    // Left bare, the quotes end the value early and the trailing backslash
-    // swallows the closing quote.
-    mockHost.data.set("ups.model", "Back-UPS \"XS\" 700\\");
+static void setupSettable() {
+    server.setAuthenticated(0, true);
+    server.setClientUsername(0, "admin");
+    mockHost.data.set("battery.charge.low", "20");
+    mockHost.data.set("input.sensitivity", "normal");
+    mockHost.data.set("ups.load.high", "90");
+    mockHost.data.set("outlet.desc", "PowerSummary");
+    mockHost.data.set("battery.charge", "100"); // read-only
+    mockHost.rw = {
+        { "battery.charge.low", 10, {} },
+        { "input.sensitivity", 10, { "low", "normal", "high" } },
+        { "ups.load.high", 5, {} },
+        { "outlet.desc", 20, {} },
+    };
+}
 
-    server.processCommand(printer, 0, "GET VAR testups ups.model");
-    TEST_ASSERT_EQUAL_STRING("VAR testups ups.model \"Back-UPS \\\"XS\\\" 700\\\\\"\n",
-                             printer.getOutput().c_str());
+// nut_uuid_v4(): "%02X" x 16 in 8-4-4-4-12, version nibble 4, variant 10xx
+static bool isUuid4(const std::string& id) {
+    if (id.size() != 36) return false;
+    for (size_t i = 0; i < id.size(); i++) {
+        char c = id[i];
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != '-') return false;
+        } else if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) {
+            return false;
+        }
+    }
+    return id[14] == '4' && strchr("89AB", id[19]) != nullptr;
+}
+
+// "OK TRACKING <id>\n" -> <id>, empty if the line has another shape
+static std::string trackingId(const std::string& reply) {
+    const std::string prefix = "OK TRACKING ";
+    if (reply.compare(0, prefix.size(), prefix) != 0 || reply.empty() || reply.back() != '\n') return "";
+    return reply.substr(prefix.size(), reply.size() - prefix.size() - 1);
+}
+
+void test_set_malformed_is_invalid_argument(void) {
+    setupSettable();
+    // net_set(): fewer than 2 arguments, unknown subcommand, SET VAR with fewer than 4
+    const char* lines[] = {
+        "SET",
+        "SET FOO",
+        "SET FOO bar",
+        "SET TRACKING",
+        "SET VAR testups battery.charge.low",
+    };
+    for (const char* line : lines) {
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("ERR INVALID-ARGUMENT\n", request(0, line).c_str(), line);
+    }
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_unknown_ups(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "SET VAR wrongups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_driver_not_connected(void) {
+    setupSettable();
+    // Unplugged: the host is also stale, but ups_available() tests the driver socket first
+    mockHost.connected = false;
+    mockHost.stale = true;
+    TEST_ASSERT_EQUAL_STRING("ERR DRIVER-NOT-CONNECTED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+
+    // No host at all
+    NUTServer bare;
+    NUTServerConfig config;
+    config.ups_name = "testups";
+    bare.begin(config, nullptr, 3493);
+    // USERNAME and PASSWORD first, also without NUT credentials (check_command(), US-125)
+    bare.processCommand(printer, 0, "USERNAME admin");
+    bare.processCommand(printer, 0, "PASSWORD secret");
+    printer.clear();
+    bare.processCommand(printer, 0, "SET VAR testups battery.charge.low 30");
+    TEST_ASSERT_EQUAL_STRING("ERR DRIVER-NOT-CONNECTED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_data_stale(void) {
+    setupSettable();
+    mockHost.stale = true;
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_access_denied(void) {
+    setupSettable();
+    // check_command(), FLAG_USER: USERNAME first, then PASSWORD
+    server.setClientUsername(0, "");
+    server.setAuthenticated(0, false);
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "USERNAME admin").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    // Sent but wrong: user_checkaction() in set_var()
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "PASSWORD wrong").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "PASSWORD secret").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+    mockHost.sets.clear();
+
+    // US-125: without NUT credentials SET is refused, as upsd with no users
+    NUTServer open;
+    NUTServerConfig config;
+    config.ups_name = "testups";
+    open.begin(config, &mockHost, 3493);
+    printer.clear();
+    open.processCommand(printer, 0, "SET VAR testups battery.charge.low 30");
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", printer.getOutput().c_str());
+    open.processCommand(printer, 0, "USERNAME admin");
+    open.processCommand(printer, 0, "PASSWORD secret");
+    printer.clear();
+    open.processCommand(printer, 0, "SET VAR testups battery.charge.low 30");
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_not_supported_and_readonly(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "SET VAR testups no.such.var 1").c_str());
+    // A writable variable the UPS does not report is not supported (sstate_getinfo() first)
+    mockHost.rw.push_back({ "battery.runtime.low", 10, {} });
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "SET VAR testups battery.runtime.low 120").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups battery.charge 50").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups ups.status OB").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups device.type ups").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_aux_zero_is_set_failed(void) {
+    setupSettable();
+    // input.sensitivity of cps-hid is declared with aux 0: upsd refuses to write it
+    mockHost.rw = { { "input.sensitivity", 0, { "low", "normal", "high" } } };
+    TEST_ASSERT_EQUAL_STRING("ERR SET-FAILED\n", request(0, "SET VAR testups input.sensitivity high").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL(2, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("WARN auxdata for input.sensitivity is invalid", logLines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET input.sensitivity \"high\" from admin: ERR SET-FAILED", logLines[1].c_str());
+}
+
+void test_set_var_too_long(void) {
+    setupSettable();
+    // aux < strlen(newval)
+    TEST_ASSERT_EQUAL_STRING("ERR TOO-LONG\n", request(0, "SET VAR testups ups.load.high 123456").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups ups.load.high 12345").c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+}
+
+void test_set_var_invalid_enum_value(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-VALUE\n", request(0, "SET VAR testups input.sensitivity medium").c_str());
+    // strcmp: the case counts
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-VALUE\n", request(0, "SET VAR testups input.sensitivity High").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups input.sensitivity high").c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("input.sensitivity", mockHost.sets[0].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("high", mockHost.sets[0].second.c_str());
+}
+
+// When a request fails more than one check, the error is the first one of set_var()
+void test_set_var_check_order(void) {
+    setupSettable();
+    mockHost.connected = false;
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "SET VAR wrongups battery.charge.low 30").c_str());
+
+    // No PASSWORD sent: check_command() refuses before net_set() reads the arguments
+    server.setAuthenticated(0, false);
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "SET VAR wrongups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "SET").c_str());
+
+    // Wrong PASSWORD: ACCESS-DENIED comes after the UPS checks, as in set_var()
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "PASSWORD wrong").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "SET VAR wrongups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR DRIVER-NOT-CONNECTED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+
+    mockHost.connected = true;
+    mockHost.stale = true;
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", request(0, "SET VAR testups no.such.var 30").c_str());
+
+    mockHost.stale = false;
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "SET VAR testups no.such.var 30").c_str());
+
+    server.setAuthenticated(0, true);
+    // Read-only and too long: READONLY
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups battery.charge 12345678901").c_str());
+    // Too long and outside the ENUM: TOO-LONG
+    TEST_ASSERT_EQUAL_STRING("ERR TOO-LONG\n", request(0, "SET VAR testups input.sensitivity veryveryhigh").c_str());
+    // aux 0 and too long: SET-FAILED
+    mockHost.rw = { { "battery.charge.low", 0, {} } };
+    TEST_ASSERT_EQUAL_STRING("ERR SET-FAILED\n", request(0, "SET VAR testups battery.charge.low 123456789012").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_canonical_name(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR TESTUPS BATTERY.Charge.Low 30").c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("battery.charge.low", mockHost.sets[0].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("30", mockHost.sets[0].second.c_str());
+}
+
+// Values as upsrw sends them: always quoted, with pconf_encode() escaping " \ and #
+void test_set_var_quoted_values(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups outlet.desc \"Rack A\"").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups outlet.desc \"say \\\"hi\\\" \\\\ \\#1\"").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups outlet.desc \"\"").c_str());
+    TEST_ASSERT_EQUAL(3, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("Rack A", mockHost.sets[0].second.c_str());
+    TEST_ASSERT_EQUAL_STRING("say \"hi\" \\ #1", mockHost.sets[1].second.c_str());
+    TEST_ASSERT_EQUAL_STRING("", mockHost.sets[2].second.c_str());
+}
+
+// Without TRACKING the reply waits for the write: OK only when it succeeded
+void test_set_var_synchronous_outcome(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+
+    const NutTable::SetStatus failures[] = {
+        NutTable::SetStatus::FAILED,
+        NutTable::SetStatus::CONVERSION_FAILED,
+        NutTable::SetStatus::UNKNOWN,
+        NutTable::SetStatus::NOT_CONNECTED,
+    };
+    for (NutTable::SetStatus st : failures) {
+        mockHost.setResult = st;
+        TEST_ASSERT_EQUAL_STRING("ERR SET-FAILED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    }
+    TEST_ASSERT_EQUAL(5, (int)mockHost.sets.size());
+    // Valid requests are logged by the host, not by the server
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
+// upsrw -w: SET TRACKING ON, SET VAR, then GET TRACKING <id> until it is not PENDING
+void test_upsrw_tracking_sequence(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET TRACKING ON").c_str());
+
+    std::string reply = request(0, "SET VAR testups battery.charge.low \"25\"");
+    // upsrw.c:149, on the line without its newline: strlen("OK TRACKING ") + UUID4_LEN - 1
+    TEST_ASSERT_EQUAL(48, (int)reply.size() - 1);
+    std::string id = trackingId(reply);
+    TEST_ASSERT_TRUE_MESSAGE(isUuid4(id), reply.c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+
+    std::string get = "GET TRACKING " + id;
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, get.c_str()).c_str());
+
+    // strcasecmp in tracking_get()
+    std::string lower = id;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    get = "GET TRACKING " + lower;
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, get.c_str()).c_str());
+}
+
+void test_tracking_outcomes(void) {
+    setupSettable();
+    request(0, "SET TRACKING ON");
+    const struct {
+        NutTable::SetStatus st;
+        const char* expected;
+    } cases[] = {
+        { NutTable::SetStatus::OK,                "SUCCESS\n" },
+        { NutTable::SetStatus::CONVERSION_FAILED, "ERR INVALID-ARGUMENT\n" },
+        { NutTable::SetStatus::FAILED,            "ERR FAILED\n" },
+        { NutTable::SetStatus::NOT_CONNECTED,     "ERR FAILED\n" },
+        { NutTable::SetStatus::UNKNOWN,           "ERR UNKNOWN\n" },
+    };
+    for (const auto& c : cases) {
+        mockHost.setResult = c.st;
+        std::string id = trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+        TEST_ASSERT_TRUE(isUuid4(id));
+        std::string get = "GET TRACKING " + id;
+        TEST_ASSERT_EQUAL_STRING(c.expected, request(0, get.c_str()).c_str());
+    }
+}
+
+// Validation errors stay immediate with TRACKING on: no id
+void test_tracking_validation_error_is_immediate(void) {
+    setupSettable();
+    request(0, "SET TRACKING ON");
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups battery.charge 50").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-VALUE\n", request(0, "SET VAR testups input.sensitivity medium").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_get_and_set_tracking(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(0, "GET TRACKING").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR FEATURE-NOT-CONFIGURED\n",
+                             request(0, "GET TRACKING 00000000-0000-4000-8000-000000000000").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", request(0, "SET TRACKING MAYBE").c_str());
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(0, "GET TRACKING").c_str());
+
+    // strcasecmp on ON/OFF
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "set tracking on").c_str());
+    TEST_ASSERT_EQUAL_STRING("ON\n", request(0, "GET TRACKING").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET TRACKING off").c_str());
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(0, "GET TRACKING").c_str());
+
+    // SET is FLAG_USER in upsd: USERNAME and PASSWORD must be sent...
+    server.setClientUsername(1, "");
+    server.setAuthenticated(1, false);
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(1, "SET TRACKING ON").c_str());
+    request(1, "USERNAME admin");
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(1, "SET TRACKING ON").c_str());
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(1, "GET TRACKING").c_str());
+    // ...but net_set() does not check them for TRACKING (no user_checkaction())
+    request(1, "PASSWORD wrong");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(1, "SET TRACKING ON").c_str());
+    TEST_ASSERT_EQUAL_STRING("ON\n", request(1, "GET TRACKING").c_str());
+}
+
+void test_tracking_unknown_and_expired_id(void) {
+    setupSettable();
+    request(0, "SET TRACKING ON");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, "GET TRACKING 00000000-0000-4000-8000-000000000000").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, "GET TRACKING not-an-id").c_str());
+
+    fakeNow = 5000;
+    std::string get = "GET TRACKING " + trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+    // tracking_cleanup() drops an entry when difftime() > tracking_delay (3600 s)
+    fakeNow = 5000 + 3600000;
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, get.c_str()).c_str());
+    fakeNow = 5000 + 3600001;
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, get.c_str()).c_str());
+}
+
+void test_tracking_age_across_millis_wrap(void) {
+    setupSettable();
+    request(0, "SET TRACKING ON");
+    fakeNow = 0xFFFFF000u;
+    std::string get = "GET TRACKING " + trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+    fakeNow = 0x00001000u; // 8.192 s later
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, get.c_str()).c_str());
+
+    // The server loop drops the expired entry, so it cannot look young again once its
+    // age wraps around (2^32 ms later)
+    fakeNow = 0xFFFFF000u + 3600001u;
+    server.loop();
+    fakeNow = 0xFFFFF000u + 10u;
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, get.c_str()).c_str());
+}
+
+// 16 entries: the 17th outcome replaces the oldest one
+void test_tracking_table_drops_oldest(void) {
+    setupSettable();
+    request(0, "SET TRACKING ON");
+    std::vector<std::string> ids;
+    for (int i = 0; i < 17; i++) {
+        fakeNow = 1000 + (uint32_t)i * 1000;
+        ids.push_back(trackingId(request(0, "SET VAR testups battery.charge.low 30")));
+        TEST_ASSERT_TRUE(isUuid4(ids.back()));
+    }
+    for (size_t i = 0; i < ids.size(); i++) {
+        for (size_t j = i + 1; j < ids.size(); j++) TEST_ASSERT_TRUE(ids[i] != ids[j]);
+    }
+    std::string first = "GET TRACKING " + ids.front();
+    std::string second = "GET TRACKING " + ids[1];
+    std::string last = "GET TRACKING " + ids.back();
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, first.c_str()).c_str());
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, second.c_str()).c_str());
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, last.c_str()).c_str());
+}
+
+// The flag is per session, the table is shared, as client->tracking in upsd
+void test_tracking_is_per_session(void) {
+    setupSettable();
+    server.setAuthenticated(1, true);
+    request(0, "SET TRACKING ON");
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(1, "GET TRACKING").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(1, "SET VAR testups battery.charge.low 30").c_str());
+
+    std::string get = "GET TRACKING " + trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+    request(1, "SET TRACKING ON");
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(1, get.c_str()).c_str());
+
+    // The end of the session clears the flag
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(0, "LOGOUT").c_str());
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(0, "GET TRACKING").c_str());
+}
+
+void test_set_var_rejections_are_logged(void) {
+    setupSettable();
+    request(0, "SET VAR wrongups battery.charge.low 30");
+    request(0, "SET VAR testups battery.charge \"5 0\"");
+    request(0, "SET VAR testups input.sensitivity medium");
+    server.setClientUsername(0, "");
+    server.setAuthenticated(0, false);
+    request(0, "SET VAR testups battery.charge.low 30");
+    // Malformed lines are not SET VAR requests: nothing to log
+    request(0, "SET VAR testups battery.charge.low");
+    TEST_ASSERT_EQUAL(4, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge.low \"30\" from admin: ERR UNKNOWN-UPS", logLines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge \"5 0\" from admin: ERR READONLY", logLines[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET input.sensitivity \"medium\" from admin: ERR INVALID-VALUE", logLines[2].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge.low \"30\" from -: ERR USERNAME-REQUIRED", logLines[3].c_str());
+}
+
+// US-088: ups.status is built from internal ups.status.* keys of UPSData, which upsd does
+// not have: sstate_getinfo() finds nothing, so VAR-NOT-SUPPORTED as for any unknown name
+void test_internal_status_keys_are_not_variables(void) {
+    setupSettable();
+    mockHost.data.set("ups.status.charging", "0");
+    mockHost.data.set("ups.status.ac_present", "1");
+    mockHost.data.set("ups.status.battery_low", "0");
+    mockHost.statusString = "OL";
+
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "GET VAR testups ups.status.charging").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "GET VAR testups UPS.Status.Charging").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "LIST ENUM testups ups.status.ac_present").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "LIST RANGE testups ups.status.ac_present").c_str());
+
+    logLines.clear();
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "SET VAR testups ups.status.battery_low 1").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("WARN SET ups.status.battery_low \"1\" from admin: ERR VAR-NOT-SUPPORTED", logLines[0].c_str());
+
+    // ups.status itself and LIST VAR are unchanged
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.status \"OL\"\n", request(0, "GET VAR testups ups.status").c_str());
+    std::string list = request(0, "LIST VAR testups");
+    TEST_ASSERT_TRUE(list.find("VAR testups ups.status \"OL\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(list.find("ups.status.") == std::string::npos);
+}
+
+// Ids built with the bit operations of nut_uuid_v4() on known random bytes
+void test_tracking_id_format(void) {
+    NutTracking zeros([]() -> uint32_t { return 0; });
+    char id[NutTracking::ID_LEN];
+    zeros.newId(id);
+    TEST_ASSERT_EQUAL_STRING("00000000-0000-4000-8000-000000000000", id);
+
+    NutTracking ones([]() -> uint32_t { return 0xFFFFFFFFu; });
+    ones.newId(id);
+    TEST_ASSERT_EQUAL_STRING("FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF", id);
+
+    // Bytes in call order, most significant first
+    NutTracking counting([]() -> uint32_t { static uint32_t n = 0; n += 0x11111111u; return n; });
+    counting.newId(id);
+    // b[0..15] = 11 11 11 11 22 22 22 22 33 33 33 33 44 44 44 44;
+    // b[6] = (0x22 & 0x0F) | 0x40 = 0x42, b[8] = (0x33 & 0x3F) | 0x80 = 0xB3
+    TEST_ASSERT_EQUAL_STRING("11111111-2222-4222-B333-333344444444", id);
+}
+
+// --- INSTCMD with TRACKING (US-069): netinstcmd.c send_instcmd/net_instcmd, upsd.c
+// tracking_get, clients/upscmd.c do_cmd ---
+
+// upscmd -w: SET TRACKING ON, INSTCMD, then GET TRACKING <id> until it is not PENDING
+void test_upscmd_tracking_sequence(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET TRACKING ON").c_str());
+
+    std::string reply = request(0, "INSTCMD testups beeper.disable");
+    // upscmd.c do_cmd(), on the line without its newline: strlen("OK TRACKING ") + UUID4_LEN - 1
+    TEST_ASSERT_EQUAL(48, (int)reply.size() - 1);
+    std::string id = trackingId(reply);
+    TEST_ASSERT_TRUE_MESSAGE(isUuid4(id), reply.c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+
+    std::string get = "GET TRACKING " + id;
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, get.c_str()).c_str());
+}
+
+// STAT_INSTCMD_FAILED: the write reached the UPS and failed
+void test_instcmd_tracking_failed(void) {
+    server.setAuthenticated(0, true);
+    request(0, "SET TRACKING ON");
+    addDelayUsages(true, true, false);
+    mockHost.failPaths.push_back(P_ST);
+
+    std::string id = trackingId(request(0, "INSTCMD testups shutdown.return"));
+    TEST_ASSERT_TRUE(isUuid4(id));
+    TEST_ASSERT_EQUAL_STRING(P_ST "=30", writesStr().c_str());
+    std::string get = "GET TRACKING " + id;
+    TEST_ASSERT_EQUAL_STRING("ERR FAILED\n", request(0, get.c_str()).c_str());
+
+    mockHost.data.set("ups.beeper.status", "enabled");
+    mockHost.setBeeperOk = false;
+    id = trackingId(request(0, "INSTCMD testups beeper.enable"));
+    TEST_ASSERT_TRUE(isUuid4(id));
+    get = "GET TRACKING " + id;
+    TEST_ASSERT_EQUAL_STRING("ERR FAILED\n", request(0, get.c_str()).c_str());
+}
+
+// STAT_INSTCMD_CONVERSION_FAILED: the parameter is checked before anything is written
+void test_instcmd_tracking_invalid_argument(void) {
+    server.setAuthenticated(0, true);
+    request(0, "SET TRACKING ON");
+    addDelayUsages(true, true, true);
+
+    const char* lines[] = {
+        "INSTCMD testups load.off.delay abc",
+        "INSTCMD testups load.off.delay 65536",
+        "INSTCMD testups shutdown.reboot 12x",
+    };
+    for (const char* line : lines) {
+        mockHost.writes.clear();
+        std::string id = trackingId(request(0, line));
+        TEST_ASSERT_TRUE_MESSAGE(isUuid4(id), line);
+        std::string get = "GET TRACKING " + id;
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("ERR INVALID-ARGUMENT\n", request(0, get.c_str()).c_str(), line);
+        TEST_ASSERT_EQUAL_MESSAGE(0, mockHost.writes.size(), line);
+    }
+}
+
+// Validation errors stay immediate with TRACKING on: no id, nothing in the table
+void test_instcmd_tracking_validation_errors_are_immediate(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    request(0, "SET TRACKING ON");
+    // A known entry: if an error below took a slot, filling the table would drop it
+    std::string known = "GET TRACKING " + trackingId(request(0, "INSTCMD testups beeper.enable"));
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, known.c_str()).c_str());
+    // Strictly the oldest: on equal ages add() drops another entry
+    fakeNow += 1;
+
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", request(0, "INSTCMD testups invalid.cmd").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "INSTCMD otherups beeper.enable").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", request(0, "INSTCMD testups").c_str());
+    mockHost.connected = false;
+    TEST_ASSERT_EQUAL_STRING("ERR DRIVER-NOT-CONNECTED\n", request(0, "INSTCMD testups beeper.enable").c_str());
+    mockHost.connected = true;
+
+    // Credentials sent but wrong: user_checkinstcmd()
+    server.setClientUsername(0, "admin");
+    server.setAuthenticated(0, false);
+    request(0, "PASSWORD wrong");
+    TEST_ASSERT_EQUAL_STRING("ON\n", request(0, "GET TRACKING").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "INSTCMD testups beeper.enable").c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
+
+    // CAPACITY - 1 more entries fill the table exactly: the known one is still there
+    server.setAuthenticated(0, true);
+    for (size_t i = 0; i + 1 < NutTracking::CAPACITY; i++) {
+        fakeNow += 1;
+        TEST_ASSERT_TRUE(isUuid4(trackingId(request(0, "INSTCMD testups beeper.enable"))));
+    }
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, known.c_str()).c_str());
+}
+
+// INSTCMD and SET VAR share the table: same capacity, same tracking_delay
+void test_instcmd_tracking_shares_table_with_set_var(void) {
+    setupSettable();
+    mockHost.data.set("ups.beeper.status", "enabled");
+    request(0, "SET TRACKING ON");
+
+    std::string setGet = "GET TRACKING " + trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+    std::string cmdGet = "GET TRACKING " + trackingId(request(0, "INSTCMD testups beeper.disable"));
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, setGet.c_str()).c_str());
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, cmdGet.c_str()).c_str());
+
+    // tracking_cleanup() drops an entry when difftime() > tracking_delay (3600 s)
+    fakeNow += NutTracking::MAX_AGE_MS + 1;
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, cmdGet.c_str()).c_str());
+
+    // A full table drops its oldest entry, whichever command created it
+    server.clearTracking();
+    request(0, "SET TRACKING ON");
+    setGet = "GET TRACKING " + trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+    std::string last;
+    for (size_t i = 0; i < NutTracking::CAPACITY; i++) {
+        fakeNow += 1;
+        last = "GET TRACKING " + trackingId(request(0, "INSTCMD testups beeper.enable"));
+    }
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, setGet.c_str()).c_str());
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, last.c_str()).c_str());
+}
+
+// The flag is per session, as client->tracking in upsd
+void test_instcmd_tracking_is_per_session(void) {
+    server.setAuthenticated(0, true);
+    server.setAuthenticated(1, true);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    request(0, "SET TRACKING ON");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(1, "INSTCMD testups beeper.enable").c_str());
+}
+
+// Without TRACKING the reply waits for the command: OK or the synchronous error
+void test_instcmd_without_tracking_unchanged(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    addDelayUsages(true, true, false);
+    request(0, "SET TRACKING ON");
+    request(0, "SET TRACKING OFF");
+
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", request(0, "INSTCMD testups load.off.delay abc").c_str());
+    mockHost.setBeeperOk = false;
+    TEST_ASSERT_EQUAL_STRING("ERR INSTCMD-FAILED\n", request(0, "INSTCMD testups beeper.enable").c_str());
+}
+
+void test_split_tokens_pconf(void) {
+    // Lines of the existing tests: same words
+    std::vector<String> t = NUTServer::splitTokens("INSTCMD testups load.off.delay 30");
+    TEST_ASSERT_EQUAL(4, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("30", t[3].c_str());
+    t = NUTServer::splitTokens("LIST ENUM testups input.sensitivity");
+    TEST_ASSERT_EQUAL(4, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("input.sensitivity", t[3].c_str());
+    t = NUTServer::splitTokens("GET  VAR   testups \"battery.charge\"  ");
+    TEST_ASSERT_EQUAL(4, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("VAR", t[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("battery.charge", t[3].c_str());
+
+    // Backslash: the next character is literal, in and out of quotes
+    t = NUTServer::splitTokens("SET VAR ups v \"a \\\"b\\\" \\\\ \\#\"");
+    TEST_ASSERT_EQUAL(5, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("a \"b\" \\ #", t[4].c_str());
+    t = NUTServer::splitTokens("x a\\ b");
+    TEST_ASSERT_EQUAL(2, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("a b", t[1].c_str());
+
+    // A pair of quotes is a word, even when empty
+    t = NUTServer::splitTokens("a \"\" b");
+    TEST_ASSERT_EQUAL(3, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("", t[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("b", t[2].c_str());
+    t = NUTServer::splitTokens("SET VAR testups outlet.desc \"\"");
+    TEST_ASSERT_EQUAL(5, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("", t[4].c_str());
+}
+
+// ---- Values escaped as pconf_encode() (US-080) ----
+
+// PCONF_ESCAPE of common/parseconf.c: #, backslash and double quote
+void test_encode_value(void) {
+    TEST_ASSERT_EQUAL_STRING("", NUTServer::encodeValue("").c_str());
+    TEST_ASSERT_EQUAL_STRING("", NUTServer::encodeValue(nullptr).c_str());
+    TEST_ASSERT_EQUAL_STRING("Main Outlet 1.5 (A)", NUTServer::encodeValue("Main Outlet 1.5 (A)").c_str());
+    TEST_ASSERT_EQUAL_STRING("\\\"", NUTServer::encodeValue("\"").c_str());
+    TEST_ASSERT_EQUAL_STRING("\\\\", NUTServer::encodeValue("\\").c_str());
+    TEST_ASSERT_EQUAL_STRING("\\#", NUTServer::encodeValue("#").c_str());
+    TEST_ASSERT_EQUAL_STRING("\\\"\\\"\\\\\\\\\\#\\#", NUTServer::encodeValue("\"\"\\\\##").c_str());
+    TEST_ASSERT_EQUAL_STRING("Rack \\\"A\\\" \\\\ 1", NUTServer::encodeValue("Rack \"A\" \\ 1").c_str());
+}
+
+static bool outputHas(const char* line) {
+    return printer.getOutput().find(line) != std::string::npos;
+}
+
+void test_var_replies_are_escaped(void) {
+    setupWritable();
+    mockHost.data.set("outlet.desc", "Rack \"A\" \\ #1");
+    mockHost.data.set("ups.model", "Back-UPS \"X\"");
+    mockHost.rw.push_back({ "outlet.desc", 20, {} });
+
+    server.processCommand(printer, 0, "GET VAR testups outlet.desc");
+    TEST_ASSERT_EQUAL_STRING("VAR testups outlet.desc \"Rack \\\"A\\\" \\\\ \\#1\"\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups device.model");
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.model \"Back-UPS \\\"X\\\"\"\n", printer.getOutput().c_str());
 
     printer.clear();
     server.processCommand(printer, 0, "LIST VAR testups");
-    TEST_ASSERT_EQUAL_STRING("BEGIN LIST VAR testups\n"
-                             "VAR testups ups.status \"OL\"\n"
-                             "VAR testups ups.model \"Back-UPS \\\"XS\\\" 700\\\\\"\n"
-                             "END LIST VAR testups\n",
+    TEST_ASSERT_TRUE(outputHas("\nVAR testups outlet.desc \"Rack \\\"A\\\" \\\\ \\#1\"\n"));
+    TEST_ASSERT_TRUE(outputHas("\nVAR testups device.model \"Back-UPS \\\"X\\\"\"\n"));
+    TEST_ASSERT_TRUE(outputHas("\nVAR testups ups.model \"Back-UPS \\\"X\\\"\"\n"));
+    // Plain values unchanged
+    TEST_ASSERT_TRUE(outputHas("\nVAR testups battery.charge.low \"20\"\n"));
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST RW testups");
+    TEST_ASSERT_EQUAL_STRING(
+        "BEGIN LIST RW testups\n"
+        "RW testups battery.charge.low \"20\"\n"
+        "RW testups input.sensitivity \"normal\"\n"
+        "RW testups outlet.desc \"Rack \\\"A\\\" \\\\ \\#1\"\n"
+        "END LIST RW testups\n",
+        printer.getOutput().c_str());
+}
+
+// state_addenum() stores the ENUM values already encoded
+void test_enum_values_are_escaped(void) {
+    mockHost.data.set("ups.test.mode", "a");
+    mockHost.rw = { { "ups.test.mode", 10, { "a", "say \"hi\"", "#2" } } };
+    server.processCommand(printer, 0, "LIST ENUM testups ups.test.mode");
+    TEST_ASSERT_EQUAL_STRING(
+        "BEGIN LIST ENUM testups ups.test.mode\n"
+        "ENUM testups ups.test.mode \"a\"\n"
+        "ENUM testups ups.test.mode \"say \\\"hi\\\"\"\n"
+        "ENUM testups ups.test.mode \"\\#2\"\n"
+        "END LIST ENUM testups ups.test.mode\n",
+        printer.getOutput().c_str());
+}
+
+// Regression guard: get_desc() / get_cmddesc() of netget.c send the text without
+// pconf_encode(). No text of cmdvartab has #, \ or ", so this pins the line format and
+// cannot tell an escaped description from a raw one
+void test_desc_and_cmddesc_lines_unchanged(void) {
+    server.processCommand(printer, 0, "GET DESC testups battery.runtime.low");
+    TEST_ASSERT_EQUAL_STRING("DESC testups battery.runtime.low \"Remaining battery runtime when UPS switches to LB (seconds)\"\n",
+                             printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET CMDDESC testups load.off");
+    TEST_ASSERT_EQUAL_STRING("CMDDESC testups load.off \"Turn off the load immediately\"\n", printer.getOutput().c_str());
+}
+
+// ---- UPS name never empty, no fallback without it (US-082) ----
+
+void test_ups_name_rules(void) {
+    TEST_ASSERT_EQUAL_STRING("ups", NUTServer::defaultUpsName().c_str());
+    TEST_ASSERT_EQUAL_STRING("ups", NUTServer::normalizeUpsName("").c_str());
+    TEST_ASSERT_EQUAL_STRING("eaton", NUTServer::normalizeUpsName("eaton").c_str());
+    TEST_ASSERT_EQUAL_STRING("ups", NUTServer::normalizeUpsName("ups").c_str());
+
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("ups"));
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("eaton"));
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("Back-UPS_1"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName(""));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("my ups"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a\tb"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("citt\xc3\xa0"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a\x7f"));
+    // Edges of the printable range
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("!"));
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("~"));
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("[ups]"));
+    // pconf quote, escape and comment; @ splits "ups@host" in upscli_splitname()
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a\"b"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a\\b"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a#b"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a@b"));
+}
+
+// Malformed LIST/GET lines: INVALID-ARGUMENT as net_list() / net_get(), commands in any case
+void test_malformed_list_and_get_are_invalid(void) {
+    setupWritable();
+    const char* lines[] = {
+        "LIST", "LIST FOO", "LIST ENUM testups", "LIST RANGE testups",
+        "GET", "GET FOO testups", "GET VAR testups", "list var", "Get Var battery.charge",
+    };
+    for (const char* line : lines) {
+        printer.clear();
+        server.processCommand(printer, 0, line);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("ERR INVALID-ARGUMENT\n", printer.getOutput().c_str(), line);
+    }
+    // Lowercase commands with the UPS name work as before
+    printer.clear();
+    server.processCommand(printer, 0, "list var testups");
+    TEST_ASSERT_EQUAL_INT(0, (int)printer.getOutput().find("BEGIN LIST VAR testups\n"));
+}
+
+// list_cmd() / list_clients() of netlist.c: unknown UPS → UNKNOWN-UPS; list_cmd() also
+// checks ups_available() (stale data → DATA-STALE)
+void test_list_cmd_and_client_unknown_ups(void) {
+    server.processCommand(printer, 0, "LIST CMD wrongups");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "LIST CLIENT wrongups");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "LIST CMD TestUPS");
+    TEST_ASSERT_EQUAL_INT(0, (int)printer.getOutput().find("BEGIN LIST CMD TestUPS\n"));
+
+    printer.clear();
+    mockHost.stale = true;
+    server.processCommand(printer, 0, "LIST CMD testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+    // list_clients() does not call ups_available()
+    printer.clear();
+    server.processCommand(printer, 0, "LIST CLIENT testups");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST CLIENT testups\nEND LIST CLIENT testups\n", printer.getOutput().c_str());
+}
+
+// A configuration with an empty name (first Wi-Fi setup before US-082) serves "ups"
+void test_empty_ups_name_defaults_to_ups(void) {
+    NUTServerConfig config;
+    config.ups_name = "";
+    NUTServer local;
+    local.begin(config, &mockHost, 3493);
+
+    local.processCommand(printer, 0, "LIST UPS");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST UPS\nUPS ups \"ESP32-S3 UPS Bridge\"\nEND LIST UPS\n",
+                             printer.getOutput().c_str());
+    printer.clear();
+    local.processCommand(printer, 0, "LIST VAR ups");
+    TEST_ASSERT_EQUAL_INT(0, (int)printer.getOutput().find("BEGIN LIST VAR ups\n"));
+    // An empty name no longer matches, as get_ups_ptr("") of upsd
+    printer.clear();
+    local.processCommand(printer, 0, "LIST VAR \"\"");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
+}
+
+void test_commands_without_ups_name_are_invalid(void) {
+    setupWritable();
+    const char* lines[] = {
+        "LIST VAR", "LIST RW", "LIST CMD", "LIST CLIENT",
+        "LIST ENUM input.sensitivity", "LIST RANGE battery.charge.low",
+        "GET VAR battery.charge", "GET TYPE battery.charge", "GET DESC battery.charge",
+        "GET CMDDESC load.off", "GET UPSDESC", "GET NUMLOGINS",
+    };
+    for (const char* line : lines) {
+        printer.clear();
+        server.processCommand(printer, 0, line);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("ERR INVALID-ARGUMENT\n", printer.getOutput().c_str(), line);
+    }
+}
+
+void test_unknown_list_subcommand_is_invalid(void) {
+    server.processCommand(printer, 0, "LIST FOO testups");
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "LIST UPS");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST UPS\nUPS testups \"ESP32-S3 UPS Bridge\"\nEND LIST UPS\n",
                              printer.getOutput().c_str());
 }
 
-void test_log_callback_receives_server_messages(void) {
-    server.setLogCallback(captureLog);
-    NUTServerConfig config;
-    config.ups_name = "testups";
-    server.begin(config, &mockHost, 3493);
-    server.processCommand(printer, 2, "LOGOUT");
+// upsrw sends the value escaped, the server stores it raw and sends it escaped again
+void test_set_var_escaped_round_trip(void) {
+    setupSettable();
+    mockHost.storeOnSet = true;
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups outlet.desc \"Rack \\\"A\\\" \\\\ \\#1\"").c_str());
+    TEST_ASSERT_EQUAL_STRING("Rack \"A\" \\ #1", mockHost.data.get("outlet.desc").c_str());
+    TEST_ASSERT_EQUAL_STRING("VAR testups outlet.desc \"Rack \\\"A\\\" \\\\ \\#1\"\n",
+                             request(0, "GET VAR testups outlet.desc").c_str());
+}
 
-    TEST_ASSERT_EQUAL(2, (int)logged.size());
-    TEST_ASSERT_EQUAL_STRING("INFO", logged[0].first.c_str());
-    TEST_ASSERT_EQUAL_STRING("[NUTServer] Server listening on port 3493", logged[0].second.c_str());
-    TEST_ASSERT_EQUAL_STRING("INFO", logged[1].first.c_str());
-    TEST_ASSERT_EQUAL_STRING("[NUTServer] Session for slot 2 closed.", logged[1].second.c_str());
+// --- Slot dei client (US-084) ---
+
+static void openClients(int n) {
+    for (int i = 0; i < n; i++) {
+        String ip = String("10.0.0.") + String(i + 1);
+        TEST_ASSERT_EQUAL(i, server.openSession(ip, (uint16_t)(50000 + i)));
+    }
+}
+
+static size_t countLogs(const char* needle) {
+    size_t n = 0;
+    for (const auto& l : logLines) {
+        if (l.find(needle) != std::string::npos) n++;
+    }
+    return n;
+}
+
+void test_eight_clients_then_rejected(void) {
+    openClients(8);
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.99", 50099));
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("WARN [NUT] Connection from 10.0.0.99 rejected: all 8 slots in use "
+                             "(10.0.0.1, 10.0.0.2, 10.0.0.3, 10.0.0.4, 10.0.0.5, 10.0.0.6, 10.0.0.7, 10.0.0.8)",
+                             logLines[0].c_str());
+}
+
+// Connessioni e chiusure normali non vanno nel System Log
+void test_open_and_logout_do_not_log(void) {
+    openClients(2);
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(1, "LOGOUT").c_str());
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
+void test_logout_frees_the_slot_for_reuse(void) {
+    openClients(8);
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(3, "LOGOUT").c_str());
+    TEST_ASSERT_EQUAL(3, server.openSession("10.0.0.50", 50050));
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.51", 50051));
+}
+
+// Un client che riprova di continuo: una riga ogni NUT_LOG_INTERVAL_MS, con il conteggio
+void test_rejections_are_throttled(void) {
+    openClients(8);
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.99", 50099));
+    fakeNow += 10000;
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.99", 50100));
+    fakeNow += 10000;
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.99", 50101));
+    TEST_ASSERT_EQUAL(1, (int)countLogs("rejected"));
+    fakeNow += NUT_LOG_INTERVAL_MS - 20000;
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.98", 50102));
+    TEST_ASSERT_EQUAL(2, (int)countLogs("rejected"));
+    TEST_ASSERT_NOT_EQUAL(std::string::npos,
+                          logLines.back().find("Connection from 10.0.0.98 rejected: all 8 slots in use ("));
+    TEST_ASSERT_NOT_EQUAL(std::string::npos, logLines.back().find(") (2 more rejected since the last report)"));
+}
+
+void test_clients_summary_only_on_change(void) {
+    openClients(2);
+    server.loop();
+    TEST_ASSERT_EQUAL(0, (int)countLogs("Clients:"));  // prima dei 60 s
+    fakeNow += NUT_LOG_INTERVAL_MS;
+    server.loop();
+    TEST_ASSERT_EQUAL(1, (int)countLogs("Clients:"));
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Clients: 2/8 in use - 10.0.0.1, 10.0.0.2", logLines.back().c_str());
+
+    fakeNow += NUT_LOG_INTERVAL_MS;
+    server.loop();
+    TEST_ASSERT_EQUAL(1, (int)countLogs("Clients:"));  // nessun cambiamento
+
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(0, "LOGOUT").c_str());
+    fakeNow += 1000;
+    server.loop();
+    TEST_ASSERT_EQUAL(1, (int)countLogs("Clients:"));  // cambiato, ma entro 60 s dall'ultimo controllo
+    fakeNow += NUT_LOG_INTERVAL_MS;
+    server.loop();
+    TEST_ASSERT_EQUAL(2, (int)countLogs("Clients:"));
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Clients: 1/8 in use - 10.0.0.2", logLines.back().c_str());
+
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(1, "LOGOUT").c_str());
+    fakeNow += NUT_LOG_INTERVAL_MS;
+    server.loop();
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Clients: 0/8 in use", logLines.back().c_str());
+}
+
+void test_inactivity_close_is_logged(void) {
+    openClients(3);
+    server.closeSession(2, NUTServer::CloseReason::Inactivity);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Client 10.0.0.3 on slot 2 disconnected after 120 s of inactivity",
+                             logLines[0].c_str());
+    server.closeSession(1, NUTServer::CloseReason::PeerClosed);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL(1, server.openSession("10.0.0.60", 50060));
+}
+
+// US-127: a switch between Ethernet and Wi-Fi closes every session with one log line
+void test_link_change_closes_all_sessions(void) {
+    openClients(2);
+    TEST_ASSERT_EQUAL(2, (int)server.closeAllSessions(NUTServer::CloseReason::LinkChanged));
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Network link changed: 2 NUT clients disconnected", logLines[0].c_str());
+    // Every slot is free again
+    for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
+        String ip = String("10.0.1.") + String(i + 1);
+        TEST_ASSERT_EQUAL(i, server.openSession(ip, (uint16_t)(51000 + i)));
+    }
+}
+
+void test_link_change_without_sessions_logs_nothing(void) {
+    TEST_ASSERT_EQUAL(0, (int)server.closeAllSessions(NUTServer::CloseReason::LinkChanged));
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
+// --- Settings of the NUT Server page applied without a restart (US-124) ---
+
+static NUTServerConfig nutConfig(const char* user, const char* password, const char* name) {
+    NUTServerConfig c;
+    c.username = user;
+    c.password = password;
+    c.ups_name = name;
+    return c;
+}
+
+// USERNAME + PASSWORD on a slot, the reply to PASSWORD
+static std::string authenticate(int slot, const char* user, const char* password) {
+    request(slot, (std::string("USERNAME ") + user).c_str());
+    return request(slot, (std::string("PASSWORD ") + password).c_str());
+}
+
+void test_apply_same_config_keeps_sessions(void) {
+    openClients(2);
+    TEST_ASSERT_EQUAL_STRING("OK\n", authenticate(0, "admin", "secret").c_str());
+    NUTServer::ApplyResult r = server.applyConfig(nutConfig("admin", "secret", "testups"));
+    TEST_ASSERT_FALSE(r.changed);
+    TEST_ASSERT_EQUAL(0, (int)r.closed);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Settings unchanged: NUT clients stay connected", logLines[0].c_str());
+    // Both sessions are still open: the next client gets slot 2, and slot 0 is still
+    // authenticated
+    TEST_ASSERT_EQUAL(2, server.openSession("10.0.0.3", 50002));
+    mockHost.data.set("ups.beeper.status", "enabled");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "INSTCMD testups beeper.disable").c_str());
+}
+
+void test_apply_new_password_closes_all_sessions(void) {
+    openClients(3);
+    NUTServer::ApplyResult r = server.applyConfig(nutConfig("admin", "newpass", "testups"));
+    TEST_ASSERT_TRUE(r.changed);
+    TEST_ASSERT_EQUAL(3, (int)r.closed);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Settings applied (UPS name \"testups\"): 3 NUT clients disconnected",
+                             logLines[0].c_str());
+    // Every slot is free again
+    for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
+        String ip = String("10.0.2.") + String(i + 1);
+        TEST_ASSERT_EQUAL(i, server.openSession(ip, (uint16_t)(52000 + i)));
+    }
+}
+
+void test_apply_without_sessions_still_logs(void) {
+    NUTServer::ApplyResult r = server.applyConfig(nutConfig("newuser", "secret", "testups"));
+    TEST_ASSERT_TRUE(r.changed);
+    TEST_ASSERT_EQUAL(0, (int)r.closed);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Settings applied (UPS name \"testups\"): 0 NUT clients disconnected",
+                             logLines[0].c_str());
+}
+
+void test_old_password_denied_after_apply(void) {
+    openClients(1);
+    TEST_ASSERT_EQUAL_STRING("OK\n", authenticate(0, "admin", "secret").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "LOGIN testups").c_str());
+    server.applyConfig(nutConfig("admin", "newpass", "testups"));
+
+    // The client reconnects and tries the old password: denied, and so is the command
+    mockHost.data.set("ups.beeper.status", "enabled");
+    TEST_ASSERT_EQUAL(0, server.openSession("10.0.0.1", 50100));
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", authenticate(0, "admin", "secret").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
+
+    // With the new one the command runs
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "PASSWORD newpass").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+}
+
+void test_apply_new_username(void) {
+    server.applyConfig(nutConfig("operator", "secret", "testups"));
+    TEST_ASSERT_EQUAL(0, server.openSession("10.0.0.1", 50100));
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", authenticate(0, "admin", "secret").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", authenticate(0, "operator", "secret").c_str());
+}
+
+void test_apply_new_ups_name(void) {
+    mockHost.data.set("battery.charge", "100");
+    NUTServer::ApplyResult r = server.applyConfig(nutConfig("admin", "secret", "newups"));
+    TEST_ASSERT_TRUE(r.changed);
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Settings applied (UPS name \"newups\"): 0 NUT clients disconnected",
+                             logLines[0].c_str());
+
+    std::string list = request(0, "LIST UPS");
+    TEST_ASSERT_TRUE(list.find("UPS newups \"") != std::string::npos);
+    TEST_ASSERT_TRUE(list.find("testups") == std::string::npos);
+    TEST_ASSERT_EQUAL_STRING("VAR newups battery.charge \"100\"\n", request(0, "GET VAR newups battery.charge").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "GET VAR testups battery.charge").c_str());
+}
+
+// The empty name is normalized to "ups" as at boot: the same as a saved "ups"
+void test_apply_normalizes_ups_name(void) {
+    server.applyConfig(nutConfig("admin", "secret", ""));
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Settings applied (UPS name \"ups\"): 0 NUT clients disconnected",
+                             logLines[0].c_str());
+    TEST_ASSERT_TRUE(request(0, "LIST UPS").find("UPS ups \"") != std::string::npos);
+
+    openClients(1);
+    NUTServer::ApplyResult r = server.applyConfig(nutConfig("admin", "secret", "ups"));
+    TEST_ASSERT_FALSE(r.changed);
+    TEST_ASSERT_EQUAL(0, (int)r.closed);
+    r = server.applyConfig(nutConfig("admin", "secret", ""));
+    TEST_ASSERT_FALSE(r.changed);
+}
+
+void test_apply_log_never_contains_credentials(void) {
+    openClients(2);
+    server.applyConfig(nutConfig("operator", "S3cr3t-New", "testups"));
+    server.applyConfig(nutConfig("operator", "S3cr3t-New", "testups"));
+    TEST_ASSERT_EQUAL(2, (int)logLines.size());
+    for (const auto& l : logLines) {
+        TEST_ASSERT_TRUE_MESSAGE(l.find("secret") == std::string::npos, l.c_str());
+        TEST_ASSERT_TRUE_MESSAGE(l.find("S3cr3t-New") == std::string::npos, l.c_str());
+        TEST_ASSERT_TRUE_MESSAGE(l.find("operator") == std::string::npos, l.c_str());
+        TEST_ASSERT_TRUE_MESSAGE(l.find("admin") == std::string::npos, l.c_str());
+    }
+}
+
+// Before begin() (access point without a valid configuration) it only stores the settings
+void test_apply_before_begin(void) {
+    NUTServer fresh;
+    TEST_ASSERT_FALSE(fresh.isRunning());
+    TEST_ASSERT_TRUE(server.isRunning());
+    NUTServer::ApplyResult r = fresh.applyConfig(nutConfig("admin", "secret", "ups"));
+    TEST_ASSERT_TRUE(r.changed);
+    TEST_ASSERT_EQUAL(0, (int)r.closed);
+    r = fresh.applyConfig(nutConfig("admin", "secret", "ups"));
+    TEST_ASSERT_FALSE(r.changed);
+}
+
+// --- Optional NUT credentials as in NUT (US-125): with no users in upsd.users reading
+// is free and nobody may run commands or change variables ---
+
+// No NUT credentials, then client 10.0.0.1 on slot 0 with an empty log
+static void noCredentials() {
+    server.applyConfig(nutConfig("", "", "testups"));
+    openClients(1);
+    logLines.clear();
+}
+
+static const char* NO_CRED_LOG = "WARN [NUT] INSTCMD beeper.disable from 10.0.0.1: ERR %s (no NUT credentials set)";
+
+static std::string noCredLog(const char* err) {
+    char buf[160];
+    snprintf(buf, sizeof(buf), NO_CRED_LOG, err);
+    return buf;
+}
+
+void test_no_credentials_reads_are_free(void) {
+    noCredentials();
+    TEST_ASSERT_FALSE(server.hasCredentials());
+    mockHost.data.set("battery.charge", "100");
+    TEST_ASSERT_TRUE(request(0, "LIST UPS").find("UPS testups \"") != std::string::npos);
+    TEST_ASSERT_EQUAL_STRING("VAR testups battery.charge \"100\"\n", request(0, "GET VAR testups battery.charge").c_str());
+    TEST_ASSERT_EQUAL_INT(0, (int)request(0, "VER").find("Network UPS Tools esp32-nut"));
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
+void test_no_credentials_instcmd_refused_as_upsd(void) {
+    noCredentials();
+    mockHost.data.set("ups.beeper.status", "enabled");
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "USERNAME x").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "PASSWORD y").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
+    TEST_ASSERT_EQUAL(0, (int)mockHost.writes.size());
+    TEST_ASSERT_EQUAL(3, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING(noCredLog("USERNAME-REQUIRED").c_str(), logLines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING(noCredLog("PASSWORD-REQUIRED").c_str(), logLines[1].c_str());
+    TEST_ASSERT_EQUAL_STRING(noCredLog("ACCESS-DENIED").c_str(), logLines[2].c_str());
+}
+
+void test_no_credentials_set_var_refused_as_upsd(void) {
+    setupSettable();
+    noCredentials();
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    request(0, "USERNAME x");
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    request(0, "PASSWORD y");
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL(3, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge.low \"30\" from -: ERR USERNAME-REQUIRED", logLines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge.low \"30\" from x: ERR PASSWORD-REQUIRED", logLines[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge.low \"30\" from x: ERR ACCESS-DENIED", logLines[2].c_str());
+}
+
+// The one deviation from upsd: LOGIN stays allowed, so upsmon keeps connecting
+void test_no_credentials_login_allowed(void) {
+    noCredentials();
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "LOGIN testups").c_str());
+    TEST_ASSERT_EQUAL(1, server.openSession("10.0.0.2", 50001));
+    request(1, "USERNAME monuser");
+    request(1, "PASSWORD whatever");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(1, "LOGIN testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(1, "LOGIN other").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(0, "LOGOUT").c_str());
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
+// USERNAME "" and PASSWORD "" match the empty configured credentials: they must not
+// open the commands
+void test_empty_quoted_credentials_never_authorize(void) {
+    noCredentials();
+    setupSettable();
+    server.setAuthenticated(0, false);
+    server.setClientUsername(0, "");
+    mockHost.data.set("ups.beeper.status", "enabled");
+    request(0, "USERNAME \"\"");
+    request(0, "PASSWORD \"\"");
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+// A username without a password (an old configuration) counts as no credentials
+void test_username_without_password_is_no_credentials(void) {
+    server.applyConfig(nutConfig("admin", "", "testups"));
+    TEST_ASSERT_FALSE(server.hasCredentials());
+    openClients(1);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    // The saved username with an empty password matches the configuration
+    request(0, "USERNAME admin");
+    request(0, "PASSWORD \"\"");
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "LOGIN testups").c_str());
+}
+
+// With credentials nothing changes, and nothing new goes to the System Log
+void test_credentials_still_required_and_accepted(void) {
+    TEST_ASSERT_TRUE(server.hasCredentials());
+    openClients(1);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "LOGIN testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", authenticate(0, "admin", "secret").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
+// --- Custom variables of the NUT Server page (US-115): override.<var> of ups.conf,
+// drivers/main.c storeval (dstate_setinfo + ST_FLAG_IMMUTABLE + dparam_setinfo) ---
+
+static std::vector<NutOverride> overrides;
+
+static void addOverride(const char* key, const char* value, const char* desc = "") {
+    NutOverride o;
+    o.key = key;
+    o.value = value;
+    o.description = desc;
+    overrides.push_back(o);
+}
+
+// The list is reset and attached for each test; detached at the end so the other tests
+// run without overrides
+static void useOverrides() {
+    overrides.clear();
+    server.setOverrides(&overrides);
+}
+
+static size_t countOf(const std::string& text, const std::string& what) {
+    size_t n = 0;
+    for (size_t pos = text.find(what); pos != std::string::npos; pos = text.find(what, pos + 1)) n++;
+    return n;
+}
+
+void test_override_replaces_ups_value(void) {
+    useOverrides();
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.data.set("battery.charge", "100");
+    addOverride("ups.model", "Eaton 3S 700 studio");
+
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.model \"Eaton 3S 700 studio\"\n",
+                             request(0, "GET VAR testups ups.model").c_str());
+    std::string out = request(0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL(1, (int)countOf(out, "VAR testups ups.model "));
+    TEST_ASSERT_TRUE(out.find("VAR testups ups.model \"Eaton 3S 700 studio\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("Eaton 3S 700\"") == std::string::npos);
+    // The other values are untouched
+    TEST_ASSERT_TRUE(out.find("VAR testups battery.charge \"100\"\n") != std::string::npos);
+    server.setOverrides(nullptr);
+}
+
+void test_override_adds_missing_variable(void) {
+    useOverrides();
+    mockHost.data.set("battery.charge", "100");
+    addOverride("battery.date", "2025-03-01", "Battery replaced");
+
+    TEST_ASSERT_EQUAL_STRING("VAR testups battery.date \"2025-03-01\"\n",
+                             request(0, "GET VAR testups battery.date").c_str());
+    std::string out = request(0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL(1, (int)countOf(out, "VAR testups battery.date "));
+    // After the UPS variables, before END
+    TEST_ASSERT_TRUE(out.find("VAR testups battery.date") > out.find("VAR testups battery.charge"));
+    TEST_ASSERT_TRUE(out.find("VAR testups battery.date") < out.find("END LIST VAR testups"));
+    // Without the override the variable is gone
+    overrides.clear();
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "GET VAR testups battery.date").c_str());
+    server.setOverrides(nullptr);
+}
+
+void test_override_publishes_driver_parameter(void) {
+    useOverrides();
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    addOverride("ups.model", "Studio");
+    addOverride("battery.date", "2025-03-01");
+
+    std::string out = request(0, "LIST VAR testups");
+    TEST_ASSERT_TRUE(out.find("VAR testups driver.parameter.override.ups.model \"Studio\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups driver.parameter.override.battery.date \"2025-03-01\"\n") != std::string::npos);
+    TEST_ASSERT_EQUAL_STRING("VAR testups driver.parameter.override.battery.date \"2025-03-01\"\n",
+                             request(0, "GET VAR testups driver.parameter.override.battery.date").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n",
+                             request(0, "GET VAR testups driver.parameter.override.battery.type").c_str());
+    // No description in cmdvartab, as upstream
+    TEST_ASSERT_EQUAL_STRING("DESC testups driver.parameter.override.battery.date \"Description unavailable\"\n",
+                             request(0, "GET DESC testups driver.parameter.override.battery.date").c_str());
+    server.setOverrides(nullptr);
+}
+
+void test_override_reaches_device_alias(void) {
+    useOverrides();
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.data.set("ups.mfr", "EATON");
+    addOverride("ups.model", "Studio");
+
+    // The copy ups.* -> device.* of drivers/main.c sees the overridden ups.model
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.model \"Studio\"\n", request(0, "GET VAR testups device.model").c_str());
+    std::string out = request(0, "LIST VAR testups");
+    TEST_ASSERT_TRUE(out.find("VAR testups device.model \"Studio\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups device.mfr \"EATON\"\n") != std::string::npos);
+
+    // An override of the alias itself wins, and is listed once
+    addOverride("device.model", "Rack 2");
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.model \"Rack 2\"\n", request(0, "GET VAR testups device.model").c_str());
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.model \"Studio\"\n", request(0, "GET VAR testups ups.model").c_str());
+    out = request(0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL(1, (int)countOf(out, "VAR testups device.model "));
+    TEST_ASSERT_TRUE(out.find("VAR testups device.model \"Rack 2\"\n") != std::string::npos);
+
+    // The alias exists also when the UPS reports no ups.serial
+    addOverride("ups.serial", "SN-1");
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.serial \"SN-1\"\n", request(0, "GET VAR testups device.serial").c_str());
+    out = request(0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL(1, (int)countOf(out, "VAR testups device.serial "));
+    TEST_ASSERT_EQUAL(1, (int)countOf(out, "VAR testups ups.serial "));
+    server.setOverrides(nullptr);
+}
+
+void test_overridden_rw_variable_is_read_only(void) {
+    setupSettable();
+    useOverrides();
+    addOverride("battery.charge.low", "30");
+
+    std::string out = request(0, "LIST RW testups");
+    TEST_ASSERT_TRUE(out.find("battery.charge.low") == std::string::npos);
+    TEST_ASSERT_TRUE(out.find("RW testups input.sensitivity \"normal\"\n") != std::string::npos);
+    TEST_ASSERT_EQUAL_STRING("TYPE testups battery.charge.low STRING:64\n",
+                             request(0, "GET TYPE testups battery.charge.low").c_str());
+    TEST_ASSERT_EQUAL_STRING("TYPE testups input.sensitivity RW ENUM STRING:10\n",
+                             request(0, "GET TYPE testups input.sensitivity").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups battery.charge.low 25").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups BATTERY.CHARGE.LOW 25").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    // An override of a variable the UPS does not report is read-only as well
+    addOverride("battery.date", "2025-03-01");
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups battery.date 2026").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    // The others are still writable
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups ups.load.high 80").c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+    server.setOverrides(nullptr);
+}
+
+void test_override_description(void) {
+    useOverrides();
+    mockHost.data.set("battery.charge.low", "20");
+    addOverride("battery.date", "2025-03-01", "Battery replaced");
+    addOverride("battery.charge.low", "30", "My threshold");
+    addOverride("custom.note", "x", "");
+
+    TEST_ASSERT_EQUAL_STRING("DESC testups battery.date \"Battery replaced\"\n",
+                             request(0, "GET DESC testups battery.date").c_str());
+    // cmdvartab keeps its text
+    TEST_ASSERT_EQUAL_STRING("DESC testups battery.charge.low \"Remaining battery level when UPS switches to LB (percent)\"\n",
+                             request(0, "GET DESC testups battery.charge.low").c_str());
+    TEST_ASSERT_EQUAL_STRING("DESC testups custom.note \"Description unavailable\"\n",
+                             request(0, "GET DESC testups custom.note").c_str());
+    server.setOverrides(nullptr);
+}
+
+void test_overrides_not_served_when_stale(void) {
+    useOverrides();
+    addOverride("battery.date", "2025-03-01");
+    mockHost.stale = true;
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", request(0, "LIST VAR testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", request(0, "GET VAR testups battery.date").c_str());
+    server.setOverrides(nullptr);
+}
+
+void test_override_lookup_ignores_case(void) {
+    useOverrides();
+    mockHost.data.set("input.voltage", "230");
+    addOverride("battery.date", "2025-03-01");
+    addOverride("input.L1-N.voltage", "231");
+
+    TEST_ASSERT_EQUAL_STRING("VAR testups BATTERY.DATE \"2025-03-01\"\n",
+                             request(0, "GET VAR testups BATTERY.DATE").c_str());
+    TEST_ASSERT_EQUAL_STRING("VAR testups input.l1-n.voltage \"231\"\n",
+                             request(0, "GET VAR testups input.l1-n.voltage").c_str());
+    // Listed under the name it was saved with
+    std::string out = request(0, "LIST VAR testups");
+    TEST_ASSERT_TRUE(out.find("VAR testups input.L1-N.voltage \"231\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups driver.parameter.override.input.L1-N.voltage \"231\"\n") != std::string::npos);
+    server.setOverrides(nullptr);
+}
+
+void test_override_values_are_escaped(void) {
+    useOverrides();
+    addOverride("custom.text", "say \"hi\" \\ #1");
+    TEST_ASSERT_EQUAL_STRING("VAR testups custom.text \"say \\\"hi\\\" \\\\ \\#1\"\n",
+                             request(0, "GET VAR testups custom.text").c_str());
+    server.setOverrides(nullptr);
+}
+
+// --- Fork: counters, PROTVER/STARTTLS, upsmon PRIMARY/FSD, replies outside the USB lock ---
+
+static std::string reply(int slot, const char* command) {
+    printer.clear();
+    server.processCommand(printer, slot, command);
+    return printer.getOutput();
 }
 
 void test_stats_count_commands_and_auth_failures(void) {
@@ -524,7 +2535,6 @@ void test_stats_count_commands_and_auth_failures(void) {
     const NUTServer::Stats& stats = server.stats();
     TEST_ASSERT_EQUAL_UINT32(5, stats.commands);
     TEST_ASSERT_EQUAL_UINT32(1, stats.authFailures);
-    // Connection lifecycle counters move only in loop(), on the target.
     TEST_ASSERT_EQUAL_UINT32(0, stats.accepted);
     TEST_ASSERT_EQUAL_UINT32(0, stats.rejected);
     TEST_ASSERT_EQUAL_UINT32(0, stats.idleTimeouts);
@@ -533,60 +2543,14 @@ void test_stats_count_commands_and_auth_failures(void) {
     TEST_ASSERT_EQUAL(3493, server.port());
 }
 
-// These describe the UPS rather than its readings, so they keep answering;
-// go.nut's NewUPS() needs them before it lists variables.
-static const char* const handshakeCommands[] = {
-    "LIST UPS",
-    "LIST CMD testups",
-    "GET UPSDESC testups",
-    "GET NUMLOGINS testups",
-};
-
-static void assertVarReadsRefusedWith(const char* expected) {
-    const char* reads[] = {
-        "LIST VAR testups",
-        "GET VAR testups battery.charge",
-        "GET VAR testups ups.status",
-    };
-    for (const char* command : reads) {
-        printer.clear();
-        server.processCommand(printer, 0, command);
-        TEST_ASSERT_EQUAL_STRING_MESSAGE(expected, printer.getOutput().c_str(), command);
-    }
-    for (const char* command : handshakeCommands) {
-        printer.clear();
-        server.processCommand(printer, 0, command);
-        std::string out = printer.getOutput();
-        TEST_ASSERT_TRUE_MESSAGE(out.size() > 0, command);
-        TEST_ASSERT_TRUE_MESSAGE(out.find("ERR ") == std::string::npos, command);
-    }
-}
-
-// Also before the host calls a missing UPS stale (its boot grace): the firmware
-// is the driver, so nothing to read is stale data, as upsd reports until the
-// driver's first dump.
-void test_var_reads_refused_while_disconnected(void) {
-    mockHost.data.set("battery.charge", "95");
-    mockHost.connected = false;
-    assertVarReadsRefusedWith("ERR DATA-STALE\n");
-
-    // As in upsd, the UPS name is checked first.
-    printer.clear();
-    server.processCommand(printer, 0, "LIST VAR wrongups");
-    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
-}
-
-void test_var_reads_refused_without_ups(void) {
-    NUTServerConfig config;
-    config.ups_name = "testups";
-    server.begin(config, nullptr, 3493);
-    assertVarReadsRefusedWith("ERR DRIVER-NOT-CONNECTED\n");
-}
-
-static std::string reply(int slot, const char* command) {
-    printer.clear();
-    server.processCommand(printer, slot, command);
-    return printer.getOutput();
+void test_stats_count_accepted_and_rejected_sessions(void) {
+    openClients(8);
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.99", 50099));
+    TEST_ASSERT_EQUAL_UINT32(8, server.stats().accepted);
+    TEST_ASSERT_EQUAL_UINT32(1, server.stats().rejected);
+    TEST_ASSERT_EQUAL(8, server.connectedClients());
+    request(3, "LOGOUT");
+    TEST_ASSERT_EQUAL(7, server.connectedClients());
 }
 
 void test_protver_answers_as_netver(void) {
@@ -611,8 +2575,11 @@ void test_numlogins_counts_logged_in_sessions(void) {
     TEST_ASSERT_EQUAL_STRING("NUMLOGINS testups 2\n", reply(3, "GET NUMLOGINS testups").c_str());
 
     // Refused logins do not count.
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", reply(2, "LOGIN testups").c_str());
+    server.setClientUsername(2, "admin");
+    server.processCommand(printer, 2, "PASSWORD wrong");
     TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(2, "LOGIN testups").c_str());
-    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", reply(2, "LOGIN wrongups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", reply(1, "LOGIN wrongups").c_str());
     TEST_ASSERT_EQUAL_STRING("NUMLOGINS testups 2\n", reply(3, "GET NUMLOGINS testups").c_str());
 
     TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", reply(0, "LOGOUT").c_str());
@@ -622,10 +2589,13 @@ void test_numlogins_counts_logged_in_sessions(void) {
 }
 
 void test_primary_and_master_need_authentication(void) {
-    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "PRIMARY testups").c_str());
-    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "MASTER testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", reply(0, "PRIMARY testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", reply(0, "MASTER testups").c_str());
 
     TEST_ASSERT_EQUAL_STRING("OK\n", reply(0, "USERNAME admin").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", reply(0, "PRIMARY testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "PASSWORD wrong").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "PRIMARY testups").c_str());
     TEST_ASSERT_EQUAL_STRING("OK\n", reply(0, "PASSWORD secret").c_str());
     TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", reply(0, "PRIMARY").c_str());
     TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", reply(0, "PRIMARY wrongups").c_str());
@@ -671,14 +2641,13 @@ void test_fsd_needs_primary(void) {
 void test_fsd_stays_in_ups_status(void) {
     // Secondaries shut down on seeing FSD, so it must outlive the primary's
     // session and any later change in the UPS's own status.
-    server.setLogCallback(captureLog);
     server.setAuthenticated(0, true);
     reply(0, "PRIMARY testups");
     TEST_ASSERT_EQUAL_STRING("OK FSD-SET\n", reply(0, "FSD testups").c_str());
+    TEST_ASSERT_TRUE(server.forcedShutdown());
 
-    TEST_ASSERT_EQUAL(1, (int)logged.size());
-    TEST_ASSERT_EQUAL_STRING("WARN", logged[0].first.c_str());
-    TEST_ASSERT_TRUE(logged[0].second.find("FSD set on testups") != std::string::npos);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_TRUE(logLines[0].rfind("WARN [NUT] FSD set on testups", 0) == 0);
 
     TEST_ASSERT_EQUAL_STRING("VAR testups ups.status \"OL FSD\"\n",
                              reply(1, "GET VAR testups ups.status").c_str());
@@ -689,6 +2658,7 @@ void test_fsd_stays_in_ups_status(void) {
                              reply(1, "GET VAR testups ups.status").c_str());
     TEST_ASSERT_EQUAL_STRING("BEGIN LIST VAR testups\n"
                              "VAR testups ups.status \"OB LB FSD\"\n"
+                             "VAR testups device.type \"ups\"\n"
                              "END LIST VAR testups\n",
                              reply(1, "LIST VAR testups").c_str());
 
@@ -698,25 +2668,13 @@ void test_fsd_stays_in_ups_status(void) {
                              reply(1, "GET VAR testups ups.status").c_str());
 }
 
-void test_set_var_is_refused(void) {
-    mockHost.data.set("battery.charge", "95");
-    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", reply(0, "SET VAR testups battery.charge 50").c_str());
-
-    server.setAuthenticated(0, true);
-    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", reply(0, "SET VAR testups battery.charge 50").c_str());
-    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", reply(0, "set var testups UPS.STATUS \"OL\"").c_str());
-    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", reply(0, "SET VAR testups input.voltage 230").c_str());
-    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", reply(0, "SET VAR wrongups battery.charge 50").c_str());
-    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", reply(0, "SET VAR testups battery.charge").c_str());
-    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", reply(0, "SET TRACKING ON").c_str());
-}
-
 void test_driver_info_listed_like_other_variables(void) {
     CyberPowerDriver driver;
     driver.publishDriverInfo(mockHost.data);
 
     TEST_ASSERT_EQUAL_STRING("BEGIN LIST VAR testups\n"
                              "VAR testups ups.status \"OL\"\n"
+                             "VAR testups device.type \"ups\"\n"
                              "VAR testups driver.name \"esp32-nut\"\n"
                              "VAR testups driver.version \"dev\"\n"
                              "VAR testups driver.version.data \"CyberPowerDriver\"\n"
@@ -726,16 +2684,42 @@ void test_driver_info_listed_like_other_variables(void) {
                              reply(0, "GET VAR testups driver.version.data").c_str());
 }
 
+// Each write() stands for one NetworkClient::write, which blocks for up to 10 s
+// once the peer stops reading.
+class SocketPrinter : public MemoryPrinter {
+public:
+    int writes = 0;
+    int writesUnderLock = 0;
+
+    size_t write(uint8_t c) override {
+        record();
+        return MemoryPrinter::write(c);
+    }
+
+    size_t write(const uint8_t *b, size_t size) override {
+        record();
+        return MemoryPrinter::write(b, size);
+    }
+
+private:
+    void record() {
+        writes++;
+        if (mockHost.lockDepth > 0) writesUnderLock++;
+    }
+};
+
 void test_replies_written_once_outside_usb_lock(void) {
     // Every write can block the loop for 10 s on a peer that stops reading, and
     // one made under the USB data lock stalls the USB task along with it.
     mockHost.data.set("ups.beeper.status", "enabled");
     mockHost.data.set("battery.charge", "95");
+    setupWritable();
     server.setAuthenticated(0, true);
 
     const char* commands[] = {
         "LIST UPS",
         "LIST VAR testups",
+        "LIST RW testups",
         "LIST CMD testups",
         "LIST ENUM testups battery.charge",
         "GET VAR testups battery.charge",
@@ -749,12 +2733,22 @@ void test_replies_written_once_outside_usb_lock(void) {
         server.processCommand(socket, 0, command);
         TEST_ASSERT_EQUAL_INT_MESSAGE(1, socket.writes, command);
         TEST_ASSERT_EQUAL_INT_MESSAGE(0, socket.writesUnderLock, command);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, mockHost.lockDepth, command);
     }
 }
 
 #ifndef ARDUINO
 int main(int argc, char **argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_override_replaces_ups_value);
+    RUN_TEST(test_override_adds_missing_variable);
+    RUN_TEST(test_override_publishes_driver_parameter);
+    RUN_TEST(test_override_reaches_device_alias);
+    RUN_TEST(test_overridden_rw_variable_is_read_only);
+    RUN_TEST(test_override_description);
+    RUN_TEST(test_overrides_not_served_when_stale);
+    RUN_TEST(test_override_lookup_ignores_case);
+    RUN_TEST(test_override_values_are_escaped);
     RUN_TEST(test_split_tokens);
     RUN_TEST(test_auth_flow);
     RUN_TEST(test_list_ups);
@@ -765,16 +2759,111 @@ int main(int argc, char **argv) {
     RUN_TEST(test_list_cmd_unaffected_by_client);
     RUN_TEST(test_get_upsdesc_and_numlogins);
     RUN_TEST(test_get_desc_and_type);
+    RUN_TEST(test_list_rw_with_values);
+    RUN_TEST(test_list_rw_errors_and_empty);
+    RUN_TEST(test_get_type_of_writable_variables);
+    RUN_TEST(test_list_enum_and_range);
+    RUN_TEST(test_get_desc_of_table_variables);
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_data_stale);
     RUN_TEST(test_disconnected_is_stale);
-    RUN_TEST(test_list_var_full_output);
-    RUN_TEST(test_quoted_values_are_escaped);
-    RUN_TEST(test_log_callback_receives_server_messages);
+    RUN_TEST(test_device_aliases);
+    RUN_TEST(test_get_var_echoes_client_var_name);
+    RUN_TEST(test_internal_status_keys_are_not_variables);
+    RUN_TEST(test_list_cmd_from_descriptor);
+    RUN_TEST(test_list_cmd_empty_when_disconnected);
+    RUN_TEST(test_unsupported_ups_answers_as_no_ups);
+    RUN_TEST(test_list_cmd_without_controllable_beeper);
+    RUN_TEST(test_cmddesc_known_and_unknown);
+    RUN_TEST(test_instcmd_battery_test_writes_value);
+    RUN_TEST(test_instcmd_not_in_catalog);
+    RUN_TEST(test_instcmd_driver_not_connected);
+    RUN_TEST(test_instcmd_write_failed);
+    RUN_TEST(test_instcmd_requires_login);
+    RUN_TEST(test_login_requires_credentials);
+    RUN_TEST(test_instcmd_shutdown_sequences);
+    RUN_TEST(test_instcmd_stayoff_writes_minus_one_as_twos_complement);
+    RUN_TEST(test_instcmd_uses_configured_delays);
+    RUN_TEST(test_instcmd_without_configured_delays);
+    RUN_TEST(test_instcmd_param_too_large_for_field);
+    RUN_TEST(test_instcmd_invalid_argument);
+    RUN_TEST(test_instcmd_sequence_stops_at_first_failed_write);
+    RUN_TEST(test_instcmd_shutdown_requires_login);
+    RUN_TEST(test_instcmd_shutdown_default_fallback);
+    RUN_TEST(test_instcmd_shutdown_default_all_fail);
+    RUN_TEST(test_instcmd_shutdown_default_without_groups);
+    RUN_TEST(test_list_cmd_includes_shutdown_default);
+    RUN_TEST(test_instcmd_beeper_failure_and_toggle);
+    RUN_TEST(test_instcmd_beeper_mute_and_toggle_from_muted);
+    RUN_TEST(test_set_malformed_is_invalid_argument);
+    RUN_TEST(test_set_var_unknown_ups);
+    RUN_TEST(test_set_var_driver_not_connected);
+    RUN_TEST(test_set_var_data_stale);
+    RUN_TEST(test_set_var_access_denied);
+    RUN_TEST(test_set_var_not_supported_and_readonly);
+    RUN_TEST(test_set_var_aux_zero_is_set_failed);
+    RUN_TEST(test_set_var_too_long);
+    RUN_TEST(test_set_var_invalid_enum_value);
+    RUN_TEST(test_set_var_check_order);
+    RUN_TEST(test_set_var_canonical_name);
+    RUN_TEST(test_set_var_quoted_values);
+    RUN_TEST(test_set_var_synchronous_outcome);
+    RUN_TEST(test_upsrw_tracking_sequence);
+    RUN_TEST(test_tracking_outcomes);
+    RUN_TEST(test_tracking_validation_error_is_immediate);
+    RUN_TEST(test_get_and_set_tracking);
+    RUN_TEST(test_tracking_unknown_and_expired_id);
+    RUN_TEST(test_tracking_age_across_millis_wrap);
+    RUN_TEST(test_tracking_table_drops_oldest);
+    RUN_TEST(test_tracking_is_per_session);
+    RUN_TEST(test_set_var_rejections_are_logged);
+    RUN_TEST(test_tracking_id_format);
+    RUN_TEST(test_upscmd_tracking_sequence);
+    RUN_TEST(test_instcmd_tracking_failed);
+    RUN_TEST(test_instcmd_tracking_invalid_argument);
+    RUN_TEST(test_instcmd_tracking_validation_errors_are_immediate);
+    RUN_TEST(test_instcmd_tracking_shares_table_with_set_var);
+    RUN_TEST(test_instcmd_tracking_is_per_session);
+    RUN_TEST(test_instcmd_without_tracking_unchanged);
+    RUN_TEST(test_split_tokens_pconf);
+    RUN_TEST(test_encode_value);
+    RUN_TEST(test_var_replies_are_escaped);
+    RUN_TEST(test_enum_values_are_escaped);
+    RUN_TEST(test_desc_and_cmddesc_lines_unchanged);
+    RUN_TEST(test_set_var_escaped_round_trip);
+    RUN_TEST(test_ups_name_rules);
+    RUN_TEST(test_empty_ups_name_defaults_to_ups);
+    RUN_TEST(test_commands_without_ups_name_are_invalid);
+    RUN_TEST(test_unknown_list_subcommand_is_invalid);
+    RUN_TEST(test_malformed_list_and_get_are_invalid);
+    RUN_TEST(test_list_cmd_and_client_unknown_ups);
+    RUN_TEST(test_eight_clients_then_rejected);
+    RUN_TEST(test_open_and_logout_do_not_log);
+    RUN_TEST(test_logout_frees_the_slot_for_reuse);
+    RUN_TEST(test_rejections_are_throttled);
+    RUN_TEST(test_clients_summary_only_on_change);
+    RUN_TEST(test_inactivity_close_is_logged);
+    RUN_TEST(test_link_change_closes_all_sessions);
+    RUN_TEST(test_link_change_without_sessions_logs_nothing);
+    RUN_TEST(test_apply_same_config_keeps_sessions);
+    RUN_TEST(test_apply_new_password_closes_all_sessions);
+    RUN_TEST(test_apply_without_sessions_still_logs);
+    RUN_TEST(test_old_password_denied_after_apply);
+    RUN_TEST(test_apply_new_username);
+    RUN_TEST(test_apply_new_ups_name);
+    RUN_TEST(test_apply_normalizes_ups_name);
+    RUN_TEST(test_apply_log_never_contains_credentials);
+    RUN_TEST(test_apply_before_begin);
+    RUN_TEST(test_no_credentials_reads_are_free);
+    RUN_TEST(test_no_credentials_instcmd_refused_as_upsd);
+    RUN_TEST(test_no_credentials_set_var_refused_as_upsd);
+    RUN_TEST(test_no_credentials_login_allowed);
+    RUN_TEST(test_empty_quoted_credentials_never_authorize);
+    RUN_TEST(test_username_without_password_is_no_credentials);
+    RUN_TEST(test_credentials_still_required_and_accepted);
     RUN_TEST(test_stats_count_commands_and_auth_failures);
-    RUN_TEST(test_var_reads_refused_while_disconnected);
-    RUN_TEST(test_var_reads_refused_without_ups);
+    RUN_TEST(test_stats_count_accepted_and_rejected_sessions);
     RUN_TEST(test_protver_answers_as_netver);
     RUN_TEST(test_starttls_not_supported);
     RUN_TEST(test_numlogins_counts_logged_in_sessions);
@@ -782,7 +2871,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_primary_refused_without_credentials_configured);
     RUN_TEST(test_fsd_needs_primary);
     RUN_TEST(test_fsd_stays_in_ups_status);
-    RUN_TEST(test_set_var_is_refused);
     RUN_TEST(test_driver_info_listed_like_other_variables);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     return UNITY_END();
@@ -800,16 +2888,91 @@ void setup() {
     RUN_TEST(test_list_cmd_unaffected_by_client);
     RUN_TEST(test_get_upsdesc_and_numlogins);
     RUN_TEST(test_get_desc_and_type);
+    RUN_TEST(test_list_rw_with_values);
+    RUN_TEST(test_list_rw_errors_and_empty);
+    RUN_TEST(test_get_type_of_writable_variables);
+    RUN_TEST(test_list_enum_and_range);
+    RUN_TEST(test_get_desc_of_table_variables);
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_data_stale);
     RUN_TEST(test_disconnected_is_stale);
-    RUN_TEST(test_list_var_full_output);
-    RUN_TEST(test_quoted_values_are_escaped);
-    RUN_TEST(test_log_callback_receives_server_messages);
+    RUN_TEST(test_device_aliases);
+    RUN_TEST(test_get_var_echoes_client_var_name);
+    RUN_TEST(test_internal_status_keys_are_not_variables);
+    RUN_TEST(test_list_cmd_from_descriptor);
+    RUN_TEST(test_list_cmd_empty_when_disconnected);
+    RUN_TEST(test_unsupported_ups_answers_as_no_ups);
+    RUN_TEST(test_list_cmd_without_controllable_beeper);
+    RUN_TEST(test_cmddesc_known_and_unknown);
+    RUN_TEST(test_instcmd_battery_test_writes_value);
+    RUN_TEST(test_instcmd_not_in_catalog);
+    RUN_TEST(test_instcmd_driver_not_connected);
+    RUN_TEST(test_instcmd_write_failed);
+    RUN_TEST(test_instcmd_requires_login);
+    RUN_TEST(test_login_requires_credentials);
+    RUN_TEST(test_instcmd_shutdown_sequences);
+    RUN_TEST(test_instcmd_stayoff_writes_minus_one_as_twos_complement);
+    RUN_TEST(test_instcmd_uses_configured_delays);
+    RUN_TEST(test_instcmd_without_configured_delays);
+    RUN_TEST(test_instcmd_param_too_large_for_field);
+    RUN_TEST(test_instcmd_invalid_argument);
+    RUN_TEST(test_instcmd_sequence_stops_at_first_failed_write);
+    RUN_TEST(test_instcmd_shutdown_requires_login);
+    RUN_TEST(test_instcmd_shutdown_default_fallback);
+    RUN_TEST(test_instcmd_shutdown_default_all_fail);
+    RUN_TEST(test_instcmd_shutdown_default_without_groups);
+    RUN_TEST(test_list_cmd_includes_shutdown_default);
+    RUN_TEST(test_instcmd_beeper_failure_and_toggle);
+    RUN_TEST(test_instcmd_beeper_mute_and_toggle_from_muted);
+    RUN_TEST(test_set_malformed_is_invalid_argument);
+    RUN_TEST(test_set_var_unknown_ups);
+    RUN_TEST(test_set_var_driver_not_connected);
+    RUN_TEST(test_set_var_data_stale);
+    RUN_TEST(test_set_var_access_denied);
+    RUN_TEST(test_set_var_not_supported_and_readonly);
+    RUN_TEST(test_set_var_aux_zero_is_set_failed);
+    RUN_TEST(test_set_var_too_long);
+    RUN_TEST(test_set_var_invalid_enum_value);
+    RUN_TEST(test_set_var_check_order);
+    RUN_TEST(test_set_var_canonical_name);
+    RUN_TEST(test_set_var_quoted_values);
+    RUN_TEST(test_set_var_synchronous_outcome);
+    RUN_TEST(test_upsrw_tracking_sequence);
+    RUN_TEST(test_tracking_outcomes);
+    RUN_TEST(test_tracking_validation_error_is_immediate);
+    RUN_TEST(test_get_and_set_tracking);
+    RUN_TEST(test_tracking_unknown_and_expired_id);
+    RUN_TEST(test_tracking_age_across_millis_wrap);
+    RUN_TEST(test_tracking_table_drops_oldest);
+    RUN_TEST(test_tracking_is_per_session);
+    RUN_TEST(test_set_var_rejections_are_logged);
+    RUN_TEST(test_tracking_id_format);
+    RUN_TEST(test_upscmd_tracking_sequence);
+    RUN_TEST(test_instcmd_tracking_failed);
+    RUN_TEST(test_instcmd_tracking_invalid_argument);
+    RUN_TEST(test_instcmd_tracking_validation_errors_are_immediate);
+    RUN_TEST(test_instcmd_tracking_shares_table_with_set_var);
+    RUN_TEST(test_instcmd_tracking_is_per_session);
+    RUN_TEST(test_instcmd_without_tracking_unchanged);
+    RUN_TEST(test_split_tokens_pconf);
+    RUN_TEST(test_encode_value);
+    RUN_TEST(test_var_replies_are_escaped);
+    RUN_TEST(test_enum_values_are_escaped);
+    RUN_TEST(test_desc_and_cmddesc_lines_unchanged);
+    RUN_TEST(test_set_var_escaped_round_trip);
+    RUN_TEST(test_ups_name_rules);
+    RUN_TEST(test_empty_ups_name_defaults_to_ups);
+    RUN_TEST(test_commands_without_ups_name_are_invalid);
+    RUN_TEST(test_unknown_list_subcommand_is_invalid);
+    RUN_TEST(test_malformed_list_and_get_are_invalid);
+    RUN_TEST(test_list_cmd_and_client_unknown_ups);
+    RUN_TEST(test_eight_clients_then_rejected);
+    RUN_TEST(test_logout_frees_the_slot_for_reuse);
+    RUN_TEST(test_rejections_are_throttled);
+    RUN_TEST(test_clients_summary_only_on_change);
     RUN_TEST(test_stats_count_commands_and_auth_failures);
-    RUN_TEST(test_var_reads_refused_while_disconnected);
-    RUN_TEST(test_var_reads_refused_without_ups);
+    RUN_TEST(test_stats_count_accepted_and_rejected_sessions);
     RUN_TEST(test_protver_answers_as_netver);
     RUN_TEST(test_starttls_not_supported);
     RUN_TEST(test_numlogins_counts_logged_in_sessions);
@@ -817,7 +2980,6 @@ void setup() {
     RUN_TEST(test_primary_refused_without_credentials_configured);
     RUN_TEST(test_fsd_needs_primary);
     RUN_TEST(test_fsd_stays_in_ups_status);
-    RUN_TEST(test_set_var_is_refused);
     RUN_TEST(test_driver_info_listed_like_other_variables);
     RUN_TEST(test_replies_written_once_outside_usb_lock);
     UNITY_END();
