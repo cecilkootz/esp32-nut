@@ -32,7 +32,7 @@ void test_initial_settings(void) {
     // Access point of the first setup and of the double reset, before in main.cpp
     TEST_ASSERT_EQUAL_STRING("NUT_ESP32_Config", board().defaults.ap_ssid);
     TEST_ASSERT_EQUAL_STRING("12345678", board().defaults.ap_password);
-    TEST_ASSERT_TRUE(board().defaults.led_enabled);
+    TEST_ASSERT_FALSE(board().defaults.led_enabled);
     TEST_ASSERT_EQUAL_UINT8(3, board().defaults.led_level);
     TEST_ASSERT_TRUE(board().defaults.network_mode == NetworkMode::WIFI);
 }

@@ -35,9 +35,9 @@ static String userAgent() {
 void UpdateService::begin(const AppNetworkManager* network) {
     _network = network;
     Preferences prefs;
-    bool auto_check = true;
+    bool auto_check = false;
     if (prefs.begin(kNamespace, true)) {
-        auto_check = prefs.getBool(kKeyAuto, true);
+        auto_check = prefs.getBool(kKeyAuto, auto_check);
         prefs.end();
     }
     {

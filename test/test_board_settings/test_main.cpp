@@ -20,7 +20,7 @@ void tearDown(void) {}
 
 void test_defaults_from_the_s3_profile(void) {
     BoardSettings s = defaultsFor(board());
-    TEST_ASSERT_TRUE(s.led_on);
+    TEST_ASSERT_FALSE(s.led_on);
     TEST_ASSERT_EQUAL_UINT8(3, s.led_level);
     TEST_ASSERT_EQUAL_UINT8(0, s.usb_port);
     // Level 3 keeps the brightness used before US-094

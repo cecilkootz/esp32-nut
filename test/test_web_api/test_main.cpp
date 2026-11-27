@@ -1157,7 +1157,7 @@ void test_board_json_s3(void) {
     String json = WebApiJson::boardSettingsJson(board(), defaultsFor(board()), AutoShutdownAvailability::AVAILABLE);
     TEST_ASSERT_EQUAL_STRING(
         "{\"id\":\"esp32s3_devkit\",\"label\":\"ESP32-S3 DevKitC-1\","
-        "\"led\":{\"present\":true,\"on\":true,\"level\":3,\"levels\":5},"
+        "\"led\":{\"present\":true,\"on\":false,\"level\":3,\"levels\":5},"
         "\"usb\":{\"ports\":[{\"id\":\"otg\",\"label\":\"USB OTG\"}],\"port\":\"otg\"},"
         "\"auto_shutdown\":{\"on\":false,\"available\":true}}",
         json.c_str());
@@ -1204,6 +1204,7 @@ void test_board_json_auto_shutdown(void) {
 
 void test_board_body_auto_shutdown(void) {
     BoardSettings cur = defaultsFor(board()), next;
+    cur.led_on = true;
     bool restart = true;
     String out;
     TEST_ASSERT_EQUAL(0, checkBoard("{\"auto_shutdown\":true}", board(), cur, next, restart, out));
@@ -1332,6 +1333,7 @@ void test_board_body_qx_novendor(void) {
 
 void test_board_body_led(void) {
     BoardSettings cur = defaultsFor(board()), next;
+    cur.led_on = true;
     bool restart = true;
     String out;
     TEST_ASSERT_EQUAL(0, checkBoard("{\"led_level\":5}", board(), cur, next, restart, out));
