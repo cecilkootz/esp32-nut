@@ -9,7 +9,7 @@ IMAGES := $(addprefix $(BUILD_DIR)/,bootloader.bin partitions.bin firmware.bin)
 BOOT_APP0 = $(firstword $(shell find $(or $(PLATFORMIO_CORE_DIR),$(HOME)/.platformio)/packages -path '*/tools/partitions/boot_app0.bin' 2>/dev/null))
 
 .DEFAULT_GOAL := help
-.PHONY: help build test site serve
+.PHONY: help build clean test site serve
 
 help: ## Show this help
 	@echo "Usage: make <target> [VAR=value]"
@@ -30,6 +30,10 @@ build: ## Build the firmware; the OTA .bin and the release .zip land in this dir
 	PLATFORMIO_BUILD_FLAGS='-DFIRMWARE_VERSION=\"$(VERSION)\"' pio run -e $(ENV)
 	python3 scripts/release_package.py package --env $(ENV) --version "$(VERSION)" \
 		--build-dir $(BUILD_DIR) --out $(BUILD_DIR)/package --zip-dir "$(CURDIR)"
+
+clean: ## Remove the build output of <ENV> and the packaged .bin and .zip files
+	rm -rf $(BUILD_DIR)
+	rm -f esp32-nut-*.zip esp32-nut-*-ota.bin
 
 # platformio.ini pulls in MinGW for Windows hosts; elsewhere the system compiler builds the tests.
 test: ## Run the unit tests on this computer
